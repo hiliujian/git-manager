@@ -566,7 +566,11 @@ body{font-family:'Outfit',sans-serif;color:var(--text);font-size:13px;display:fl
         </div>
         <div class="log-detail-hash" id="ldHash"></div>
         <div class="log-detail-msg" id="ldMsg"></div>
-        <div class="log-detail-meta" style="color:var(--text3);font-size:11px">历史提交页仅支持“整文件恢复为该提交版本”（覆盖工作区内容），不支持逐行撤回</div>
+        <div class="log-detail-meta" style="margin-top:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <button class="btn red" id="revertCommitBtn" style="padding:2px 10px" title="撤回该提交（git revert），会生成一个新的回滚提交" onclick="revertCommitFromHistory()">Revert</button>
+          <button class="btn blue" id="pushCommitBtn" style="padding:2px 10px" title="推送当前分支" onclick="pushFromHistory()">Push</button>
+          <span style="color:var(--text3);font-size:11px">撤回该提交（git revert），会生成一个新的回滚提交</span>
+        </div>
         <div class="log-detail-meta" id="ldMeta"></div>
       </div>
       <div class="log-file-list" id="ldFileList"></div>
@@ -3763,6 +3767,10 @@ async function doCommit(push=false) {
       else toast(`Push 失败: ${pRes.msg}`,'err');
     }
     await refresh();
+
+    if (!push && (res?.full_hash || res?.hash)) {
+      openCommitAfterLocalCommit(res.full_hash || res.hash);
+    }
   } catch (error) {
     toast(`提交失败: ${error.message}`,'err');
   } finally {
@@ -3774,6 +3782,42 @@ async function doCommit(push=false) {
 }
 
 // ── Log ───────────────────────────────────────────────────────────────────────
+function activateRightTab(name) {
+  const tabs = Array.from(document.querySelectorAll('.right-panel .vtabs .vtab'));
+  const idx = name === 'log' ? 1 : 0;
+  const el = tabs[idx] || tabs[0];
+  if (el) switchTab(name, el);
+}
+
+function updateCommitActionButtons(pushed) {
+  const rb = document.getElementById('revertCommitBtn');
+  const pb = document.getElementById('pushCommitBtn');
+
+  // pushed === true  => show Revert, hide Push
+  // pushed === false => show Push,  hide Revert
+  // pushed === null  => hide both (loading/unknown)
+  if (rb) rb.style.display = (pushed === true) ? '' : 'none';
+  if (pb) pb.style.display = (pushed === false) ? '' : 'none';
+}
+
+async function openCommitAfterLocalCommit(commitHash) {
+  const ok = confirm(`提交已完成：\n\n${commitHash}\n\n是否跳转到历史中查看该提交，并可手动 Push？`);
+  if (!ok) return;
+  activateRightTab('log');
+  await refresh();
+  await openCommit(commitHash);
+}
+
+async function pushFromHistory() {
+  const ok = confirm('确认推送当前分支到远端？');
+  if (!ok) return;
+  toast('推送中...','warn');
+  const res = await POST('/api/push',{});
+  if (res.ok) toast('✓ Push 完成','ok');
+  else toast(`Push 失败: ${res.msg||res.error}`,'err');
+  await refresh();
+}
+
 function renderLogList() {
   const el    = document.getElementById('logList');
   const q     = logFilter.toLowerCase();
@@ -3816,6 +3860,7 @@ async function openCommit(fullHash) {
   document.getElementById('ldHash').textContent = '';
   document.getElementById('ldMsg').textContent  = '加载中...';
   document.getElementById('ldMeta').textContent = '';
+  updateCommitActionButtons(null);
   document.getElementById('ldFileList').innerHTML =
     '<div style="padding:16px;color:var(--text3)"><div class="spin"></div></div>';
 
@@ -3826,6 +3871,16 @@ async function openCommit(fullHash) {
   const c = res.commit || res || {};
   curCommit      = c;
   curCommitFiles = c.files || res.files || [];
+
+  // 根据是否已推送，显示/隐藏按钮：
+  // 已推送：显示 Revert，隐藏 Push；未推送：显示 Push，隐藏 Revert
+  try {
+    const st = await GET(`/api/commit_push_status?hash=${encodeURIComponent(c.full_hash || fullHash)}`);
+    if (st && !st.error) updateCommitActionButtons(!!st.pushed);
+    else updateCommitActionButtons(null);
+  } catch (_) {
+    updateCommitActionButtons(null);
+  }
 
   // 使用hash字段（已经是短hash），不需要再slice
   document.getElementById('ldHash').textContent = c.hash || fullHash.slice(0,7);
@@ -3852,6 +3907,28 @@ async function openCommit(fullHash) {
       <button class="btn" style="margin-left:auto;padding:2px 8px" title="将工作区该文件覆盖为此提交的完整内容" onclick="event.stopPropagation();restoreFromCommit('${(c.full_hash||fullHash).replace(/'/g,"\\'")}', '${f.path.replace(/'/g,"\\'")}')">整文件恢复</button>
     </div>`;
   }).join('');
+}
+
+async function revertCommitFromHistory() {
+  if (!curCommit || !(curCommit.full_hash || curCommit.hash)) {
+    toast('未选择提交','err');
+    return;
+  }
+  const commitHash = curCommit.full_hash || curCommit.hash;
+  const ok = confirm(
+    `确认撤回该提交（将执行 git revert）：\n\n${commitHash}\n\n注意：\n1) 会产生一个新的回滚提交\n2) 若有冲突，需要你手动解决后再继续\n\n是否继续？`
+  );
+  if (!ok) return;
+
+  const res = await POST('/api/revert_commit', {hash: commitHash});
+  if (res.ok) {
+    toast('✓ 已撤回该提交（已生成新的回滚提交）','ok');
+    await refresh();
+    backToLog();
+  } else {
+    toast(res.error||res.msg||'撤回失败','err');
+    await refresh();
+  }
 }
 
 async function restoreFromCommit(commitHash, filepath) {
@@ -3892,6 +3969,7 @@ function backToLog() {
   document.getElementById('tabLogDetail').classList.remove('show');
   document.getElementById('tabLog').classList.add('show');
   curCommit = null; curCommitFiles = []; curLogFile = null;
+  updateCommitActionButtons(null);
 }
 
 // ── Tab switching ─────────────────────────────────────────────────────────────

@@ -710,6 +710,28 @@ def get_branches():
     logger.info(f"成功获取分支列表，共 {len(branches)} 个分支，当前分支: {current}")
     return branches, current
 
+def is_commit_pushed(commit_hash):
+    """判断某个提交是否已经存在于任意远端分支（基于本地 remote refs）。"""
+    commit_hash = (commit_hash or "").strip()
+    if not commit_hash:
+        return False, [], "缺少 hash"
+
+    out, err, code = run_git(["branch", "-r", "--contains", commit_hash])
+    if code != 0:
+        return False, [], (err or "查询远端分支失败")
+
+    branches = []
+    for ln in (out or "").splitlines():
+        b = (ln or "").strip()
+        if not b:
+            continue
+        # ignore symbolic refs like: origin/HEAD -> origin/main
+        if "->" in b:
+            continue
+        branches.append(b)
+
+    return bool(branches), branches, None
+
 # ════════════════════════════════════════════════════════
 #  文件还原
 # ════════════════════════════════════════════════════════
@@ -1006,11 +1028,41 @@ def restore_file_from_commit(commit_hash, filepath):
     """从提交中恢复文件"""
     logger.info(f"从提交恢复文件: {commit_hash} - {filepath}")
     _, err, code = run_git(["checkout", commit_hash, "--", filepath])
+    if code == 0:
+        return True, "已恢复"
+    return False, err
+
+
+def restore_workspace_to_commit(commit_hash):
+    """将工作区完整恢复到某次提交（覆盖工作区内容）"""
+    logger.info(f"恢复工作区到提交: {commit_hash}")
+    # hard reset to commit
+    _, err, code = run_git(["reset", "--hard", commit_hash], timeout=180)
     if code != 0:
-        logger.error(f"从提交恢复文件失败: {commit_hash} - {filepath} - {err}")
-        return False, err
-    logger.info(f"成功从提交恢复文件: {commit_hash} - {filepath}")
-    return True, "已恢复"
+        logger.error(f"reset --hard 失败: {err}")
+        return False, err or "reset --hard 失败"
+
+    # clean untracked
+    _, err2, code2 = run_git(["clean", "-fd"], timeout=180)
+    if code2 != 0:
+        logger.error(f"clean -fd 失败: {err2}")
+        return False, err2 or "clean -fd 失败"
+
+    logger.info("恢复工作区完成")
+    return True, "已恢复工作区"
+
+
+def revert_commit(commit_hash):
+    """撤回指定提交（等同于 git revert <hash>，会产生一个新的提交）"""
+    logger.info(f"revert 提交: {commit_hash}")
+    # --no-edit 使用默认回滚信息，避免交互式编辑器卡住
+    out, err, code = run_git(["revert", "--no-edit", commit_hash], timeout=300)
+    if code != 0:
+        msg = (err or out or "revert 失败").strip()
+        logger.error(f"revert 失败: {msg}")
+        return False, msg
+    logger.info("revert 成功")
+    return True, "已撤回该提交（已生成新的回滚提交）"
 
 
 def get_raw_file_diff_patch(filepath, status, ctx_lines=5):
@@ -1102,6 +1154,7 @@ def apply_patch_to_index(patch_text):
     if code != 0:
         return False, err
     return True, "已暂存"
+
 
 # ════════════════════════════════════════════════════════
 #  文件内容读取与保存
@@ -1318,6 +1371,15 @@ class Handler(BaseHTTPRequestHandler):
             branches, current = get_branches()
             self.send_json({"branches": branches, "current": current})
 
+        elif p == "/api/commit_push_status":
+            logger.debug("处理 /api/commit_push_status 请求")
+            if not REPO_PATH:
+                self.send_json({"error":"未打开仓库"}, 400)
+                return
+            commit = qget("hash")
+            pushed, branches, err = is_commit_pushed(commit)
+            self.send_json({"pushed": pushed, "branches": branches, "error": err})
+
         else:
             logger.warning(f"未知的 GET 请求路径: {p}")
             self.send_json({"error":"Not found"}, 404)
@@ -1476,6 +1538,30 @@ class Handler(BaseHTTPRequestHandler):
                 ok, msg = restore_file_from_commit(commit, fp)
                 self.send_json({"ok": ok, "msg": msg})
 
+            elif p == "/api/restore_workspace":
+                logger.info("处理 /api/restore_workspace 请求")
+                if not REPO_PATH:
+                    self.send_json({"error":"未打开仓库"}, 400)
+                    return
+                commit = (data.get("hash") or "").strip()
+                if not commit:
+                    self.send_json({"error":"缺少 hash"}, 400)
+                    return
+                ok, msg = restore_workspace_to_commit(commit)
+                self.send_json({"ok": ok, "msg": msg})
+
+            elif p == "/api/revert_commit":
+                logger.info("处理 /api/revert_commit 请求")
+                if not REPO_PATH:
+                    self.send_json({"error":"未打开仓库"}, 400)
+                    return
+                commit = (data.get("hash") or "").strip()
+                if not commit:
+                    self.send_json({"error":"缺少 hash"}, 400)
+                    return
+                ok, msg = revert_commit(commit)
+                self.send_json({"ok": ok, "msg": msg})
+
             elif p == "/api/commit":
                 logger.info("处理 /api/commit 请求")
                 if not REPO_PATH:
@@ -1494,9 +1580,15 @@ class Handler(BaseHTTPRequestHandler):
                 if code != 0:
                     logger.error(f"提交失败: {err}")
                     self.send_json({"error": err}, 400)
-                else:
-                    logger.info("提交成功")
-                    self.send_json({"ok": True})
+                    return
+                logger.info("提交成功")
+                full_hash, _, code2 = run_git(["rev-parse", "HEAD"])
+                full_hash = (full_hash or "").strip() if code2 == 0 else ""
+                self.send_json({
+                    "ok": True,
+                    "full_hash": full_hash,
+                    "hash": full_hash[:7] if full_hash else ""
+                })
 
             elif p == "/api/commit_hunks":
                 logger.info("处理 /api/commit_hunks 请求")
@@ -1542,19 +1634,25 @@ class Handler(BaseHTTPRequestHandler):
                 _, err, code = run_git(["commit", "-m", msg])
                 if code != 0:
                     logger.error(f"按块提交失败: {err}")
-                    # best-effort cleanup: drop any staged changes created by apply
                     run_git(["reset"])
                     self.send_json({"error": err}, 400)
-                else:
-                    logger.info("按块提交成功")
-                    self.send_json({"ok": True})
+                    return
+
+                logger.info("按块提交成功")
+                full_hash, _, code2 = run_git(["rev-parse", "HEAD"])
+                full_hash = (full_hash or "").strip() if code2 == 0 else ""
+                self.send_json({
+                    "ok": True,
+                    "full_hash": full_hash,
+                    "hash": full_hash[:7] if full_hash else ""
+                })
 
             elif p == "/api/push":
                 logger.info("处理 /api/push 请求")
                 if not REPO_PATH:
                     self.send_json({"error":"未打开仓库"}, 400)
                     return
-                _, err, code = run_git(["push"])
+                _, err, code = run_git(["push"], timeout=300)
                 if code == 0:
                     logger.info("推送成功")
                 else:
@@ -1564,7 +1662,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 logger.warning(f"未知的 POST 请求路径: {p}")
                 self.send_json({"error":"Not found"}, 404)
-                
+
         except Exception as e:
             logger.error(f"处理 POST 请求异常: {p} - {str(e)}", exc_info=True)
             self.send_json({"error": f"服务器错误: {str(e)}"}, 500)
@@ -1574,7 +1672,7 @@ def main():
     """主函数"""
     port = 7842
     max_attempts = 10
-    
+
     try:
         # 在单独的线程中启动WebSocket服务器
         if WEBSOCKET_AVAILABLE:
@@ -1620,6 +1718,6 @@ def main():
         logger.info("Git Manager 后端已停止")
         print("已停止")
 
+
 if __name__ == "__main__":
     main()
-    
