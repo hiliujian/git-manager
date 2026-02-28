@@ -612,6 +612,17 @@ body{font-family:'Outfit',sans-serif;color:var(--text);font-size:13px;display:fl
   </div>
 </div>
 
+<div class="overlay" id="confirmModal">
+  <div class="modal">
+    <h3 id="confirmTitle">确认操作</h3>
+    <p id="confirmDesc" style="white-space:pre-wrap"></p>
+    <div class="modal-btns">
+      <button class="btn" id="confirmCancelBtn">取消</button>
+      <button class="btn blue" id="confirmOkBtn">确定</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const BASE = 'http://localhost:7842';
 let WS_URL = 'ws://localhost:7843';
@@ -3800,8 +3811,70 @@ function updateCommitActionButtons(pushed) {
   if (pb) pb.style.display = (pushed === false) ? '' : 'none';
 }
 
+function setCommitActionButtonsDisabled(disabled) {
+  const rb = document.getElementById('revertCommitBtn');
+  const pb = document.getElementById('pushCommitBtn');
+  if (rb) rb.disabled = !!disabled;
+  if (pb) pb.disabled = !!disabled;
+}
+
+function showConfirm(opts = {}) {
+  const title = opts.title || '确认操作';
+  const message = opts.message || '';
+  const okText = opts.okText || '确定';
+  const cancelText = opts.cancelText || '取消';
+  const danger = !!opts.danger;
+
+  const overlay = document.getElementById('confirmModal');
+  const titleEl = document.getElementById('confirmTitle');
+  const descEl = document.getElementById('confirmDesc');
+  const okBtn = document.getElementById('confirmOkBtn');
+  const cancelBtn = document.getElementById('confirmCancelBtn');
+  if (!overlay || !titleEl || !descEl || !okBtn || !cancelBtn) {
+    return Promise.resolve(false);
+  }
+
+  titleEl.textContent = title;
+  descEl.textContent = message;
+  okBtn.textContent = okText;
+  cancelBtn.textContent = cancelText;
+
+  okBtn.classList.toggle('red', danger);
+  okBtn.classList.toggle('blue', !danger);
+
+  overlay.classList.add('show');
+
+  return new Promise(resolve => {
+    let done = false;
+    const finish = (val) => {
+      if (done) return;
+      done = true;
+      overlay.classList.remove('show');
+      okBtn.removeEventListener('click', onOk);
+      cancelBtn.removeEventListener('click', onCancel);
+      overlay.removeEventListener('click', onOverlay);
+      document.removeEventListener('keydown', onKey);
+      resolve(val);
+    };
+    const onOk = () => finish(true);
+    const onCancel = () => finish(false);
+    const onOverlay = (e) => { if (e.target === overlay) finish(false); };
+    const onKey = (e) => { if (e.key === 'Escape') finish(false); };
+
+    okBtn.addEventListener('click', onOk);
+    cancelBtn.addEventListener('click', onCancel);
+    overlay.addEventListener('click', onOverlay);
+    document.addEventListener('keydown', onKey);
+  });
+}
+
 async function openCommitAfterLocalCommit(commitHash) {
-  const ok = confirm(`提交已完成：\n\n${commitHash}\n\n是否跳转到历史中查看该提交，并可手动 Push？`);
+  const ok = await showConfirm({
+    title: '提交已完成',
+    message: `${commitHash}\n\n是否跳转到历史中查看该提交，并可手动 Push？`,
+    okText: '跳转到历史',
+    cancelText: '稍后',
+  });
   if (!ok) return;
   activateRightTab('log');
   await refresh();
@@ -3809,13 +3882,25 @@ async function openCommitAfterLocalCommit(commitHash) {
 }
 
 async function pushFromHistory() {
-  const ok = confirm('确认推送当前分支到远端？');
+  const ok = await showConfirm({
+    title: '推送到远端',
+    message: '确认推送当前分支到远端？',
+    okText: '推送',
+    cancelText: '取消',
+  });
   if (!ok) return;
+
+  setCommitActionButtonsDisabled(true);
   toast('推送中...','warn');
   const res = await POST('/api/push',{});
   if (res.ok) toast('✓ Push 完成','ok');
   else toast(`Push 失败: ${res.msg||res.error}`,'err');
   await refresh();
+
+  if (curCommit && (curCommit.full_hash || curCommit.hash)) {
+    await openCommit(curCommit.full_hash || curCommit.hash);
+  }
+  setCommitActionButtonsDisabled(false);
 }
 
 function renderLogList() {
@@ -3915,11 +4000,17 @@ async function revertCommitFromHistory() {
     return;
   }
   const commitHash = curCommit.full_hash || curCommit.hash;
-  const ok = confirm(
-    `确认撤回该提交（将执行 git revert）：\n\n${commitHash}\n\n注意：\n1) 会产生一个新的回滚提交\n2) 若有冲突，需要你手动解决后再继续\n\n是否继续？`
-  );
+  const ok = await showConfirm({
+    title: '撤回该提交',
+    message:
+      `将执行 git revert：\n\n${commitHash}\n\n注意：\n1) 会产生一个新的回滚提交\n2) 若有冲突，需要你手动解决后再继续\n`,
+    okText: '确认撤回',
+    cancelText: '取消',
+    danger: true,
+  });
   if (!ok) return;
 
+  setCommitActionButtonsDisabled(true);
   const res = await POST('/api/revert_commit', {hash: commitHash});
   if (res.ok) {
     toast('✓ 已撤回该提交（已生成新的回滚提交）','ok');
@@ -3929,11 +4020,18 @@ async function revertCommitFromHistory() {
     toast(res.error||res.msg||'撤回失败','err');
     await refresh();
   }
+  setCommitActionButtonsDisabled(false);
 }
 
 async function restoreFromCommit(commitHash, filepath) {
   if (!commitHash || !filepath) return;
-  const ok = confirm(`将工作区文件恢复为该提交版本：\n\n${filepath}\n\n此操作会覆盖当前工作区内容，是否继续？`);
+  const ok = await showConfirm({
+    title: '整文件恢复',
+    message: `将工作区文件恢复为该提交版本：\n\n${filepath}\n\n此操作会覆盖当前工作区内容，是否继续？`,
+    okText: '确认恢复',
+    cancelText: '取消',
+    danger: true,
+  });
   if (!ok) return;
   const res = await POST('/api/restore_file', {hash: commitHash, path: filepath});
   if (res.ok) {
