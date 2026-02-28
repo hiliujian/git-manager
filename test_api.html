@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>API 测试</title>
+    <style>
+        body { font-family: monospace; padding: 20px; background: #1a1a1a; color: #ccc; }
+        button { padding: 10px 20px; margin: 5px; cursor: pointer; }
+        pre { background: #2a2a2a; padding: 10px; border-radius: 5px; overflow-x: auto; }
+        .success { color: #5dd6a8; }
+        .error { color: #f27272; }
+        input { padding: 8px; margin: 5px; background: #2a2a2a; color: #ccc; border: 1px solid #444; }
+    </style>
+</head>
+<body>
+    <h1>Git Manager API 测试工具</h1>
+    
+    <div>
+        <h2>1. 测试服务器状态</h2>
+        <button onclick="testStatus()">测试 /api/status</button>
+        <pre id="status-result"></pre>
+    </div>
+    
+    <div>
+        <h2>2. 测试获取文件列表</h2>
+        <button onclick="testFiles()">测试 /api/files</button>
+        <pre id="files-result"></pre>
+    </div>
+    
+    <div>
+        <h2>3. 测试获取文件内容</h2>
+        <input type="text" id="filepath" placeholder="输入文件路径" style="width: 400px;">
+        <button onclick="testFileContent()">测试 /api/file_content</button>
+        <pre id="content-result"></pre>
+    </div>
+    
+    <script>
+        const BASE = 'http://localhost:7842';
+        
+        async function testStatus() {
+            const result = document.getElementById('status-result');
+            result.textContent = '请求中...';
+            try {
+                const res = await fetch(BASE + '/api/status');
+                const data = await res.json();
+                result.className = 'success';
+                result.textContent = JSON.stringify(data, null, 2);
+            } catch (error) {
+                result.className = 'error';
+                result.textContent = 'Error: ' + error.message;
+            }
+        }
+        
+        async function testFiles() {
+            const result = document.getElementById('files-result');
+            result.textContent = '请求中...';
+            try {
+                const res = await fetch(BASE + '/api/files');
+                const data = await res.json();
+                result.className = 'success';
+                result.textContent = JSON.stringify(data, null, 2);
+                
+                // Auto-fill first file path if available
+                if (data.files && data.files.length > 0) {
+                    document.getElementById('filepath').value = data.files[0].path;
+                }
+            } catch (error) {
+                result.className = 'error';
+                result.textContent = 'Error: ' + error.message;
+            }
+        }
+        
+        async function testFileContent() {
+            const filepath = document.getElementById('filepath').value;
+            const result = document.getElementById('content-result');
+            
+            if (!filepath) {
+                result.className = 'error';
+                result.textContent = '请先输入文件路径！';
+                return;
+            }
+            
+            result.textContent = '请求中...';
+            try {
+                console.log('Requesting file content for:', filepath);
+                const res = await fetch(BASE + '/api/file_content', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({path: filepath})
+                });
+                
+                console.log('Response status:', res.status);
+                const data = await res.json();
+                console.log('Response data:', data);
+                
+                if (data.ok) {
+                    result.className = 'success';
+                    result.textContent = 'Success!\n\nContent length: ' + (data.content ? data.content.length : 0) + ' characters\n\nFirst 500 chars:\n' + (data.content ? data.content.substring(0, 500) : '(empty)');
+                } else {
+                    result.className = 'error';
+                    result.textContent = 'Failed: ' + (data.error || 'Unknown error');
+                }
+            } catch (error) {
+                result.className = 'error';
+                result.textContent = 'Error: ' + error.message;
+                console.error('Error:', error);
+            }
+        }
+    </script>
+</body>
+</html>

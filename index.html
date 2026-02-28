@@ -1,0 +1,4008 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Git Manager</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600&family=Outfit:wght@300;400;500;600;700&display=swap');
+
+:root {
+  --bg:        #13141a;
+  --bg2:       #1a1c24;
+  --bg3:       #21242e;
+  --bg4:       #292c38;
+  --bg5:       #323648;
+  --border:    #2e3244;
+  --border2:   #3d4262;
+  --accent:    #6eb4f7;
+  --accent2:   #5dd6a8;
+  --danger:    #f27272;
+  --warn:      #f0b429;
+  --purple:    #b48ef7;
+  --text:      #dde0ec;
+  --text2:     #8891b0;
+  --text3:     #4e5472;
+  --added-bg:  #0c2318;
+  --added-ln:  #0f2d1e;
+  --rmvd-bg:   #280f0f;
+  --rmvd-ln:   #320c0c;
+  --hunk-bg:   #181b28;
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+html,body{height:100%;overflow:hidden;background:var(--bg);}
+body{font-family:'Outfit',sans-serif;color:var(--text);font-size:13px;display:flex;flex-direction:column;}
+::-webkit-scrollbar{width:5px;height:5px;}
+::-webkit-scrollbar-track{background:transparent;}
+::-webkit-scrollbar-thumb{background:var(--bg5);border-radius:3px;}
+
+.diff-tooltip{
+  position:fixed;
+  z-index:9999;
+  max-width:min(520px, 70vw);
+  background:var(--bg2);
+  border:1px solid var(--border);
+  color:var(--text);
+  font-size:11px;
+  line-height:1.5;
+  padding:8px 10px;
+  border-radius:8px;
+  box-shadow:0 12px 30px rgba(0,0,0,.35);
+  white-space:pre-wrap;
+  pointer-events:none;
+  display:none;
+}
+
+/* ── TOPBAR ── */
+.topbar{
+  height:40px;min-height:40px;
+  background:var(--bg2);
+  border-bottom:1px solid var(--border);
+  display:flex;align-items:center;gap:8px;
+  padding:0 12px;flex-shrink:0;
+}
+.logo{font-family:'JetBrains Mono',monospace;font-weight:600;font-size:12px;color:var(--accent);
+  display:flex;align-items:center;gap:6px;letter-spacing:1px;}
+.logo-dot{width:18px;height:18px;background:linear-gradient(135deg,var(--accent),var(--purple));
+  border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:10px;color:#fff;font-weight:700;}
+.branch-tag{display:flex;align-items:center;gap:4px;background:var(--bg4);
+  border:1px solid var(--border2);border-radius:20px;padding:2px 10px;
+  font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--accent2);cursor:default;}
+.repo-label{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--text3);
+  max-width:520px;overflow-x:auto;overflow-y:hidden;white-space:nowrap;}
+.origin-link-btn{display:inline-flex;align-items:center;max-width:420px;
+  padding:1px 8px;border-radius:999px;border:1px solid rgba(125,211,252,.55);
+  background:transparent;color:#7dd3fc;text-decoration:none;cursor:pointer;
+  vertical-align:middle;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.origin-link-btn:hover{background:rgba(125,211,252,.12);border-color:rgba(125,211,252,.85);}
+.ml{margin-left:auto;}
+.row{display:flex;align-items:center;gap:6px;}
+
+/* ── BUTTONS ── */
+.btn{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:4px;
+  border:1px solid var(--border);background:var(--bg3);color:var(--text2);
+  font-size:11px;font-family:'Outfit',sans-serif;cursor:pointer;transition:all .12s;white-space:nowrap;}
+.btn:hover{background:var(--bg4);color:var(--text);border-color:var(--border2);}
+.btn.blue{background:#162840;border-color:#25508a;color:var(--accent);}
+.btn.blue:hover{background:#1e3a60;}
+.btn.green{background:#0d2a1a;border-color:#1a5c34;color:var(--accent2);}
+.btn.green:hover{background:#0f3520;}
+.btn.red{background:#2a0d0d;border-color:#5a1a1a;color:var(--danger);}
+.btn.red:hover{background:#3a1010;}
+.btn:disabled{opacity:.35;cursor:default;pointer-events:none;}
+.icon-btn{width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;
+  border-radius:3px;border:none;background:transparent;color:var(--text2);cursor:pointer;transition:all .12s;}
+.icon-btn:hover{background:var(--bg5);color:var(--text);}
+
+/* ── REPO OPENER ── */
+#opener{flex:1;display:flex;align-items:center;justify-content:center;}
+.open-card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;
+  padding:36px 44px;width:460px;display:flex;flex-direction:column;align-items:center;gap:14px;}
+.open-card h2{font-size:17px;font-weight:700;}
+.open-card p{color:var(--text2);font-size:12px;text-align:center;line-height:1.7;}
+.open-input{width:100%;background:var(--bg);border:1px solid var(--border);border-radius:5px;
+  padding:8px 11px;color:var(--text);font-family:'JetBrains Mono',monospace;font-size:12px;outline:none;transition:.15s;}
+.open-input:focus{border-color:var(--accent);}
+.open-input::placeholder{color:var(--text3);}
+.open-submit{width:100%;padding:9px;background:linear-gradient(135deg,var(--accent),var(--purple));
+  border:none;border-radius:5px;color:#fff;font-size:13px;font-weight:600;cursor:pointer;
+  font-family:'Outfit',sans-serif;transition:opacity .15s;}
+.open-submit:hover{opacity:.88;}
+.open-err{color:var(--danger);font-size:11px;font-family:'JetBrains Mono',monospace;text-align:center;}
+
+/* ── MAIN LAYOUT ── */
+#app{flex:1;display:flex;overflow:hidden;}
+
+/* ── PANEL HEADER ── */
+.ph{height:30px;min-height:30px;display:flex;align-items:center;padding:0 10px;
+  background:var(--bg3);border-bottom:1px solid var(--border);flex-shrink:0;gap:6px;}
+.ph-title{font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--text3);flex:1;}
+.badge{background:var(--bg5);border-radius:10px;padding:1px 6px;font-size:10px;
+  color:var(--text2);font-weight:600;font-family:'JetBrains Mono',monospace;}
+
+/* ── LEFT SIDEBAR (files) ── */
+.sidebar{width:250px;min-width:160px;max-width:380px;background:var(--bg2);
+  border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0;}
+.sf-search{padding:5px 7px;border-bottom:1px solid var(--border);flex-shrink:0;}
+.sf-search input{width:100%;background:var(--bg);border:1px solid var(--border);border-radius:4px;
+  padding:4px 8px;color:var(--text);font-family:'JetBrains Mono',monospace;font-size:11px;outline:none;}
+.sf-search input:focus{border-color:var(--accent);}
+.file-list{flex:1;overflow-y:auto;}
+.fi{display:flex;align-items:center;gap:5px;padding:4px 8px;cursor:pointer;
+  border-left:2px solid transparent;transition:all .1s;user-select:none;}
+.fi:hover{background:var(--bg3);}
+.fi.active{background:var(--bg4);border-left-color:var(--accent);}
+.fi-cb{width:13px;height:13px;border:1px solid var(--border2);border-radius:2px;
+  background:transparent;cursor:pointer;appearance:none;flex-shrink:0;}
+.fi-cb:checked{background:var(--accent);border-color:var(--accent);}
+.fi-cb:checked::after{content:'✓';display:block;font-size:8px;text-align:center;color:#000;line-height:13px;}
+.fi-cb.indet{background:var(--accent);border-color:var(--accent);}
+.fi-cb.indet::after{content:'-';display:block;font-size:10px;text-align:center;color:#000;line-height:12px;font-weight:700;}
+.fi-st{width:14px;height:14px;border-radius:3px;display:flex;align-items:center;justify-content:center;
+  font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:700;flex-shrink:0;}
+.fi-st.M{background:#163060;color:#6eb4f7;}
+.fi-st.A{background:#0d2d1a;color:#5dd6a8;}
+.fi-st.D{background:#2d0d0d;color:#f27272;}
+.fi-st.R{background:#2a1060;color:#b48ef7;}
+.fi-st.U{background:#2a1e00;color:#f0b429;}
+.fi-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-family:'JetBrains Mono',monospace;font-size:11px;}
+.fi-dir{color:var(--text3);}
+.fi-delta{display:flex;gap:3px;flex-shrink:0;font-size:10px;font-family:'JetBrains Mono',monospace;}
+.fi-delta .a{color:var(--accent2);}
+.fi-delta .r{color:var(--danger);}
+.fi-delta .m{color:var(--accent);}
+.sf-foot{border-top:1px solid var(--border);padding:6px 7px;display:flex;gap:5px;flex-shrink:0;}
+
+/* ── RESIZER ── */
+.resizer{width:3px;background:var(--border);cursor:col-resize;flex-shrink:0;transition:background .15s;}
+.resizer:hover,.resizer.drag{background:var(--accent);}
+
+/* ── DIFF AREA ── */
+.diff-area{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0;}
+.diff-toolbar{display:flex;align-items:center;background:var(--bg2);
+  border-bottom:1px solid var(--border);flex-shrink:0;padding-right:8px;}
+.dtab{padding:8px 13px;font-size:11px;font-weight:600;color:var(--text2);
+  border-bottom:2px solid transparent;cursor:pointer;border-right:1px solid var(--border);transition:all .12s;}
+.dtab:hover{color:var(--text);background:var(--bg3);}
+.dtab.active{color:var(--accent);border-bottom-color:var(--accent);background:var(--bg);}
+.diff-filelabel{flex:1;padding:0 12px;font-family:'JetBrains Mono',monospace;font-size:11px;
+  color:var(--text2);display:flex;align-items:center;gap:8px;overflow:hidden;min-width:0;}
+.diff-filelabel .fn{color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.statsbar{display:flex;align-items:center;gap:12px;padding:3px 12px;
+  background:var(--bg3);border-bottom:1px solid var(--border);font-size:11px;flex-shrink:0;}
+.stat{display:flex;align-items:center;gap:4px;color:var(--text2);}
+.statsbar .a{color:var(--accent2);}
+.statsbar .r{color:var(--danger);}
+.statsbar .m{color:var(--accent);}
+.diff-view{flex:1;overflow:auto;background:var(--bg);}
+.split-wrap{display:flex;overflow-x:auto;}
+
+.editable-line{
+  background: transparent;
+  color: var(--text);
+  font-family:'JetBrains Mono',monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 0;
+  margin: 0;
+  resize: none;
+  outline: none;
+  white-space: pre;
+  overflow: hidden;
+  min-height: 18px;
+}
+
+.editable-line:focus {
+  background: rgba(255, 255, 255, 0.05);
+  outline: 1px solid var(--accent2);
+}
+
+.editable-line:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+.sp{flex:1;min-width:400px;overflow-x:auto;}
+
+/* ── DIFF CONTENT ── */
+.empty-state{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:12px;color:var(--text3);}
+.empty-state svg{opacity:.2;}
+.empty-state p{font-size:13px;}
+
+/* Split layout */
+.split-wrap{display:grid;grid-template-columns:1fr 1fr;min-height:100%;overflow-x:auto;}
+.sp{overflow:auto;border-right:2px solid var(--border);}
+.sp:last-child{border-right:none;}
+.sp-body{overflow-x:auto;}
+.lc{padding:0 8px;white-space:pre;flex:1;min-width:0;overflow-x:auto;line-height:20px;}
+.sp-hdr{padding:4px 10px;background:var(--bg3);border-bottom:1px solid var(--border);font-size:11px;position:sticky;top:0;z-index:1;font-family:'JetBrains Mono',monospace;}
+
+.change-navigation{padding:8px 10px;background:var(--bg2);border-bottom:1px solid var(--border);margin-bottom:10px;overflow-x:auto;white-space:nowrap;position:sticky;top:0;z-index:100;}
+
+.change-nav-item{display:inline-block;padding:2px 6px;margin-right:5px;border-radius:3px;font-size:10px;text-decoration:none;color:var(--text);background:var(--bg);border:1px solid var(--border);}
+
+.change-nav-item:hover{background:var(--bg3);}
+
+.change-added{border-left:3px solid var(--accent2);}
+
+.change-removed{border-left:3px solid var(--danger);}
+
+.change-modified{border-left:3px solid var(--accent);}
+
+/* Hunk block */
+.hunk{margin-bottom:2px;}
+.hunk-hdr{display:flex;align-items:center;background:var(--hunk-bg);
+  border-top:1px solid #252a42;border-bottom:1px solid #252a42;padding:3px 0;
+  position:sticky;top:0;z-index:2;}
+.hunk-info{font-family:'JetBrains Mono',monospace;font-size:11px;color:#5a6499;
+  padding:0 10px;flex:1;font-style:italic;}
+.hunk-btns{display:flex;gap:4px;padding:0 8px;flex-shrink:0;}
+
+/* IDEA-style revert arrow button */
+.hunk-revert{display:flex;align-items:center;gap:3px;padding:2px 8px;
+  background:transparent;border:1px solid transparent;border-radius:3px;color:#f27272;
+  font-size:10px;font-family:'Outfit',sans-serif;cursor:pointer;transition:all .15s;}
+.hunk-revert:hover{background:#38100f;border-color:#6b1f1e;box-shadow:0 0 6px #f2727244;}
+.hunk-revert svg{flex-shrink:0;}
+
+/* Line-level revert button like IDEA */
+.line-revert{
+  width:20px;height:20px;display:inline-flex;align-items:center;justify-content:center;
+  background:transparent;border:1px solid transparent;border-radius:2px;
+  color:#f27272;cursor:pointer;transition:all .12s;
+  margin-right:6px;opacity:1;
+}
+.line-revert:hover{
+  background:#38100f;border-color:#6b1f1e;
+  box-shadow:0 0 4px #f2727244;
+}
+
+.dl-actions{width:44px;min-width:44px;display:inline-flex;align-items:center;justify-content:flex-start;
+  gap:6px;padding-left:6px;flex-shrink:0;}
+.dl-actions .commit-cb{margin:0;}
+
+/* Diff line */
+.dl{display:flex;font-family:'JetBrains Mono',monospace;font-size:12px;line-height:20px;min-height:20px;white-space:nowrap;}
+.dl:hover{filter:brightness(1.18);}
+.dl.added{background:#0e240e;}
+.dl.added .ln{background:#133013;}
+.dl.added .ls{color:#4ec9b0;}
+.dl.removed{background:#240e0e;}
+.dl.removed .ln{background:#301313;}
+.dl.removed .ls{color:#f48771;}
+.dl.modified{background:#1e132e;}
+.dl.modified .ln{background:#2a1a40;}
+.dl.modified .ls{color:#c586c0;}
+.dl.context .ls{color:var(--text3);}
+.dl.empty{background:var(--bg3);opacity:.5;}
+.dl.empty .line-revert{opacity:1;}
+
+.revert-block-hint{
+  background:linear-gradient(90deg, rgba(110, 180, 247, 0.06), rgba(242, 114, 114, 0.05), rgba(110, 180, 247, 0.06));
+  border-top:1px solid rgba(255,255,255,0.06);
+  border-bottom:1px solid rgba(255,255,255,0.06);
+  color:var(--text2);
+}
+.revert-block-hint .ls{color:var(--text3);}
+.revert-block-hint .ln{background:transparent;border-right:1px solid var(--border);}
+.revert-block-hint .lc{display:flex;align-items:center;gap:8px;}
+.revert-block-hint .hint-text{font-size:11px;opacity:0.9;}
+.revert-block-hint .hint-tag{
+  font-size:10px;
+  padding:0;
+  border-radius:0;
+  border:none;
+  color:var(--accent);
+  background:transparent;
+}
+.revert-block-hint .hint-actions{margin-left:auto;display:flex;align-items:center;gap:6px;}
+.revert-block-hint .hint-btn{
+  height:18px;
+  padding:0 8px;
+  border-radius:4px;
+  border:1px solid rgba(242, 114, 114, 0.35);
+  background:rgba(242, 114, 114, 0.06);
+  color:var(--danger);
+  font-size:10px;
+  font-family:'JetBrains Mono',monospace;
+  cursor:pointer;
+  transition:all .12s;
+}
+.revert-block-hint .hint-btn:hover{background:rgba(242, 114, 114, 0.12);border-color:#6b1f1e;box-shadow:0 0 8px rgba(242, 114, 114, 0.18);}
+
+.ln{width:44px;min-width:44px;text-align:right;padding:0 6px;color:var(--text3);
+  font-size:10px;border-right:1px solid var(--border);background:var(--bg2);
+  flex-shrink:0;line-height:20px;user-select:none;}
+.ls{width:16px;min-width:16px;text-align:center;font-weight:700;flex-shrink:0;line-height:20px;}
+.lc{padding:0 8px;white-space:pre;flex:1;min-width:0;overflow:visible;line-height:20px;}
+
+/* ── RIGHT PANEL ── */
+.right-panel{width:260px;min-width:180px;max-width:400px;background:var(--bg2);
+  border-left:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0;}
+.vtabs{display:flex;border-bottom:1px solid var(--border);flex-shrink:0;}
+.vtab{padding:7px 14px;font-size:11px;font-weight:600;color:var(--text2);cursor:pointer;
+  border-bottom:2px solid transparent;transition:all .12s;flex:1;text-align:center;}
+.vtab:hover{color:var(--text);}
+.vtab.active{color:var(--accent);border-bottom-color:var(--accent);}
+.vtab-content{display:none;flex:1;flex-direction:column;overflow:hidden;}
+.vtab-content.show{display:flex;}
+
+/* Commit tab */
+.commit-msg{width:100%;border:1px solid var(--border);border-radius:6px;background:var(--bg2);
+  margin:7px;padding:7px;color:var(--text);font-family:'Outfit',sans-serif;font-size:12px;
+  resize:none;outline:none;min-height:80px;max-height:200px;}
+.commit-msg:focus{border-color:var(--accent);}
+.commit-actions{padding:0 7px 7px;display:flex;flex-direction:column;gap:5px;}
+
+.hunk-select{display:inline-flex;align-items:center;gap:6px;font-size:10px;color:var(--text3);}
+.hunk-select input{transform:translateY(1px);}
+.commit-cb{width:13px;height:13px;border:1px solid var(--border2);border-radius:2px;
+  background:transparent;cursor:pointer;appearance:none;flex-shrink:0;transform:translateY(1px);}
+.commit-cb:checked{background:var(--accent);border-color:var(--accent);}
+.commit-cb:checked::after{content:'✓';display:block;font-size:8px;text-align:center;color:#000;line-height:13px;}
+.commit-cb.indet{background:var(--accent);border-color:var(--accent);}
+.commit-cb.indet::after{content:'-';display:block;font-size:10px;text-align:center;color:#000;line-height:12px;font-weight:700;}
+
+/* Log tab */
+.log-search{padding:5px 7px;border-bottom:1px solid var(--border);flex-shrink:0;}
+.log-search input{width:100%;background:var(--bg);border:1px solid var(--border);border-radius:4px;
+  padding:3px 8px;color:var(--text);font-family:'JetBrains Mono',monospace;font-size:11px;outline:none;}
+.log-search input:focus{border-color:var(--accent);}
+.log-list{flex:1;overflow-y:auto;}
+.log-item{padding:7px 10px;border-bottom:1px solid var(--border);cursor:pointer;
+  transition:background .1s;}
+.log-item:hover{background:var(--bg3);}
+.log-item.active{background:var(--bg4);border-left:2px solid var(--accent);}
+.log-hash{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--warn);}
+.log-msg{font-size:12px;color:var(--text);margin:2px 0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.log-meta{font-size:10px;color:var(--text3);}
+
+/* Log detail */
+.log-detail{flex:1;display:flex;flex-direction:column;overflow:hidden;}
+.log-detail-hdr{padding:8px 10px;border-bottom:1px solid var(--border);flex-shrink:0;}
+.log-detail-hash{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--warn);}
+.log-detail-msg{font-size:13px;font-weight:600;margin:3px 0;}
+.log-detail-meta{font-size:11px;color:var(--text2);}
+.log-back{display:flex;align-items:center;gap:4px;color:var(--accent);font-size:11px;
+  cursor:pointer;margin-bottom:6px;}
+.log-back:hover{text-decoration:underline;}
+.log-file-list{flex:1;overflow-y:auto;}
+.lf{display:flex;align-items:center;gap:6px;padding:5px 10px;cursor:pointer;
+  border-left:2px solid transparent;transition:all .1s;}
+.lf:hover{background:var(--bg3);}
+.lf.active{background:var(--bg4);border-left-color:var(--purple);}
+.lf-st{width:13px;height:13px;border-radius:2px;display:flex;align-items:center;justify-content:center;
+  font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:700;flex-shrink:0;}
+.lf-st.M{background:#163060;color:#6eb4f7;}
+.lf-st.A{background:#0d2d1a;color:#5dd6a8;}
+.lf-st.D{background:#2d0d0d;color:#f27272;}
+.lf-name{flex:1;font-family:'JetBrains Mono',monospace;font-size:11px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.lf-delta{display:flex;gap:3px;font-size:10px;font-family:'JetBrains Mono',monospace;}
+.lf-delta .a{color:var(--accent2);}
+.lf-delta .r{color:var(--danger);}
+
+/* ── MODAL ── */
+.overlay{display:none;position:fixed;inset:0;background:#00000099;z-index:500;
+  align-items:center;justify-content:center;}
+.overlay.show{display:flex;}
+.modal{background:var(--bg2);border:1px solid var(--border);border-radius:9px;
+  padding:22px;width:390px;box-shadow:0 24px 64px #00000099;}
+.modal h3{font-size:14px;margin-bottom:7px;}
+.modal p{color:var(--text2);font-size:12px;line-height:1.7;margin-bottom:18px;}
+.modal-btns{display:flex;gap:7px;justify-content:flex-end;}
+
+/* ── TOAST ── */
+.toast{position:fixed;bottom:16px;right:16px;background:var(--bg3);
+  border:1px solid var(--border);border-radius:6px;padding:9px 14px;
+  font-size:12px;max-width:320px;z-index:999;
+  animation:tup .2s ease;box-shadow:0 8px 24px #00000088;}
+.toast.ok{border-left:3px solid var(--accent2);color:var(--accent2);}
+.toast.err{border-left:3px solid var(--danger);color:var(--danger);}
+.toast.info{border-left:3px solid var(--accent);color:var(--accent);}
+@keyframes tup{from{transform:translateY(8px);opacity:0;}to{transform:translateY(0);opacity:1;}}
+
+/* ── SPINNER ── */
+.spin{display:inline-block;width:12px;height:12px;border:2px solid var(--border);
+  border-top-color:var(--accent);border-radius:50%;animation:sp .6s linear infinite;}
+@keyframes sp{to{transform:rotate(360deg);}}
+</style>
+</head>
+<body>
+
+<!-- Topbar -->
+<div class="topbar">
+  <div class="logo"><div class="logo-dot">G</div>GitManager</div>
+  <div class="branch-tag" id="branchTag" style="display:none">
+    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+      <line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/>
+      <path d="M18 9a9 9 0 01-9 9"/>
+    </svg>
+    <span id="branchName"></span>
+  </div>
+  <span class="repo-label" id="repoLabel"></span>
+  <div class="row ml">
+    <button class="btn" id="refreshBtn" style="display:none" onclick="refresh()">
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/>
+      </svg>刷新
+    </button>
+    <button class="btn" id="changeBtn" style="display:none" onclick="goToOpener()">
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/>
+      </svg>换仓库
+    </button>
+  </div>
+</div>
+
+<!-- Opener -->
+<div id="opener">
+  <div class="open-card">
+    <div class="logo-dot" style="width:46px;height:46px;font-size:20px;border-radius:10px">G</div>
+    <h2>打开 Git 仓库</h2>
+    <p>输入本地 Git 仓库路径，例如<br>
+      <code style="color:var(--accent);font-size:11px">D:\projects\myapp</code> 或
+      <code style="color:var(--accent);font-size:11px">/Users/me/myapp</code>
+    </p>
+    <input class="open-input" id="repoInput" type="text"
+      placeholder="输入仓库路径..."
+      onkeydown="if(event.key==='Enter')openRepo()">
+    <button class="open-submit" onclick="openRepo()">打开仓库</button>
+    <div class="open-err" id="openErr"></div>
+    <div style="font-size:11px;color:var(--text3);text-align:center;line-height:1.8">
+      需先在项目目录运行：<code style="color:var(--accent2)">python3 server.py</code><br>
+      再用浏览器访问：<code style="color:var(--accent2)">http://localhost:7842</code>
+    </div>
+  </div>
+</div>
+
+<!-- App -->
+<div id="app" style="display:none">
+
+  <!-- Left: changed files -->
+  <div class="sidebar" id="sidebar">
+    <div class="ph">
+      <span class="ph-title">变更</span>
+      <span class="badge" id="fileCount">0</span>
+      <button class="icon-btn" title="刷新" onclick="refresh()">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/>
+        </svg>
+      </button>
+    </div>
+    <div class="sf-search">
+      <input type="text" placeholder="过滤文件..." oninput="filterFiles(this.value)">
+    </div>
+    <div class="file-list" id="fileList"></div>
+    <div class="sf-foot">
+      <button class="btn" style="flex:1" onclick="selAll(true)">全选</button>
+      <button class="btn" style="flex:1" onclick="selAll(false)">取消</button>
+      <button class="btn red" style="flex:1" onclick="showModal('revertAllModal')">全撤回</button>
+    </div>
+  </div>
+  <div class="resizer" id="r1"></div>
+
+  <!-- Center: diff -->
+  <div class="diff-area">
+    <div class="diff-toolbar">
+      <div class="dtab active" id="dtSplit" onclick="setDiffMode('split',this)">并排对比</div>
+      <div class="dtab" id="dtUnified" onclick="setDiffMode('unified',this)">变更视图</div>
+      <div class="diff-filelabel" id="diffLabel"></div>
+      <div class="row">
+        <button class="btn" onclick="navFile(-1)">‹ 上个</button>
+        <button class="btn" onclick="navFile(1)">下个 ›</button>
+        <button class="btn red" id="revertFileBtn" style="display:none" onclick="showModal('revertFileModal')">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/>
+          </svg>撤回文件
+        </button>
+        <button class="btn green" id="saveFileBtn" style="display:none" onclick="saveFile()">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/>
+          </svg>保存
+        </button>
+      </div>
+    </div>
+    <div class="statsbar">
+      <div class="stat"><span class="a" id="totA">+0</span>新增</div>
+      <div class="stat"><span class="r" id="totR">-0</span>删除</div>
+      <div class="stat"><span class="m" id="totM">~0</span>修改</div>
+      <div style="margin-left:auto;color:var(--text3);font-size:10px" id="selInfo"></div>
+    </div>
+    <div class="diff-view" id="diffView">
+      <div class="empty-state">
+        <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+          <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/>
+        </svg>
+        <p>从左侧点击文件查看差异</p>
+      </div>
+    </div>
+  </div>
+  <div class="resizer" id="r2"></div>
+
+  <!-- Right: commit + log -->
+  <div class="right-panel" id="rightPanel">
+    <div class="vtabs">
+      <div class="vtab active" onclick="switchTab('commit',this)">提交</div>
+      <div class="vtab" onclick="switchTab('log',this)">历史日志</div>
+    </div>
+
+    <!-- Commit -->
+    <div class="vtab-content show" id="tabCommit">
+      <div class="ph" style="background:var(--bg2)"><span class="ph-title">提交信息</span></div>
+      <textarea class="commit-msg" id="commitMsg" placeholder="输入提交说明..."></textarea>
+      <div class="commit-actions">
+        <button class="btn green" style="justify-content:center" onclick="doCommit()">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <polyline points="20 6 9 17 4 12"/>
+          </svg>提交
+        </button>
+        <button class="btn blue" style="justify-content:center" onclick="doCommit(true)">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/>
+          </svg>提交并推送
+        </button>
+      </div>
+    </div>
+
+    <!-- Log list -->
+    <div class="vtab-content" id="tabLog">
+      <div class="ph" style="background:var(--bg2)">
+        <span class="ph-title">最近提交</span>
+        <span class="badge" id="logCount">0</span>
+      </div>
+      <div class="log-search"><input type="text" placeholder="搜索提交信息..." oninput="filterLog(this.value)"></div>
+      <div class="log-list" id="logList"></div>
+    </div>
+
+    <!-- Log detail -->
+    <div class="vtab-content" id="tabLogDetail">
+      <div class="log-detail-top">
+        <div class="log-detail-back" onclick="backToLog()">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <polyline points="15 18 9 12 15 6"/>
+          </svg>返回历史列表
+        </div>
+        <div class="log-detail-hash" id="ldHash"></div>
+        <div class="log-detail-msg" id="ldMsg"></div>
+        <div class="log-detail-meta" style="color:var(--text3);font-size:11px">历史提交页仅支持“整文件恢复为该提交版本”（覆盖工作区内容），不支持逐行撤回</div>
+        <div class="log-detail-meta" id="ldMeta"></div>
+      </div>
+      <div class="log-file-list" id="ldFileList"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Modals -->
+<div class="overlay" id="revertFileModal">
+  <div class="modal">
+    <h3 id="revertFileTitle">撤回整个文件</h3>
+    <p id="revertFileDesc"></p>
+    <div class="modal-btns">
+      <button class="btn" onclick="closeModal('revertFileModal')">取消</button>
+      <button class="btn red" id="revertFileConfirmBtn" onclick="doRevertFile()">确认撤回</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="revertHunkModal">
+  <div class="modal">
+    <h3>撤回此代码块</h3>
+    <p id="revertHunkDesc"></p>
+    <div class="modal-btns">
+      <button class="btn" onclick="closeModal('revertHunkModal')">取消</button>
+      <button class="btn red" onclick="doRevertHunk()">撤回此块</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="revertAllModal">
+  <div class="modal">
+    <h3>撤回所有修改</h3>
+    <p id="revertAllDesc">将撤回工作区所有未提交修改，此操作不可撤销！</p>
+    <div class="modal-btns">
+      <button class="btn" onclick="closeModal('revertAllModal')">取消</button>
+      <button class="btn red" onclick="doRevertAll()">全部撤回</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const BASE = 'http://localhost:7842';
+let WS_URL = 'ws://localhost:7843';
+
+let diffTooltipEl = null;
+function ensureDiffTooltipEl(){
+  if (diffTooltipEl) return diffTooltipEl;
+  diffTooltipEl = document.createElement('div');
+  diffTooltipEl.className = 'diff-tooltip';
+  document.body.appendChild(diffTooltipEl);
+  return diffTooltipEl;
+}
+
+function escJsString(s){
+  return String(s ?? '')
+    .replace(/\\/g,'\\\\')
+    .replace(/'/g,"\\'")
+    .replace(/\r/g,'')
+    .replace(/\n/g,'\\n');
+}
+
+function showDiffTooltip(text, evt){
+  const el = ensureDiffTooltipEl();
+  const t = (text ?? '').replace(/\\n/g,'\n');
+  if (!t) return;
+  el.textContent = t;
+  el.style.display = 'block';
+  moveDiffTooltip(evt);
+}
+
+function moveDiffTooltip(evt){
+  if (!diffTooltipEl || diffTooltipEl.style.display === 'none') return;
+  const x = (evt?.clientX ?? 0) + 14;
+  const y = (evt?.clientY ?? 0) + 14;
+  diffTooltipEl.style.left = x + 'px';
+  diffTooltipEl.style.top = y + 'px';
+}
+
+function hideDiffTooltip(){
+  if (!diffTooltipEl) return;
+  diffTooltipEl.style.display = 'none';
+}
+
+// WebSocket 连接
+let ws = null;
+let wsReconnectTimer = null;
+let wsConnected = false;
+
+// 动态获取WebSocket端口号
+async function getWebSocketPort() {
+  try {
+    const res = await GET('/api/status');
+    if (res.ws_port) {
+      WS_URL = `ws://localhost:${res.ws_port}`;
+      console.log('WebSocket端口已更新:', WS_URL);
+    }
+    // 更新仓库远程地址展示
+    if (res && res.origin_url) {
+      updateOriginLabel(res.origin_url);
+    }
+  } catch (error) {
+    console.error('获取WebSocket端口失败:', error);
+  }
+}
+
+function updateOriginLabel(originUrl) {
+  const el = document.getElementById('repoLabel');
+  if (!el) return;
+  const base = el.getAttribute('data-repo') || el.textContent || '';
+  if (!originUrl) {
+    el.textContent = base;
+    return;
+  }
+
+  const safeBase = (base || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const safeOriginText = (originUrl || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const isHttpUrl = /^https?:\/\//i.test(originUrl || '');
+  const originPart = isHttpUrl
+    ? `<a class="origin-link-btn" href="${originUrl}" target="_blank" rel="noopener noreferrer">${safeOriginText}</a>`
+    : safeOriginText;
+
+  el.innerHTML = `${safeBase}  |  ${originPart}`;
+  el.title = originUrl;
+}
+
+// ── Utils ─────────────────────────────────────────────────────────────────────
+function debounce(func, wait) {
+  let timeout;
+  return function executedFunction(...args) {
+    const later = () => {
+      clearTimeout(timeout);
+      func(...args);
+    };
+    clearTimeout(timeout);
+    timeout = setTimeout(later, wait);
+  };
+}
+
+// ── WebSocket 连接管理 ────────────────────────────────────────────────────────
+async function connectWebSocket() {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    return; // 已经连接
+  }
+  
+  // 先获取WebSocket端口号
+  await getWebSocketPort();
+  
+  try {
+    ws = new WebSocket(WS_URL);
+    
+    ws.onopen = () => {
+      console.log('WebSocket 连接成功');
+      wsConnected = true;
+      if (wsReconnectTimer) {
+        clearTimeout(wsReconnectTimer);
+        wsReconnectTimer = null;
+      }
+    };
+    
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        handleWebSocketMessage(data);
+      } catch (e) {
+        console.error('解析 WebSocket 消息失败:', e);
+      }
+    };
+    
+    ws.onerror = (error) => {
+      console.error('WebSocket 错误:', error);
+    };
+    
+    ws.onclose = () => {
+      console.log('WebSocket 连接关闭');
+      wsConnected = false;
+      // 5秒后尝试重连
+      if (!wsReconnectTimer) {
+        wsReconnectTimer = setTimeout(() => {
+          console.log('尝试重新连接 WebSocket...');
+          connectWebSocket();
+        }, 5000);
+      }
+    };
+  } catch (e) {
+    console.error('WebSocket 连接失败:', e);
+    // 回退到轮询模式
+    console.log('回退到轮询模式');
+  }
+}
+
+function handleWebSocketMessage(data) {
+  console.log('收到 WebSocket 消息:', data.type);
+  
+  switch (data.type) {
+    case 'connected':
+      console.log('WebSocket 连接确认:', data.message);
+      break;
+      
+    case 'files_updated':
+      // 文件列表更新
+      handleFilesUpdate(data.files);
+      break;
+      
+    case 'pong':
+      // 心跳响应
+      break;
+      
+    default:
+      console.log('未知的消息类型:', data.type);
+  }
+}
+
+// 全局标志，用于控制是否自动刷新diff
+let shouldAutoRefreshDiff = true;
+
+// 一次性跳过下一次由 WebSocket 推送触发的自动 diff 刷新
+// 用于在撤回/保存成功后（前端已主动刷新 diff）避免二次 loadDiff 造成的“加载中”闪烁
+let skipNextAutoDiffRefresh = false;
+
+// 临时禁用自动刷新diff的函数
+function disableAutoRefreshDiff(durationMs = 3000) {
+  shouldAutoRefreshDiff = false;
+  // 一段时间后重新启用自动刷新
+  setTimeout(() => {
+    shouldAutoRefreshDiff = true;
+  }, durationMs);
+}
+
+async function handleFilesUpdate(newFiles) {
+  console.log('检测到文件变化，更新列表');
+  
+  // 保存当前查看的文件路径
+  const currentFilePath = curFile !== null && files[curFile] ? files[curFile].path : null;
+  
+  // 计算每个文件的modified数量
+  newFiles.forEach(file => {
+    file.modified = Math.min(file.added, file.removed);
+    file.added -= file.modified;
+    file.removed -= file.modified;
+  });
+  
+  files = newFiles;
+  
+  // 保持当前的选中状态
+  const next = new Set();
+  files.forEach((_, i) => {
+    if (checkedSet.has(i)) next.add(i);
+  });
+  checkedSet = next.size ? next : new Set(files.map((_, i) => i));
+  
+  renderFileList();
+  updateStats();
+  
+  // 重新定位当前文件的索引
+  if (currentFilePath) {
+    const newIndex = files.findIndex(f => f.path === currentFilePath);
+    if (newIndex >= 0) {
+      curFile = newIndex;
+      // 自动加载diff，但只有在shouldAutoRefreshDiff为true时
+      // 这样可以避免在撤回操作后被WebSocket的推送打断
+      if (shouldAutoRefreshDiff) {
+        if (skipNextAutoDiffRefresh) {
+          skipNextAutoDiffRefresh = false;
+          console.log('跳过一次自动刷新diff（本地已主动更新）');
+        } else {
+          console.log('自动刷新当前文件的diff');
+          loadDiff(curFile);
+        }
+      }
+    } else {
+      // 文件已经不在变更列表中（可能已经完全撤回）
+      curFile = null;
+      clearDiff();
+    }
+  }
+}
+
+// 发送心跳保持连接
+function startWebSocketHeartbeat() {
+  setInterval(() => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'ping' }));
+    }
+  }, 30000); // 每30秒发送一次心跳
+}
+
+// ── State ────────────────────────────────────────────────────────────────────
+let files       = [];          // 当前工作区变更文件
+let checkedSet  = new Set();   // 已勾选文件 (index)
+let curFile     = null;        // 当前查看文件 index
+let diffMode    = 'split';     // 'split' | 'unified'
+let curHunks    = [];          // 当前文件 hunks
+
+// 按块提交：每个文件已选择的 hunk index 集合（按 path 存）
+let commitHunksSelectedByPath = new Map();
+// 按块提交：文件的 hunk 选择初始化标记（避免全取消后又被默认全选覆盖）
+let commitHunksInitByPath = new Map();
+// 按块提交：缓存每个文件的 hunks 数量（用于文件 checkbox 半选态）
+let commitHunksLenByPath = new Map();
+// 按块提交：当用户在文件列表勾选/取消时，如果 hunksLen 尚未知，先记住期望（进入 diff 时应用）
+let commitHunksDesiredByPath = new Map(); // path -> true(all) | false(none)
+
+// 行级提交选择：每个文件已选择的 line key 集合（key: `${hunkIndex}:${lineIndex}`）
+let commitLinesSelectedByPath = new Map();
+let commitLinesInitByPath = new Map();
+let commitLinesDesiredByPath = new Map(); // path -> true(all) | false(none)
+let commitLinesTotalByPath = new Map();
+let curFileContent = '';       // 当前文件完整内容
+let baseFileContent = null;    // HEAD 版本文件内容（原始版本展示用）
+
+// 变更视图上下文行数（git diff --unified=N）
+let changeViewCtx = 5;
+let pendingHunk = null;        // 待撤回 {filepath, hunkIdx, status}
+let pendingLine = null;        // 待撤回 {filepath, hunkIdx, lineIdx, status}
+let logData     = [];          // 日志列表
+let logFilter   = '';
+let fileFilter  = '';
+
+let logMode     = 'list';      // 'list' | 'detail'
+let curCommit   = null;        // 当前查看提交
+let curCommitFiles = [];       // 当前提交文件列表
+let curLogFile  = null;        // 当前查看的历史文件
+
+let refreshBusy = false;
+
+// Debounced functions
+const debouncedFilterFiles = debounce((q) => {
+  fileFilter = q;
+  renderFileList();
+}, 300);
+
+const debouncedFilterLog = debounce((q) => {
+  logFilter = q;
+  renderLogList();
+}, 300);
+
+// ── API ──────────────────────────────────────────────────────────────────────
+async function api(path, opts={}) {
+  try {
+    const r = await fetch(BASE + path, {
+      cache: 'no-store',
+      headers:{'Content-Type':'application/json'}, ...opts
+    });
+    return await r.json();
+  } catch(e) {
+    return {error:'连接失败，请确认 server.py 正在运行'};
+  }
+}
+const GET  = p    => {
+  const sep = p.includes('?') ? '&' : '?';
+  return api(p + sep + '_ts=' + Date.now());
+};
+const POST = (p,b)=> api(p, {method:'POST', body: JSON.stringify(b)});
+
+// ── Open Repo ─────────────────────────────────────────────────────────────────
+async function openRepo() {
+  const el  = document.getElementById('repoInput');
+  const err = document.getElementById('openErr');
+  const path = el.value.trim();
+  if (!path) { err.textContent = '请输入路径'; return; }
+  err.textContent = '正在打开...';
+  const res = await POST('/api/open_repo', {path});
+  if (res.error) { err.textContent = res.error; return; }
+  err.textContent = '';
+  showApp(res.repo, res.branch);
+  await refresh();
+}
+
+function showApp(repo, branch) {
+  document.getElementById('opener').style.display = 'none';
+  const app = document.getElementById('app');
+  app.style.display = 'flex';
+  app.style.flex    = '1';
+  document.getElementById('branchTag').style.display  = 'flex';
+  document.getElementById('branchName').textContent   = branch || 'main';
+  const repoLabelEl = document.getElementById('repoLabel');
+  repoLabelEl.textContent = repo;
+  repoLabelEl.setAttribute('data-repo', repo);
+  document.getElementById('refreshBtn').style.display = 'flex';
+  document.getElementById('changeBtn').style.display  = 'flex';
+  
+  // 启动WebSocket连接
+  connectWebSocket();
+  
+  // 不再需要轮询模式，WebSocket会实时推送更新
+  // 但保留作为备份
+  startRealTimeRefresh();
+}
+
+function goToOpener() {
+  document.getElementById('opener').style.display    = 'flex';
+  document.getElementById('app').style.display       = 'none';
+  document.getElementById('branchTag').style.display = 'none';
+  document.getElementById('repoLabel').textContent   = '';
+  ['refreshBtn','changeBtn'].forEach(id =>
+    document.getElementById(id).style.display = 'none');
+  
+  // 关闭WebSocket连接
+  if (ws) {
+    ws.close();
+    ws = null;
+  }
+  if (wsReconnectTimer) {
+    clearTimeout(wsReconnectTimer);
+    wsReconnectTimer = null;
+  }
+  
+  // Stop real-time refresh
+  stopRealTimeRefresh();
+}
+
+// ── Refresh ───────────────────────────────────────────────────────────────────
+async function refresh() {
+  if (refreshBusy) return;
+  refreshBusy = true;
+  const btn = document.getElementById('refreshBtn');
+  btn.style.opacity = '.5';
+  btn.style.pointerEvents = 'none';
+
+  const [fRes, lRes, bRes] = await Promise.all([
+    GET('/api/files'),
+    GET('/api/log'),
+    GET('/api/branches'),
+  ]);
+
+  if (fRes.error) {
+    toast(fRes.error,'err');
+    btn.style.opacity='';
+    btn.style.pointerEvents='';
+    refreshBusy = false;
+    return;
+  }
+
+  files   = fRes.files  || [];
+  // 计算每个文件的modified数量
+  files.forEach(file => {
+    // 对于modified行，Git会将其视为先删除后添加，所以我们可以通过比较added和removed来计算modified数量
+    // 但这只是一个近似值，准确的计算需要解析diff内容
+    file.modified = Math.min(file.added, file.removed);
+    file.added -= file.modified;
+    file.removed -= file.modified;
+  });
+  // 映射日志数据字段: message -> msg, date -> time
+  logData = (lRes.log || []).map(log => ({
+    ...log,
+    msg: log.message || log.msg || '',
+    time: log.date ? new Date(log.date).toLocaleString('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit'
+    }) : ''
+  }));
+  if (bRes.current) document.getElementById('branchName').textContent = bRes.current;
+
+  // 重建 checkedSet（保留已有，追加新文件）
+  if (!checkedSet || checkedSet.size === 0) {
+    checkedSet = new Set(files.map((_, i) => i));
+  } else {
+    const next = new Set();
+    // 默认：保留原来的勾选；如果文件列表变化导致索引错位，会有风险，但至少不会每次刷新强制全选
+    files.forEach((_, i) => {
+      if (checkedSet.has(i)) next.add(i);
+    });
+    // 如果一个都不在了（例如文件数量变化），则全选兜底
+    checkedSet = next.size ? next : new Set(files.map((_, i) => i));
+  }
+
+  renderFileList();
+  renderLogList();
+  updateStats();
+
+  // 刷新当前 diff
+  if (curFile !== null) {
+    if (curFile < files.length) await loadDiff(curFile);
+    else { curFile = null; clearDiff(); }
+  }
+
+  btn.style.opacity = '';
+  btn.style.pointerEvents = '';
+  refreshBusy = false;
+}
+
+async function refreshFilesOnly(forceDiffReload=false) {
+  const fRes = await GET('/api/files');
+  if (fRes.error) return;
+  const newFiles = fRes.files || [];
+  // 计算每个文件的modified数量
+  newFiles.forEach(file => {
+    // 对于modified行，Git会将其视为先删除后添加，所以我们可以通过比较added和removed来计算modified数量
+    // 但这只是一个近似值，准确的计算需要解析diff内容
+    file.modified = Math.min(file.added, file.removed);
+    file.added -= file.modified;
+    file.removed -= file.modified;
+  });
+  const same = JSON.stringify(newFiles) === JSON.stringify(files);
+  // 即使 files 列表统计没变化，撤回/保存等操作也可能改变 diff 内容（比如 +1-1 变更）。
+  // 因此在 forceDiffReload 时不要短路。
+  if (same && !forceDiffReload) return;
+  files = newFiles;
+  if (!checkedSet || checkedSet.size === 0) {
+    checkedSet = new Set(files.map((_, i) => i));
+  } else {
+    const next = new Set();
+    files.forEach((_, i) => {
+      if (checkedSet.has(i)) next.add(i);
+    });
+    checkedSet = next.size ? next : new Set(files.map((_, i) => i));
+  }
+  renderFileList();
+  updateStats();
+  if (curFile !== null) {
+    if (curFile < files.length) await loadDiff(curFile);
+    else { curFile = null; clearDiff(); }
+  } else if (forceDiffReload) {
+    // 处理特殊情况：比如撤回后 curFile 已经被置空，但你仍然希望 UI 立即反映状态
+    clearDiff();
+  }
+}
+
+// ── Real-time refresh ─────────────────────────────────────────────────────────
+let refreshInterval = null;
+
+function startRealTimeRefresh() {
+  if (refreshInterval) clearInterval(refreshInterval);
+  // 有WebSocket后，降低轮询频率作为备份
+  refreshInterval = setInterval(async () => {
+    try {
+      // 如果WebSocket未连接，则使用轮询
+      if (!wsConnected) {
+        await refreshFilesOnly();
+      }
+    } catch (e) {
+      // Ignore errors during auto-refresh
+    }
+  }, 10000); // 改为每10秒检查一次
+}
+
+function stopRealTimeRefresh() {
+  if (refreshInterval) {
+    clearInterval(refreshInterval);
+    refreshInterval = null;
+  }
+}
+
+function scrollToLine(lineNumber) {
+  // Scroll to the specified line in the diff view
+  const diffView = document.getElementById('diffView');
+  if (diffView) {
+    // Find the line with the specified line number
+    const lines = diffView.querySelectorAll('.dl');
+    let targetLine = null;
+    
+    lines.forEach(line => {
+      const lineNumbers = line.querySelectorAll('.ln');
+      lineNumbers.forEach(ln => {
+        if (ln.textContent.trim() === lineNumber.toString()) {
+          targetLine = line;
+        }
+      });
+    });
+    
+    if (targetLine) {
+      targetLine.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      // Highlight the line temporarily
+      targetLine.style.backgroundColor = 'rgba(255, 255, 0, 0.3)';
+      setTimeout(() => {
+        targetLine.style.backgroundColor = '';
+      }, 1000);
+    }
+  }
+}
+
+// ── File List ─────────────────────────────────────────────────────────────────
+function renderFileList() {
+  const el = document.getElementById('fileList');
+  const q  = fileFilter.toLowerCase();
+  const vis = files.filter(f => !q || f.path.toLowerCase().includes(q));
+  document.getElementById('fileCount').textContent = files.length;
+  el.innerHTML = '';
+  // Use DocumentFragment for better performance with large lists
+  const fragment = document.createDocumentFragment();
+  
+  vis.forEach((f) => {
+    const i    = files.indexOf(f);
+    const segs = f.path.replace(/\\/g,'/').split('/');
+    const name = segs.pop();
+    const dir  = segs.join('/') + (segs.length ? '/' : '');
+    const div  = document.createElement('div');
+    div.className = 'fi' + (i === curFile ? ' active' : '');
+    div.innerHTML = `
+      <input type="checkbox" class="fi-cb" data-idx="${i}" ${checkedSet.has(i)?'checked':''}
+        onclick="event.stopPropagation();toggleCheck(${i})">
+      <span class="fi-st ${f.status}">${f.status}</span>
+      <span class="fi-name"><span class="fi-dir">${esc(dir)}</span>${esc(name)}</span>
+      <span class="fi-delta">
+        ${f.added   > 0 ? `<span class="a">+${f.added}</span>`  : ''}
+        ${f.removed > 0 ? `<span class="r">-${f.removed}</span>`: ''}
+        ${f.modified > 0 ? `<span class="m">~${f.modified}</span>`: ''}
+      </span>`;
+    div.onclick = () => selectFile(i);
+    fragment.appendChild(div);
+
+    // 文件级 checkbox 半选态：根据行级勾选状态计算（当 total 已知时）
+    const cb = div.querySelector('input.fi-cb');
+    if (cb && f && f.path) {
+      const total = commitLinesTotalByPath.get(f.path);
+      if (Number.isFinite(total) && total > 0) {
+        const set = getSelectedCommitLinesSet(f.path);
+        const isAll = set.size === total;
+        const isNone = set.size === 0;
+        const isPart = !isAll && !isNone;
+        cb.indeterminate = isPart;
+        if (isPart) cb.classList.add('indet');
+        else cb.classList.remove('indet');
+        cb.checked = !isNone;
+      } else {
+        cb.indeterminate = false;
+        cb.classList.remove('indet');
+      }
+    }
+  });
+  
+  // Clear and append all at once
+  el.innerHTML = '';
+  el.appendChild(fragment);
+}
+
+function filterFiles(q) { debouncedFilterFiles(q); }
+function toggleCheck(i) {
+  if (checkedSet.has(i)) checkedSet.delete(i); else checkedSet.add(i);
+  const f = files[i];
+  if (f && f.path) {
+    const hunksKnown = (curFile === i) && Array.isArray(curHunks);
+    if (hunksKnown) {
+      setAllCommitLines(f.path, curHunks, checkedSet.has(i));
+
+      const changeLocations = [];
+      (curHunks || []).forEach((hunk, hunkIndex) => {
+        (hunk.lines || []).forEach((line, lineIndex) => {
+          if (line.type === 'added' || line.type === 'removed' || line.type === 'modified') {
+            changeLocations.push({ hunkIndex, lineIndex, lineNumber: line.new || line.old, type: line.type, text: line.text });
+          }
+        });
+      });
+      renderDiffWithFullContext(f, curHunks, false, changeLocations);
+    } else {
+      // hunks 未加载，先记录期望，进入 diff 时应用
+      commitLinesDesiredByPath.set(f.path, checkedSet.has(i));
+    }
+  }
+  updateStats(); renderFileList();
+}
+function selAll(v) {
+  if (v) {
+    files.forEach((_,i) => checkedSet.add(i));
+  } else {
+    checkedSet.clear();
+  }
+
+  // 文件级全选/全取消：同步到各文件的 hunk 选择（未知 hunksLen 的先记录期望）
+  files.forEach((f, i) => {
+    if (!f || !f.path) return;
+    const hunksKnown = (curFile === i) && Array.isArray(curHunks);
+    if (hunksKnown) {
+      setAllCommitLines(f.path, curHunks, v);
+    } else {
+      commitLinesDesiredByPath.set(f.path, !!v);
+    }
+  });
+  updateStats(); renderFileList();
+}
+function updateStats() {
+  let ta=0,tr=0,tm=0;
+  checkedSet.forEach(i => { ta+=files[i]?.added||0; tr+=files[i]?.removed||0; tm+=files[i]?.modified||0; });
+  document.getElementById('totA').textContent = '+'+ta;
+  document.getElementById('totR').textContent = '-'+tr;
+  document.getElementById('totM').textContent = '~'+tm;
+  document.getElementById('selInfo').textContent =
+    `已选 ${checkedSet.size}/${files.length} 文件`;
+}
+
+// ── Diff ──────────────────────────────────────────────────────────────────────
+async function selectFile(i) {
+  console.log('selectFile called with i:', i);
+  curFile = i;
+  // clear log file selection
+  curLogFile = null;
+  renderFileList();
+  // 清空之前的hunks，确保重新加载
+  curHunks = [];
+  console.log('selectFile: calling loadDiff with i:', i);
+  await loadDiff(i);
+  console.log('selectFile: loadDiff completed');
+}
+
+async function loadDiff(i) {
+  console.log('loadDiff called with i:', i);
+  const f = files[i];
+  if (!f) {
+    console.log('loadDiff: file not found for index', i);
+    return;
+  }
+  console.log('loadDiff: loading file', f.path);
+  
+  // Update label
+  const segs = f.path.replace(/\\/g,'/').split('/');
+  const name = segs[segs.length-1];
+  document.getElementById('diffLabel').innerHTML =
+    `<span class="fi-st ${f.status}" style="font-size:9px">${f.status}</span>
+     <span class="fn">${esc(f.path)}</span>
+     ${f.added > 0 ? `<span style="color:var(--accent2);font-size:10px">+${f.added}</span>` : ''}
+     ${f.removed > 0 ? `<span style="color:var(--danger);font-size:10px">-${f.removed}</span>` : ''}
+     ${f.modified > 0 ? `<span style="color:var(--accent);font-size:10px">~${f.modified}</span>` : ''}`;
+  document.getElementById('diffView').innerHTML =
+    '<div class="empty-state"><div class="spin"></div><p>加载中...</p></div>';
+
+  // Load diff hunks
+  console.log('loadDiff: loading diff hunks');
+  try {
+    const ctxParam = (diffMode === 'unified') ? `&ctx=${encodeURIComponent(changeViewCtx)}` : '';
+    const res = await GET(`/api/diff?path=${encodeURIComponent(f.path)}&status=${f.status}${ctxParam}`);
+    console.log('loadDiff: diff response:', res);
+    if (res.error) { 
+      toast(res.error,'err'); 
+      console.log('loadDiff: diff error:', res.error);
+      document.getElementById('diffView').innerHTML = '<div class="empty-state"><p style="color:var(--text2)">加载失败: ' + res.error + '</p></div>';
+      return; 
+    }
+    curHunks = res.hunks || [];
+    console.log('loadDiff: loaded', curHunks.length, 'hunks');
+    // 按块提交：默认全选当前文件的所有 hunk
+    ensureDefaultHunkSelection(f.path, curHunks.length);
+  } catch (error) {
+    console.error('loadDiff: error loading diff hunks:', error);
+    toast('加载差异失败: ' + error.message,'err');
+    document.getElementById('diffView').innerHTML = '<div class="empty-state"><p style="color:var(--text2)">加载失败: ' + error.message + '</p></div>';
+    return;
+  }
+  
+  // Load HEAD/base file content for stable original column rendering (best-effort)
+  baseFileContent = null;
+  if (f.status !== 'A') {
+    try {
+      const headRes = await POST('/api/file_content_head', {path: f.path});
+      if (headRes && headRes.ok && headRes.content !== null && headRes.content !== undefined) {
+        baseFileContent = headRes.content;
+      }
+    } catch (e) {
+      baseFileContent = null;
+    }
+  }
+
+  // Load the full file content
+  console.log('loadDiff: loading file content for:', f.path, 'status:', f.status);
+  try {
+    const contentRes = await POST('/api/file_content', {path: f.path});
+    console.log('loadDiff: content response:', contentRes);
+    
+    if (contentRes.ok && contentRes.content !== null && contentRes.content !== undefined) {
+      curFileContent = contentRes.content;
+      console.log('loadDiff: file content loaded, length:', curFileContent.length);
+    } else {
+      console.warn('loadDiff: failed to load file content:', contentRes);
+      // For deleted files, we can't load content, use hunks instead
+      if (f.status === 'D') {
+        curFileContent = null;
+        console.log('loadDiff: file is deleted, using hunks only');
+      } else {
+        curFileContent = '';
+        console.log('loadDiff: setting empty content as fallback');
+      }
+    }
+  } catch (error) {
+    console.error('loadDiff: error loading file content:', error);
+    curFileContent = '';
+  }
+  
+  // Collect change locations for quick navigation
+  const changeLocations = [];
+  curHunks.forEach((hunk, hunkIndex) => {
+    hunk.lines.forEach((line, lineIndex) => {
+      if (line.type === 'added' || line.type === 'removed' || line.type === 'modified') {
+        changeLocations.push({
+          hunkIndex,
+          lineIndex,
+          lineNumber: line.new || line.old,
+          type: line.type,
+          text: line.text
+        });
+      }
+    });
+  });
+  
+  // Render based on current view mode
+  console.log('loadDiff: rendering diff, diffMode:', diffMode);
+  // Always use renderDiffWithFullContext to show full file content
+  const revertBtnEl = document.getElementById('revertFileBtn');
+  revertBtnEl.style.display = 'flex';
+  // 状态驱动的按钮语义：U=删除文件，D=恢复文件，其它=撤回修改
+  if (f.status === 'U') {
+    revertBtnEl.lastChild.textContent = '删除文件';
+  } else if (f.status === 'D') {
+    revertBtnEl.lastChild.textContent = '恢复文件';
+  } else {
+    revertBtnEl.lastChild.textContent = '撤回文件';
+  }
+  document.getElementById('saveFileBtn').style.display = 'none';
+  console.log('loadDiff: rendering full file view with diff context');
+  renderDiffWithFullContext(f, curHunks, false, changeLocations);
+  console.log('loadDiff: completed');
+}
+
+function getSelectedCommitHunksSet(filepath) {
+  if (!filepath) return new Set();
+  let s = commitHunksSelectedByPath.get(filepath);
+  if (!s) {
+    s = new Set();
+    commitHunksSelectedByPath.set(filepath, s);
+  }
+  return s;
+}
+
+function getSelectedCommitLinesSet(filepath) {
+  if (!filepath) return new Set();
+  let s = commitLinesSelectedByPath.get(filepath);
+  if (!s) {
+    s = new Set();
+    commitLinesSelectedByPath.set(filepath, s);
+  }
+  return s;
+}
+
+function getLineKey(hunkIdx, lineIdx) {
+  return `${hunkIdx}:${lineIdx}`;
+}
+
+function ensureDefaultHunkSelection(filepath, hunksLen) {
+  const set = getSelectedCommitHunksSet(filepath);
+  commitHunksLenByPath.set(filepath, hunksLen || 0);
+  // 只在首次进入时初始化：优先应用文件级期望，否则默认全选；之后允许全取消
+  if (!commitHunksInitByPath.get(filepath)) {
+    const desired = commitHunksDesiredByPath.get(filepath);
+    if (desired === false) {
+      set.clear();
+    } else {
+      if (hunksLen > 0) {
+        for (let i = 0; i < hunksLen; i++) set.add(i);
+      }
+    }
+    commitHunksInitByPath.set(filepath, true);
+    // 初始化完成后同步该文件的文件级勾选状态（仅此文件）
+    syncCheckedSetForFile(filepath);
+  }
+  return set;
+}
+
+function ensureDefaultLineSelection(filepath, hunks) {
+  const set = getSelectedCommitLinesSet(filepath);
+  if (commitLinesInitByPath.get(filepath)) {
+    return set;
+  }
+
+  const desired = commitLinesDesiredByPath.get(filepath);
+  set.clear();
+
+  let total = 0;
+  (hunks || []).forEach((hunk, hi) => {
+    (hunk.lines || []).forEach((l, li) => {
+      if (l.type === 'added' || l.type === 'removed' || l.type === 'modified') {
+        total++;
+        if (desired !== false) set.add(getLineKey(hi, li));
+      }
+    });
+  });
+  commitLinesTotalByPath.set(filepath, total);
+  commitLinesInitByPath.set(filepath, true);
+  syncCheckedSetForFile(filepath);
+  return set;
+}
+
+function setAllCommitLines(filepath, hunks, checked) {
+  const set = getSelectedCommitLinesSet(filepath);
+  set.clear();
+  let total = 0;
+  (hunks || []).forEach((hunk, hi) => {
+    (hunk.lines || []).forEach((l, li) => {
+      if (l.type === 'added' || l.type === 'removed' || l.type === 'modified') {
+        total++;
+        if (checked) set.add(getLineKey(hi, li));
+      }
+    });
+  });
+  commitLinesTotalByPath.set(filepath, total);
+  commitLinesInitByPath.set(filepath, true);
+  commitLinesDesiredByPath.set(filepath, !!checked);
+  syncCheckedSetForFile(filepath);
+}
+
+function applyIndeterminateCheckboxes(rootEl) {
+  const root = rootEl || document;
+  root.querySelectorAll('input[type="checkbox"][data-indet="1"]').forEach((cb) => {
+    cb.indeterminate = true;
+    cb.classList.add('indet');
+  });
+  root.querySelectorAll('input[type="checkbox"][data-indet]:not([data-indet="1"])').forEach((cb) => {
+    cb.indeterminate = false;
+    cb.classList.remove('indet');
+  });
+}
+
+function setAllCommitHunks(filepath, hunksLen, checked) {
+  const set = getSelectedCommitHunksSet(filepath);
+  set.clear();
+  if (checked && hunksLen > 0) {
+    for (let i = 0; i < hunksLen; i++) set.add(i);
+  }
+  commitHunksInitByPath.set(filepath, true);
+  commitHunksLenByPath.set(filepath, hunksLen || 0);
+  commitHunksDesiredByPath.set(filepath, !!checked);
+}
+
+function syncCheckedSetForFile(filepath) {
+  const idx = files.findIndex(f => f && f.path === filepath);
+  if (idx < 0) return;
+  const total = commitLinesTotalByPath.get(filepath);
+  if (!Number.isFinite(total) || total <= 0) return;
+  const set = getSelectedCommitLinesSet(filepath);
+  if (set.size === 0) checkedSet.delete(idx);
+  else checkedSet.add(idx);
+}
+
+function syncFileCheckFromHunks(filepath) {
+  syncCheckedSetForFile(filepath);
+  updateStats();
+  renderFileList();
+}
+
+function toggleCommitHunk(filepath, hunkIdx, checked) {
+  const set = getSelectedCommitHunksSet(filepath);
+  if (checked) set.add(hunkIdx); else set.delete(hunkIdx);
+
+  commitHunksInitByPath.set(filepath, true);
+  syncFileCheckFromHunks(filepath);
+
+  if (curFile !== null && files[curFile] && files[curFile].path === filepath) {
+    const f = files[curFile];
+    const changeLocations = [];
+    (curHunks || []).forEach((hunk, hunkIndex) => {
+      (hunk.lines || []).forEach((line, lineIndex) => {
+        if (line.type === 'added' || line.type === 'removed' || line.type === 'modified') {
+          changeLocations.push({
+            hunkIndex,
+            lineIndex,
+            lineNumber: line.new || line.old,
+            type: line.type,
+            text: line.text
+          });
+        }
+      });
+    });
+    renderDiffWithFullContext(f, curHunks, false, changeLocations);
+  }
+}
+
+function toggleCommitLine(filepath, hunkIdx, lineIdx, checked) {
+  const set = getSelectedCommitLinesSet(filepath);
+  const k = getLineKey(hunkIdx, lineIdx);
+  if (checked) set.add(k); else set.delete(k);
+  commitLinesInitByPath.set(filepath, true);
+  syncFileCheckFromHunks(filepath);
+
+  if (curFile !== null && files[curFile] && files[curFile].path === filepath) {
+    const f = files[curFile];
+    const changeLocations = [];
+    (curHunks || []).forEach((hunk, hunkIndex) => {
+      (hunk.lines || []).forEach((line, li) => {
+        if (line.type === 'added' || line.type === 'removed' || line.type === 'modified') {
+          changeLocations.push({ hunkIndex, lineIndex: li, lineNumber: line.new || line.old, type: line.type, text: line.text });
+        }
+      });
+    });
+    renderDiffWithFullContext(f, curHunks, false, changeLocations);
+  }
+}
+
+function toggleCommitBlock(filepath, hunkIdx, startLineIdx, endLineIdx, checked) {
+  const set = getSelectedCommitLinesSet(filepath);
+  const h = (curHunks || [])[hunkIdx];
+  if (!h || !Array.isArray(h.lines)) return;
+  for (let li = startLineIdx; li <= endLineIdx; li++) {
+    const l = h.lines[li];
+    if (!l) continue;
+    if (l.type === 'added' || l.type === 'removed' || l.type === 'modified') {
+      const k = getLineKey(hunkIdx, li);
+      if (checked) set.add(k); else set.delete(k);
+    }
+  }
+  commitLinesInitByPath.set(filepath, true);
+  syncFileCheckFromHunks(filepath);
+
+  if (curFile !== null && files[curFile] && files[curFile].path === filepath) {
+    const f = files[curFile];
+    const changeLocations = [];
+    (curHunks || []).forEach((hunk, hunkIndex) => {
+      (hunk.lines || []).forEach((line, li) => {
+        if (line.type === 'added' || line.type === 'removed' || line.type === 'modified') {
+          changeLocations.push({ hunkIndex, lineIndex: li, lineNumber: line.new || line.old, type: line.type, text: line.text });
+        }
+      });
+    });
+    renderDiffWithFullContext(f, curHunks, false, changeLocations);
+  }
+}
+
+function renderDiffWithFullContext(file, hunks, readonly, changeLocations = []) {
+  console.log('renderDiffWithFullContext called with file:', file.path, 'hunks:', hunks.length);
+  const view = document.getElementById('diffView');
+
+  const selectedLinesSet = ensureDefaultLineSelection(file.path, hunks);
+  
+  // If no file content and no hunks, show empty state
+  if ((!curFileContent || curFileContent === '') && (!hunks || hunks.length === 0)) {
+    console.log('renderDiffWithFullContext: no content and no hunks, showing empty state');
+    view.innerHTML = '<div class="empty-state"><p style="color:var(--text2)">无差异内容</p></div>';
+    return;
+  }
+  
+  // If we have hunks but no file content, try to reconstruct from hunks
+  let workingContent = curFileContent;
+  if (!workingContent || workingContent === '') {
+    console.log('No file content, reconstructing from hunks...');
+    // Build content from hunks (for new files or when content loading fails)
+    const lines = [];
+    hunks.forEach(hunk => {
+      hunk.lines.forEach(line => {
+        if (line.type === 'context' || line.type === 'added' || line.type === 'modified') {
+          lines.push(line.text);
+        }
+      });
+    });
+    workingContent = lines.join('\n');
+    console.log('Reconstructed content length:', workingContent.length);
+  }
+
+  // Base content (HEAD) for split left column; fallback to workingContent if missing
+  let baseWorkingContent = baseFileContent;
+  if (baseWorkingContent === null || baseWorkingContent === undefined || baseWorkingContent === '') {
+    baseWorkingContent = workingContent;
+  }
+  
+  // Build a map of line changes from hunks
+  const lineChanges = new Map(); // lineNum -> {type, oldText, newText}
+  hunks.forEach((hunk, hunkIndex) => {
+    hunk.lines.forEach((line, lineIndex) => {
+      // 对于新增和修改的行，使用line.new作为key
+      if (line.new) {
+        lineChanges.set(line.new, {
+          type: line.type,
+          oldText: line.old_text || null,
+          newText: line.text,
+          hunkIndex,
+          lineIndex
+        });
+      }
+      // 对于删除的行，使用line.old作为key
+      else if (line.old && line.type === 'removed') {
+        lineChanges.set(line.old, {
+          type: line.type,
+          oldText: line.text,
+          newText: null,
+          hunkIndex,
+          lineIndex
+        });
+      }
+    });
+  });
+  
+  // Split file into lines
+  const lines = workingContent.split('\n');
+  console.log('Rendering diff with', lines.length, 'lines,', lineChanges.size, 'changes');
+  
+  // Build change navigation bar
+  let navigationHtml = '';
+  if (changeLocations.length > 0) {
+    navigationHtml = `<div class="change-navigation">
+      <span style="font-size:10px; color:var(--text3); margin-right:10px;">修改位置:</span>
+      ${changeLocations.map((change, index) => {
+        let typeClass = '';
+        if (change.type === 'added') typeClass = 'change-added';
+        else if (change.type === 'removed') typeClass = 'change-removed';
+        else if (change.type === 'modified') typeClass = 'change-modified';
+        
+        return `<a href="#" class="change-nav-item ${typeClass}" onclick="scrollToLine(${change.lineNumber}); return false;">
+          ${change.lineNumber}
+        </a>`;
+      }).join('')}
+    </div>`;
+  }
+  
+  const status = file?.status;
+  const forceSingle = (status === 'U' || status === 'D');
+  const effectiveMode = forceSingle ? 'single' : diffMode;
+
+  if (effectiveMode === 'split') {
+    // Build split view with full file context
+    const leftLines = [];
+    const rightLines = [];
+
+    // Diff-driven alignment (prevents base/current index drift when lines are added/removed)
+    const baseLines = baseWorkingContent.split('\n');
+    const curLines = workingContent.split('\n');
+
+    let oldPtr = 1;
+    let newPtr = 1;
+
+    const pushContext = () => {
+      const oldText = baseLines[oldPtr - 1] ?? '';
+      const newText = curLines[newPtr - 1] ?? '';
+      leftLines.push({type:'context', num:oldPtr, text:oldText});
+      rightLines.push({type:'context', num:newPtr, text:newText});
+      oldPtr++;
+      newPtr++;
+    };
+
+    (hunks || []).forEach((hunk, hunkIndex) => {
+      const oldStart = hunk.old_start || 1;
+      const newStart = hunk.new_start || 1;
+
+      // Emit context before this hunk
+      while (oldPtr < oldStart || newPtr < newStart) {
+        if (oldPtr < oldStart && newPtr < newStart) {
+          pushContext();
+        } else if (oldPtr < oldStart) {
+          const oldText = baseLines[oldPtr - 1] ?? '';
+          leftLines.push({type:'context', num:oldPtr, text:oldText});
+          rightLines.push({type:'empty', num:'', text:''});
+          oldPtr++;
+        } else {
+          const newText = curLines[newPtr - 1] ?? '';
+          leftLines.push({type:'empty', num:'', text:''});
+          rightLines.push({type:'context', num:newPtr, text:newText});
+          newPtr++;
+        }
+      }
+
+      // Process hunk lines
+      (hunk.lines || []).forEach((dl, lineIndex) => {
+        if (dl.type === 'context') {
+          const oldText = baseLines[oldPtr - 1] ?? dl.text ?? '';
+          const newText = curLines[newPtr - 1] ?? dl.text ?? '';
+          leftLines.push({type:'context', num:oldPtr, text:oldText});
+          rightLines.push({type:'context', num:newPtr, text:newText});
+          oldPtr++;
+          newPtr++;
+        } else if (dl.type === 'added') {
+          const newText = curLines[newPtr - 1] ?? dl.text ?? '';
+          leftLines.push({type:'empty', num:'', text:''});
+          rightLines.push({type:'added', num:newPtr, text:newText, hunkIndex, originalLineIndex: lineIndex});
+          newPtr++;
+        } else if (dl.type === 'removed') {
+          const oldText = baseLines[oldPtr - 1] ?? dl.text ?? '';
+          leftLines.push({type:'removed', num:oldPtr, text:oldText, hunkIndex, originalLineIndex: lineIndex});
+          rightLines.push({type:'empty', num:'', text:''});
+          oldPtr++;
+        } else if (dl.type === 'modified') {
+          const oldText = baseLines[oldPtr - 1] ?? dl.old_text ?? '';
+          const newText = curLines[newPtr - 1] ?? dl.text ?? '';
+          leftLines.push({type:'modified', num:oldPtr, text:oldText, hunkIndex, originalLineIndex: lineIndex});
+          rightLines.push({type:'modified', num:newPtr, text:newText, hunkIndex, originalLineIndex: lineIndex});
+          oldPtr++;
+          newPtr++;
+        }
+      });
+    });
+
+    // Emit remaining tail context (when there are no more hunks)
+    while (oldPtr <= baseLines.length && newPtr <= curLines.length) {
+      pushContext();
+    }
+    while (oldPtr <= baseLines.length) {
+      const oldText = baseLines[oldPtr - 1] ?? '';
+      leftLines.push({type:'context', num:oldPtr, text:oldText});
+      rightLines.push({type:'empty', num:'', text:''});
+      oldPtr++;
+    }
+    while (newPtr <= curLines.length) {
+      const newText = curLines[newPtr - 1] ?? '';
+      leftLines.push({type:'empty', num:'', text:''});
+      rightLines.push({type:'context', num:newPtr, text:newText});
+      newPtr++;
+    }
+
+    // Split view needs strict row alignment. Build left/right columns together.
+    function buildSplitAlignedHtml(leftLines, rightLines, file, readonly) {
+      const fpEsc = file.path.replace(/'/g,"\\'");
+      let leftHtml = '';
+      let rightHtml = '';
+      let i = 0;
+
+      const lineCheckedAttr = (hunkIdx, lineIdx) => {
+        if (hunkIdx === undefined || lineIdx === undefined) return '';
+        return selectedLinesSet.has(getLineKey(hunkIdx, lineIdx)) ? 'checked' : '';
+      };
+
+      const renderRow = (line, columnType, showRevert, showCommitCb, controlLine = null) => {
+        if (!line) {
+          return `<div class="dl empty"><span class="ls"></span><span class="ln"></span><span class="lc"></span></div>`;
+        }
+        if (line.type === 'empty' && !controlLine) {
+          return `<div class="dl ${line.type}"><span class="ls"></span><span class="ln">${line.num||''}</span><span class="lc"></span></div>`;
+        }
+        let s = ' ';
+        if (line.type === 'added') s = '+';
+        else if (line.type === 'removed') s = '-';
+        else if (line.type === 'modified') s = '~';
+
+        const ctl = controlLine || line;
+
+        const checkedAttr = lineCheckedAttr(ctl.hunkIndex, ctl.originalLineIndex);
+        const commitCb = (showCommitCb && columnType === 'right' && !readonly && ctl.hunkIndex !== undefined && ctl.originalLineIndex !== undefined) ?
+          `<input class="commit-cb" type="checkbox" ${checkedAttr} onclick="event.stopPropagation()" onchange="toggleCommitLine('${fpEsc}',${ctl.hunkIndex},${ctl.originalLineIndex},this.checked)">` : '';
+
+        const revertTitleNum = (ctl.num || line.num || '');
+        const revertBtn = (showRevert && columnType === 'right' && !readonly && ctl.hunkIndex !== undefined && ctl.originalLineIndex !== undefined) ?
+          `<button class="line-revert" onclick="askRevertLine('${fpEsc}',${ctl.hunkIndex},${ctl.originalLineIndex},'${file.status}')" title="撤回第${revertTitleNum}行"><span style="font-size:9px;font-weight:bold;">&gt;&gt;</span></button>`
+          : '';
+
+        // 右侧始终保留同宽 actions 槽位，保证行号列视觉对齐；左侧不占位
+        const actions = (columnType === 'right') ? `<span class="dl-actions">${commitCb}${revertBtn}</span>` : '';
+        const cellText = (line.type === 'empty') ? '' : (line.type !== 'empty' ? esc(line.text) : '');
+        return `<div class="dl ${line.type}">${actions}<span class="ls">${s}</span><span class="ln">${line.num||''}</span><span class="lc">${cellText}</span></div>`;
+      };
+
+      const renderHintRow = (columnType, count, showBtn, hunkIndex, startIdx, endIdx) => {
+        let total = 0;
+        let sel = 0;
+        const h = (hunks || [])[hunkIndex];
+        if (h && Array.isArray(h.lines)) {
+          for (let li = startIdx; li <= endIdx; li++) {
+            const l = h.lines[li];
+            if (!l) continue;
+            if (l.type === 'added' || l.type === 'removed' || l.type === 'modified') {
+              total++;
+              if (selectedLinesSet.has(getLineKey(hunkIndex, li))) sel++;
+            }
+          }
+        }
+        const isAll = total > 0 && sel === total;
+        const isNone = sel === 0;
+        const isPart = !isAll && !isNone;
+        const checkedAttr = isAll ? 'checked' : '';
+        const indetAttr = isPart ? 'data-indet="1"' : '';
+        const commitCb = (columnType === 'right' && !readonly) ? `<input class="commit-cb" type="checkbox" ${checkedAttr} ${indetAttr} onclick="event.stopPropagation()" onchange="toggleCommitBlock('${fpEsc}',${hunkIndex},${startIdx},${endIdx},this.checked)">` : '';
+        const btn = (showBtn && columnType === 'right' && !readonly) ?
+          `<button class="hint-btn" onclick="askRevertMultiLines('${fpEsc}',${hunkIndex},${startIdx},${endIdx},'${file.status}')">块撤回（${count}）</button>`
+          : '';
+        const actions = (columnType === 'right') ? `<span class="dl-actions">${commitCb}${btn}</span>` : '';
+        return `<div class="dl revert-block-hint">${actions}<span class="ls"></span><span class="ln"></span><span class="lc"><span class="hint-tag">块撤回</span><span class="hint-text">已识别为连续变更块（${count}行），可一键撤回</span></span></div>`;
+      };
+
+      while (i < Math.max(leftLines.length, rightLines.length)) {
+        const L = leftLines[i];
+        const R = rightLines[i];
+
+        const anchor = (R && (R.type === 'added' || R.type === 'modified') && R.hunkIndex !== undefined) ? R :
+                       (L && (L.type === 'removed' || L.type === 'modified') && L.hunkIndex !== undefined) ? L : null;
+
+        if (!anchor) {
+          leftHtml += renderRow(L, 'left', false, false);
+          rightHtml += renderRow(R, 'right', false, false);
+          i++;
+          continue;
+        }
+
+        const anchorSide = (anchor === R) ? 'right' : 'left';
+        const anchorType = anchor.type;
+        const sameLeft = [];
+        const sameRight = [];
+        let j = i;
+
+        while (j < Math.max(leftLines.length, rightLines.length)) {
+          const Lj = leftLines[j];
+          const Rj = rightLines[j];
+          const Aj = (anchorSide === 'right') ? Rj : Lj;
+          if (!Aj || Aj.hunkIndex === undefined || Aj.type !== anchorType || Aj.hunkIndex !== anchor.hunkIndex) {
+            break;
+          }
+          sameLeft.push(Lj);
+          sameRight.push(Rj);
+          j++;
+        }
+
+        const canBatch = sameLeft.length > 1;
+        if (canBatch) {
+          const first = anchorSide === 'right' ? sameRight[0] : sameLeft[0];
+          const last = anchorSide === 'right' ? sameRight[sameRight.length - 1] : sameLeft[sameLeft.length - 1];
+
+          const leftShowBtn = false;
+          const rightShowBtn = true;
+
+          if (first && last && first.hunkIndex !== undefined && first.originalLineIndex !== undefined && last.originalLineIndex !== undefined) {
+            leftHtml += renderHintRow('left', sameLeft.length, leftShowBtn, first.hunkIndex, first.originalLineIndex, last.originalLineIndex);
+            rightHtml += renderHintRow('right', sameRight.length, rightShowBtn, first.hunkIndex, first.originalLineIndex, last.originalLineIndex);
+          }
+        }
+
+        for (let k = 0; k < sameLeft.length; k++) {
+          const Lj = sameLeft[k];
+          const Rj = sameRight[k];
+          const leftShow = Lj && (Lj.type === 'removed' || Lj.type === 'modified');
+          const rightShow = Rj && (Rj.type === 'added' || Rj.type === 'modified');
+          // 每行差异都显示行级勾选框（仅右侧展示）；块级勾选框同时存在于 hint 行
+          const isAddedOnly = (!Lj || Lj.type === 'empty') && (Rj && Rj.type === 'added');
+          const leftVisual = isAddedOnly ? {type:'added', num:'', text:''} : Lj;
+          leftHtml += renderRow(leftVisual, 'left', leftShow, true);
+
+          // 删除行：右侧视觉上通常为空，但撤回/勾选仍应出现在右侧（使用左侧元数据）
+          const isRemoved = (Lj && Lj.type === 'removed');
+          const rightRevert = rightShow || isRemoved;
+          // 删除行在右侧用 removed 类型的空占位行，保证 ls/背景色与左侧一致且不受 .empty opacity 影响
+          const rightVisual = Rj || (isRemoved ? {type:'removed', num:'', text:''} : {type:'empty', num:'', text:''});
+          rightHtml += renderRow(rightVisual, 'right', rightRevert, true, isRemoved ? Lj : null);
+        }
+        i = j;
+      }
+      return {leftHtml, rightHtml};
+    }
+
+    const {leftHtml, rightHtml} = buildSplitAlignedHtml(leftLines, rightLines, file, readonly);
+
+    view.innerHTML = `${navigationHtml}
+    <div class="split-wrap">
+      <div class="sp">
+        <div class="sp-hdr" style="color:var(--danger)">原始版本
+          &nbsp;<span style="color:var(--text3);font-size:10px">${esc(file.path)}</span>
+        </div>${leftHtml}
+      </div>
+      <div class="sp">
+        <div class="sp-hdr" style="color:var(--accent2)">当前版本
+          &nbsp;<span style="color:var(--text3);font-size:10px">${esc(file.path)}</span>
+        </div>${rightHtml}
+      </div>
+    </div>`;
+
+    applyIndeterminateCheckboxes(view);
+  } else if (effectiveMode === 'single') {
+    // 状态 U/D：单列显示（U 仅当前；D 仅原始）
+    const leftLines = [];
+    const rightLines = [];
+
+    // Diff-driven alignment (prevents base/current index drift when lines are added/removed)
+    const baseLines = (baseWorkingContent ?? '').split('\n');
+    const curLines = (workingContent ?? '').split('\n');
+
+    let oldPtr = 1;
+    let newPtr = 1;
+
+    const pushContext = () => {
+      const oldText = baseLines[oldPtr - 1] ?? '';
+      const newText = curLines[newPtr - 1] ?? '';
+      leftLines.push({type:'context', num:oldPtr, text:oldText});
+      rightLines.push({type:'context', num:newPtr, text:newText});
+      oldPtr++;
+      newPtr++;
+    };
+
+    (hunks || []).forEach((hunk, hunkIndex) => {
+      const oldStart = hunk.old_start || 1;
+      const newStart = hunk.new_start || 1;
+      while (oldPtr < oldStart || newPtr < newStart) {
+        if (oldPtr < oldStart && newPtr < newStart) {
+          pushContext();
+        } else if (oldPtr < oldStart) {
+          const oldText = baseLines[oldPtr - 1] ?? '';
+          leftLines.push({type:'context', num:oldPtr, text:oldText});
+          rightLines.push({type:'empty', num:'', text:''});
+          oldPtr++;
+        } else {
+          const newText = curLines[newPtr - 1] ?? '';
+          leftLines.push({type:'empty', num:'', text:''});
+          rightLines.push({type:'context', num:newPtr, text:newText});
+          newPtr++;
+        }
+      }
+
+      (hunk.lines || []).forEach((dl, lineIndex) => {
+        if (dl.type === 'context') {
+          const oldText = baseLines[oldPtr - 1] ?? dl.text ?? '';
+          const newText = curLines[newPtr - 1] ?? dl.text ?? '';
+          leftLines.push({type:'context', num:oldPtr, text:oldText});
+          rightLines.push({type:'context', num:newPtr, text:newText});
+          oldPtr++;
+          newPtr++;
+        } else if (dl.type === 'added') {
+          const newText = curLines[newPtr - 1] ?? dl.text ?? '';
+          leftLines.push({type:'empty', num:'', text:''});
+          rightLines.push({type:'added', num:newPtr, text:newText, hunkIndex, originalLineIndex: lineIndex});
+          newPtr++;
+        } else if (dl.type === 'removed') {
+          const oldText = baseLines[oldPtr - 1] ?? dl.text ?? '';
+          leftLines.push({type:'removed', num:oldPtr, text:oldText, hunkIndex, originalLineIndex: lineIndex});
+          rightLines.push({type:'empty', num:'', text:''});
+          oldPtr++;
+        } else if (dl.type === 'modified') {
+          const oldText = baseLines[oldPtr - 1] ?? dl.old_text ?? '';
+          const newText = curLines[newPtr - 1] ?? dl.text ?? '';
+          leftLines.push({type:'modified', num:oldPtr, text:oldText, hunkIndex, originalLineIndex: lineIndex});
+          rightLines.push({type:'modified', num:newPtr, text:newText, hunkIndex, originalLineIndex: lineIndex});
+          oldPtr++;
+          newPtr++;
+        }
+      });
+    });
+
+    while (oldPtr <= baseLines.length && newPtr <= curLines.length) pushContext();
+    while (oldPtr <= baseLines.length) {
+      const oldText = baseLines[oldPtr - 1] ?? '';
+      leftLines.push({type:'context', num:oldPtr, text:oldText});
+      rightLines.push({type:'empty', num:'', text:''});
+      oldPtr++;
+    }
+    while (newPtr <= curLines.length) {
+      const newText = curLines[newPtr - 1] ?? '';
+      leftLines.push({type:'empty', num:'', text:''});
+      rightLines.push({type:'context', num:newPtr, text:newText});
+      newPtr++;
+    }
+
+    const fpEsc = file.path.replace(/'/g,"\\'");
+    const sideLines = (status === 'D') ? leftLines : rightLines;
+    const hdrText = (status === 'D') ? '原始版本（单列）' : '当前版本（单列）';
+    const hdrColor = (status === 'D') ? 'var(--danger)' : 'var(--accent2)';
+
+    const renderRow = (line) => {
+      if (!line || line.type === 'empty') {
+        return `<div class="dl empty"><span class="ls"></span><span class="ln"></span><span class="lc"></span></div>`;
+      }
+      let s = ' ';
+      if (line.type === 'added') s = '+';
+      else if (line.type === 'removed') s = '-';
+      else if (line.type === 'modified') s = '~';
+
+      const canRevert = (line.type === 'added' || line.type === 'removed' || line.type === 'modified');
+      const checkedAttr = (line.hunkIndex !== undefined && line.originalLineIndex !== undefined && selectedLinesSet.has(getLineKey(line.hunkIndex, line.originalLineIndex))) ? 'checked' : '';
+      const commitCb = (!readonly && canRevert && line.hunkIndex !== undefined && line.originalLineIndex !== undefined) ?
+        `<input class="commit-cb" type="checkbox" ${checkedAttr} onclick="event.stopPropagation()" onchange="toggleCommitLine('${fpEsc}',${line.hunkIndex},${line.originalLineIndex},this.checked)">` : '';
+      const revertBtn = (!readonly && canRevert && line.hunkIndex !== undefined && line.originalLineIndex !== undefined) ?
+        `<button class="line-revert" onclick="askRevertLine('${fpEsc}',${line.hunkIndex},${line.originalLineIndex},'${file.status}')" title="撤回">
+          <span style="font-size:9px;font-weight:bold;">&gt;&gt;</span>
+        </button>` : '';
+
+      const tipAttrs = line.tip ?
+        ` onmouseenter="showDiffTooltip('${escJsString(line.tip)}', event)" onmousemove="moveDiffTooltip(event)" onmouseleave="hideDiffTooltip()"` : '';
+
+      let content = esc(line.text);
+      if (!readonly && (line.type === 'added' || line.type === 'modified')) {
+        content = `<textarea class="editable-line" data-path="${file.path}" data-hunk="${line.hunkIndex}" data-line="${line.originalLineIndex}" data-type="${line.type}" style="width:100%;border:none;background:transparent;resize:none;outline:none;font-family:inherit;font-size:inherit;line-height:20px;height:20px;overflow:hidden;color:inherit;min-height:20px;">${line.text}</textarea>`;
+      }
+
+      if (line.type === 'removed' && !content) {
+        content = `<span style="color:var(--text3)">[已删除]</span>`;
+      }
+
+      return `<div class="dl ${line.type}">
+        <span class="dl-actions">${commitCb}${revertBtn}</span>
+        <span class="ls">${s}</span>
+        <span class="ln">${line.num}</span>
+        <span class="lc"${tipAttrs}>${content}</span>
+      </div>`;
+    };
+
+    const fileTotalLines = (curFileContent || '').split('\n').length;
+
+    // Render per hunk with its own header (no commit text/checkbox here; selection is on lines)
+    let lastShownNum = null;
+    let firstShownNum = null;
+    (hunks || []).forEach((hunk, hunkIndex) => {
+      const hdrText = hunk.header || '';
+      rows += `<div class="hunk-hdr"><span class="hunk-info">${esc(hdrText)}</span></div>`;
+
+      (hunk.lines || []).forEach((l, lineIndex) => {
+        const cur = {
+          type: l.type,
+          hunkIndex,
+          originalLineIndex: lineIndex,
+          num: (l.new ?? l.old ?? ''),
+          text: (l.type === 'context') ? (l.text ?? '') : (l.type === 'removed' ? '' : (l.text ?? '')),
+          tip: (l.type === 'modified') ? (l.old_text ?? '') : (l.type === 'removed' ? (l.text ?? '') : '')
+        };
+
+        const curNum = Number(cur.num);
+        if (firstShownNum === null && Number.isFinite(curNum)) firstShownNum = curNum;
+        if (Number.isFinite(curNum) && lastShownNum !== null && Number.isFinite(lastShownNum) && curNum > lastShownNum + 1) {
+          rows += renderGapRow(lastShownNum, curNum);
+        }
+        rows += renderLine(cur);
+        if (Number.isFinite(curNum)) lastShownNum = curNum;
+      });
+    });
+
+    if (firstShownNum !== null && firstShownNum > 1) {
+      rows = renderEdgeGapRow('top', firstShownNum - 1) + rows;
+    }
+    if (Number.isFinite(lastShownNum) && fileTotalLines && lastShownNum < fileTotalLines) {
+      rows += renderEdgeGapRow('bottom', fileTotalLines - lastShownNum);
+    }
+
+    view.innerHTML = `${navigationHtml}
+    <div>
+      <div class="hunk">
+        ${rows || '<div class="empty-state"><p style="color:var(--text2)">无差异内容</p></div>'}
+      </div>
+    </div>`;
+
+    applyIndeterminateCheckboxes(view);
+  } else {
+    // Unified single-column (current-only) view
+    const fpEsc = file.path.replace(/'/g,"\\'");
+    const selectedSet = ensureDefaultHunkSelection(file.path, (hunks || []).length);
+    let rows = '';
+
+    const renderGapRow = (fromNum, toNum) => {
+      const from = Number(fromNum);
+      const to = Number(toNum);
+      const missing = (Number.isFinite(from) && Number.isFinite(to)) ? Math.max(0, to - from - 1) : '';
+      const msg = missing ? `中间已折叠 ${missing} 行（上下文 ${changeViewCtx}）` : `中间内容已折叠（上下文 ${changeViewCtx}）`;
+      return `<div class="dl context" style="opacity:.8">
+        <span class="ls"></span>
+        <span class="ln"></span>
+        <span class="lc" style="color:var(--text3)">... ${msg} <a href="#" onclick="expandChangeViewContext(5);return false;" style="color:var(--accent)">展开更多</a></span>
+      </div>`;
+    };
+
+    const renderEdgeGapRow = (position, missing) => {
+      const side = position === 'top' ? '上方' : '下方';
+      const msg = missing ? `${side}已折叠 ${missing} 行（上下文 ${changeViewCtx}）` : `${side}内容已折叠（上下文 ${changeViewCtx}）`;
+      return `<div class="dl context" style="opacity:.8">
+        <span class="ls"></span>
+        <span class="ln"></span>
+        <span class="lc" style="color:var(--text3)">... ${msg} <a href="#" onclick="expandChangeViewContext(5);return false;" style="color:var(--accent)">展开更多</a></span>
+      </div>`;
+    };
+
+    const renderLine = (line) => {
+      let s = ' ';
+      if (line.type === 'added') s = '+';
+      else if (line.type === 'removed') s = '-';
+      else if (line.type === 'modified') s = '~';
+
+      const canRevert = (line.type === 'added' || line.type === 'removed' || line.type === 'modified');
+      const checkedAttr = (line.hunkIndex !== undefined && line.originalLineIndex !== undefined && selectedLinesSet.has(getLineKey(line.hunkIndex, line.originalLineIndex))) ? 'checked' : '';
+      const commitCb = (!readonly && canRevert && line.hunkIndex !== undefined && line.originalLineIndex !== undefined) ?
+        `<input class="commit-cb" type="checkbox" ${checkedAttr} onclick="event.stopPropagation()" onchange="toggleCommitLine('${fpEsc}',${line.hunkIndex},${line.originalLineIndex},this.checked)">` : '';
+      const revertBtn = (!readonly && canRevert && line.hunkIndex !== undefined && line.originalLineIndex !== undefined) ?
+        `<button class="line-revert" onclick="askRevertLine('${fpEsc}',${line.hunkIndex},${line.originalLineIndex},'${file.status}')" title="撤回">
+          <span style="font-size:9px;font-weight:bold;">&gt;&gt;</span>
+        </button>` : '';
+
+      const tipAttrs = line.tip ?
+        ` onmouseenter="showDiffTooltip('${escJsString(line.tip)}', event)" onmousemove="moveDiffTooltip(event)" onmouseleave="hideDiffTooltip()"` : '';
+
+      let content = esc(line.text);
+      if (!readonly && (line.type === 'added' || line.type === 'modified')) {
+        content = `<textarea class="editable-line" data-path="${file.path}" data-hunk="${line.hunkIndex}" data-line="${line.originalLineIndex}" data-type="${line.type}" style="width:100%;border:none;background:transparent;resize:none;outline:none;font-family:inherit;font-size:inherit;line-height:20px;height:20px;overflow:hidden;color:inherit;min-height:20px;">${line.text}</textarea>`;
+      }
+
+      if (line.type === 'removed' && !content) {
+        content = `<span style="color:var(--text3)">[已删除]</span>`;
+      }
+
+      return `<div class="dl ${line.type}">
+        <span class="dl-actions">${commitCb}${revertBtn}</span>
+        <span class="ls">${s}</span>
+        <span class="ln">${line.num}</span>
+        <span class="lc"${tipAttrs}>${content}</span>
+      </div>`;
+    };
+
+    const fileTotalLines = (curFileContent || '').split('\n').length;
+
+    // Render per hunk with its own header (no commit text/checkbox here; selection is on lines)
+    let lastShownNum = null;
+    let firstShownNum = null;
+    (hunks || []).forEach((hunk, hunkIndex) => {
+      const hdrText = hunk.header || '';
+      rows += `<div class="hunk-hdr"><span class="hunk-info">${esc(hdrText)}</span></div>`;
+
+      (hunk.lines || []).forEach((l, lineIndex) => {
+        const cur = {
+          type: l.type,
+          hunkIndex,
+          originalLineIndex: lineIndex,
+          num: (l.new ?? l.old ?? ''),
+          text: (l.type === 'context') ? (l.text ?? '') : (l.type === 'removed' ? '' : (l.text ?? '')),
+          tip: (l.type === 'modified') ? (l.old_text ?? '') : (l.type === 'removed' ? (l.text ?? '') : '')
+        };
+
+        const curNum = Number(cur.num);
+        if (firstShownNum === null && Number.isFinite(curNum)) firstShownNum = curNum;
+        if (Number.isFinite(curNum) && lastShownNum !== null && Number.isFinite(lastShownNum) && curNum > lastShownNum + 1) {
+          rows += renderGapRow(lastShownNum, curNum);
+        }
+        rows += renderLine(cur);
+        if (Number.isFinite(curNum)) lastShownNum = curNum;
+      });
+    });
+
+    if (firstShownNum !== null && firstShownNum > 1) {
+      rows = renderEdgeGapRow('top', firstShownNum - 1) + rows;
+    }
+    if (Number.isFinite(lastShownNum) && fileTotalLines && lastShownNum < fileTotalLines) {
+      rows += renderEdgeGapRow('bottom', fileTotalLines - lastShownNum);
+    }
+
+    view.innerHTML = `${navigationHtml}
+    <div>
+      <div class="hunk">
+        ${rows || '<div class="empty-state"><p style="color:var(--text2)">无差异内容</p></div>'}
+      </div>
+    </div>`;
+
+    applyIndeterminateCheckboxes(view);
+  }
+}
+
+async function saveFile(filepath) {
+  if (curFile === null && !filepath) return;
+  const f = filepath ? {path: filepath} : files[curFile];
+
+  const saveBtn = document.getElementById('saveFileBtn');
+  if (saveBtn) {
+    saveBtn.disabled = true;
+    saveBtn.innerHTML = '<span style="font-size:10px;">保存中...</span>';
+  }
+
+  
+  try {
+    let content = curFileContent;
+    
+    // 检查是否在diff视图中，并且有编辑过的行
+    const editableLines = document.querySelectorAll('.editable-line');
+    if (editableLines.length > 0) {
+      // 获取文件的当前内容
+      const res = await GET(`/api/file_content?path=${encodeURIComponent(f.path)}`);
+      if (res.content !== undefined) {
+        // 将内容按行分割
+        const lines = res.content.split('\n');
+        
+        // 收集所有编辑过的行及其新内容
+        const editedLinesMap = new Map();
+        editableLines.forEach(line => {
+          const newContent = line.value;
+          // 尝试从data属性中获取行号
+          const lineNumber = line.closest('.dl')?.querySelector('.ln:last-child')?.textContent;
+          if (lineNumber && !isNaN(lineNumber)) {
+            const lineIndex = parseInt(lineNumber) - 1; // 转换为0-based索引
+            editedLinesMap.set(lineIndex, newContent);
+          }
+        });
+        
+        // 更新内容
+        editedLinesMap.forEach((newContent, lineIndex) => {
+          if (lineIndex >= 0 && lineIndex < lines.length) {
+            lines[lineIndex] = newContent;
+          }
+        });
+        
+        // 重新组合内容
+        content = lines.join('\n');
+      }
+    } else {
+      // Get content from the editor
+      const editor = document.getElementById('fileEditor');
+      if (editor) {
+        content = editor.value;
+      }
+    }
+    
+    const res = await POST('/api/save_file', {path: f.path, content: content});
+    if (res.ok) {
+      toast('✓ 保存成功', 'ok');
+      curFileContent = content; // Update the cached content
+      
+      // WebSocket会自动推送更新，等待一下
+      await new Promise(resolve => setTimeout(resolve, 300));
+      
+      // 如果WebSocket未连接，手动刷新
+      if (!wsConnected) {
+        await refreshFilesOnly(true);
+        if (curFile !== null) {
+          await loadDiff(curFile);
+        }
+      } else {
+        // WebSocket已连接，只需要重新加载当前文件的diff
+        if (curFile !== null) {
+          await loadDiff(curFile);
+          // 前端已主动刷新 diff，跳过下一次 WS 推送触发的自动 loadDiff
+          skipNextAutoDiffRefresh = true;
+        }
+      }
+    } else {
+      toast(`保存失败: ${res.msg || res.error}`, 'err');
+    }
+  } catch (error) {
+    toast(`保存失败: ${error.message}`, 'err');
+  } finally {
+    if (saveBtn) {
+      saveBtn.disabled = false;
+      saveBtn.innerHTML = `
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/>
+        </svg>保存
+      `;
+    }
+  }
+}
+
+async function loadCommitFileDiff(commitHash, filepath, status) {
+  document.getElementById('revertFileBtn').style.display = 'none';
+  document.getElementById('diffLabel').innerHTML =
+    `<span class="fi-st ${status||'M'}" style="font-size:9px">${status||'M'}</span>
+     <span class="fn">${esc(filepath)}</span>
+     <span style="color:var(--text3);font-size:10px">历史提交</span>`;
+  document.getElementById('diffView').innerHTML =
+    '<div class="empty-state"><div class="spin"></div><p>加载中...</p></div>';
+  
+  const res = await GET(
+    `/api/commit_file_diff?hash=${encodeURIComponent(commitHash)}&path=${encodeURIComponent(filepath)}`
+  );
+  curHunks = res.hunks || [];
+  
+  // 对于历史提交的diff，使用renderDiff而不是renderDiffWithFullContext
+  // 因为历史提交的diff可能没有完整的文件内容
+  renderDiff({path:filepath, status:status||'M'}, curHunks, true /* readonly */);
+}
+
+function renderDiff(file, hunks, readonly) {
+  const view = document.getElementById('diffView');
+  if (!hunks.length) {
+    view.innerHTML = '<div class="empty-state"><p style="color:var(--text2)">无差异内容</p></div>';
+    return;
+  }
+  
+  // Calculate total lines to determine if virtual scrolling is needed
+  let totalLines = 0;
+  hunks.forEach(hunk => {
+    totalLines += hunk.lines.length;
+  });
+  
+  // For large diffs (over 500 lines), use simplified virtual scrolling
+  if (totalLines > 500) {
+    view.innerHTML = `
+      <div class="diff-container" style="position:relative; overflow:auto; height:calc(100vh - 120px);">
+        <div class="virtual-diff" id="virtualDiff">
+          <div class="loading-state" style="padding:40px; text-align:center; color:var(--text2);">
+            <div class="spin"></div>
+            <p style="margin-top:10px;">加载中...</p>
+          </div>
+        </div>
+      </div>
+    `;
+    
+    // Render first 200 lines initially
+    setTimeout(() => {
+      renderVirtualDiff(file, hunks, readonly, 0, 200);
+    }, 100);
+  } else {
+    // For small diffs, render normally
+    if (diffMode === 'split') view.innerHTML = buildSplit(file, hunks, readonly);
+    else                      view.innerHTML = buildUnified(file, hunks, readonly);
+  }
+  
+  // Add synchronized scrolling for split view
+  if (diffMode === 'split') {
+    setTimeout(() => {
+      const splitWrap = view.querySelector('.split-wrap');
+      if (splitWrap) {
+        const leftSp = splitWrap.querySelector('.sp:first-child');
+        const rightSp = splitWrap.querySelector('.sp:last-child');
+        
+        if (leftSp && rightSp) {
+          // Add scroll event listeners
+          let isScrollingLeft = false;
+          let isScrollingRight = false;
+          
+          // Get all context lines in both panels (non-diff lines)
+          const leftContextLines = Array.from(leftSp.querySelectorAll('.dl.context'));
+          const rightContextLines = Array.from(rightSp.querySelectorAll('.dl.context'));
+          
+          // Create context line maps by lineId
+          const leftContextLineMap = new Map();
+          const rightContextLineMap = new Map();
+          
+          leftContextLines.forEach(line => {
+            const lineId = line.dataset.lineId;
+            leftContextLineMap.set(lineId, line);
+          });
+          
+          rightContextLines.forEach(line => {
+            const lineId = line.dataset.lineId;
+            rightContextLineMap.set(lineId, line);
+          });
+          
+          // Function to handle scroll synchronization
+          function syncScroll(sourcePanel, targetPanel, sourceContextLineMap, targetContextLineMap) {
+            // Find the first visible context line in the source panel
+            const firstVisibleContextLine = findFirstVisibleContextLine(sourcePanel, sourceContextLineMap);
+            
+            if (firstVisibleContextLine) {
+              const lineId = firstVisibleContextLine.dataset.lineId;
+              // Find corresponding context line in target panel
+              const targetContextLine = targetContextLineMap.get(lineId);
+              if (targetContextLine) {
+                // Calculate the offset between the source context line and the panel top
+                const sourceLineTop = firstVisibleContextLine.offsetTop;
+                const sourceScrollTop = sourcePanel.scrollTop;
+                const lineOffset = sourceLineTop - sourceScrollTop;
+                
+                // Calculate the target scroll position
+                const targetLineTop = targetContextLine.offsetTop;
+                const targetScrollTop = targetLineTop - lineOffset;
+                
+                // Set the target panel scroll position
+                targetPanel.scrollTop = targetScrollTop;
+              }
+            }
+          }
+          
+          leftSp.addEventListener('scroll', () => {
+            if (isScrollingRight) return;
+            isScrollingLeft = true;
+            
+            syncScroll(leftSp, rightSp, leftContextLineMap, rightContextLineMap);
+            
+            setTimeout(() => {
+              isScrollingLeft = false;
+            }, 10);
+          });
+          
+          rightSp.addEventListener('scroll', () => {
+            if (isScrollingLeft) return;
+            isScrollingRight = true;
+            
+            syncScroll(rightSp, leftSp, rightContextLineMap, leftContextLineMap);
+            
+            setTimeout(() => {
+              isScrollingRight = false;
+            }, 10);
+          });
+        }
+      }
+    }, 100);
+  }
+  
+  // Helper function to find the first visible context line
+  function findFirstVisibleContextLine(container, contextLineMap) {
+    const containerTop = container.scrollTop;
+    const containerBottom = containerTop + container.clientHeight;
+    
+    // Get all context lines in the container
+    const contextLines = Array.from(container.querySelectorAll('.dl.context'));
+    
+    // Find the first context line that is partially or fully visible
+    for (let i = 0; i < contextLines.length; i++) {
+      const line = contextLines[i];
+      const lineTop = line.offsetTop;
+      const lineBottom = lineTop + line.offsetHeight;
+      
+      // Check if the context line is visible
+      if (lineBottom > containerTop && lineTop < containerBottom) {
+        return line;
+      }
+    }
+    
+    return null;
+  }
+}
+
+function renderVirtualDiff(file, hunks, readonly, startLine, endLine) {
+  const container = document.getElementById('virtualDiff');
+  if (!container) return;
+  
+  let currentLine = 0;
+  let renderedLines = [];
+  let hunkIndex = 0;
+  
+  // Iterate through hunks and lines to find the range to render
+  while (hunkIndex < hunks.length && currentLine < endLine) {
+    const hunk = hunks[hunkIndex];
+    let hunkLines = [];
+    
+    for (let lineIndex = 0; lineIndex < hunk.lines.length; lineIndex++) {
+      if (currentLine >= startLine && currentLine < endLine) {
+        const l = hunk.lines[lineIndex];
+        let s = ' ';
+        if (l.type === 'added') s = '+';
+        else if (l.type === 'removed') s = '-';
+        else if (l.type === 'modified') s = '~';
+        
+        const revertBtn = !readonly && (l.type === 'added' || l.type === 'removed' || l.type === 'modified') ? 
+          `<button class="line-revert" onclick="askRevertLine('${file.path.replace(/'/g,"\\'")}',${hunkIndex},${lineIndex},'${file.status}')">
+            <span style="font-size:9px;font-weight:bold;">&gt;&gt;</span>
+          </button>` : '';
+        
+        let content = esc(l.text);
+          
+        hunkLines.push(`<div class="dl ${l.type}">
+          ${revertBtn}
+          <span class="ls">${s}</span>
+          <span class="ln">${l.old??''}</span>
+          <span class="ln">${l.new??''}</span>
+          <span class="lc">${content}</span>
+        </div>`);
+      }
+      currentLine++;
+    }
+    
+    if (hunkLines.length > 0) {
+      renderedLines.push(`<div class="hunk">
+        <div class="hunk-hdr">
+          <span class="hunk-info">${esc(hunk.header)}</span>
+          ${!readonly ? `<div class="hunk-btns">${revertBtn(file,hunkIndex)}</div>` : ''}
+        </div>${hunkLines.join('')}
+      </div>`);
+    }
+    
+    hunkIndex++;
+  }
+  
+  // Update the container with rendered lines
+  container.innerHTML = `<div>${renderedLines.join('')}</div>`;
+  
+  // Add scroll event listener for lazy loading
+  const diffContainer = container.parentElement;
+  diffContainer.addEventListener('scroll', function() {
+    const { scrollTop, scrollHeight, clientHeight } = this;
+    // When scrolled to within 200px of the bottom, load more lines
+    if (scrollHeight - scrollTop - clientHeight < 200) {
+      endLine += 200;
+      renderVirtualDiff(file, hunks, readonly, startLine, endLine);
+    }
+  }, { once: true });
+}
+
+function buildUnified(file, hunks, readonly) {
+  return '<div>' + hunks.map((hunk, hi) => {
+    // 检测连续相同类型的行并合并撤回按钮
+    const lineGroups = [];
+    let currentGroup = null;
+    
+    hunk.lines.forEach((l, li) => {
+      const isChangeLine = (l.type === 'added' || l.type === 'removed' || l.type === 'modified');
+      
+      if (isChangeLine) {
+        // 获取当前行的实际行号
+        const currentLineNum = l.type === 'added' ? l.new : l.old;
+        
+        if (currentGroup && currentGroup.type === l.type) {
+          // 检查行号是否连续
+          const lastItem = currentGroup.lines[currentGroup.lines.length - 1];
+          const lastLineNum = lastItem.lineNum;
+          
+          // 判断是否连续：当前行号 = 上一行号 + 1
+          if (currentLineNum === lastLineNum + 1) {
+            // 连续，加入当前组
+            currentGroup.lines.push({line: l, index: li, lineNum: currentLineNum});
+            currentGroup.endIndex = li;
+          } else {
+            // 不连续，创建新组
+            lineGroups.push(currentGroup);
+            currentGroup = {
+              type: l.type,
+              startIndex: li,
+              endIndex: li,
+              lines: [{line: l, index: li, lineNum: currentLineNum}]
+            };
+          }
+        } else {
+          // 类型不同或没有当前组，创建新组
+          if (currentGroup) lineGroups.push(currentGroup);
+          currentGroup = {
+            type: l.type,
+            startIndex: li,
+            endIndex: li,
+            lines: [{line: l, index: li, lineNum: currentLineNum}]
+          };
+        }
+      } else {
+        // 非变更行,结束当前组
+        if (currentGroup) {
+          lineGroups.push(currentGroup);
+          currentGroup = null;
+        }
+        lineGroups.push({
+          type: 'single',
+          startIndex: li,
+          endIndex: li,
+          lines: [{line: l, index: li}]
+        });
+      }
+    });
+    
+    // 添加最后一个组
+    if (currentGroup) lineGroups.push(currentGroup);
+    
+    const rows = lineGroups.map(group => {
+      if (group.type === 'single') {
+        // 单行渲染(context行)
+        const l = group.lines[0].line;
+        const li = group.lines[0].index;
+        let s = ' ';
+        let content = esc(l.text);
+        
+        return `<div class="dl ${l.type}" data-hunk="${hi}" data-line="${li}">
+          <span class="ls">${s}</span>
+          <span class="ln">${l.old??''}</span>
+          <span class="ln">${l.new??''}</span>
+          <span class="lc">${content}</span>
+        </div>`;
+      } else {
+        // 连续相同类型的行组 - 保留每行撤回，并在块上方添加提示行
+        const isSingleLine = group.lines.length === 1;
+        const startLi = group.startIndex;
+        const endLi = group.endIndex;
+        const startLineNum = group.lines[0].lineNum;
+        const endLineNum = group.lines[group.lines.length - 1].lineNum;
+
+        const hintRow = (!readonly && !isSingleLine) ?
+          `<div class="dl revert-block-hint" data-hunk="${hi}" data-line="${startLi}">
+            <span class="ls"></span>
+            <span class="ln"></span>
+            <span class="ln"></span>
+            <span class="lc"><span class="hint-tag">块撤回</span><span class="hint-text">已识别为连续变更块（${group.lines.length}行），可一键撤回</span><span class="hint-actions"><button class="hint-btn" onclick="askRevertMultiLines('${file.path.replace(/'/g,"\\'")}',${hi},${startLi},${endLi},'${file.status}')">撤回该块（${group.lines.length}）</button></span></span>
+          </div>` : '';
+
+        const lineRows = group.lines.map(({line: l, index: li}) => {
+          let s = ' ';
+          if (l.type === 'added') s = '+';
+          else if (l.type === 'removed') s = '-';
+          else if (l.type === 'modified') s = '~';
+
+          const revertBtn = (!readonly) ?
+            `<button class="line-revert" onclick="askRevertLine('${file.path.replace(/'/g,"\\'")}',${hi},${li},'${file.status}')" title="撤回第${l.new??l.old??''}行">
+              <span style="font-size:9px;font-weight:bold;">&gt;&gt;</span>
+            </button>` : '';
+
+          let content = esc(l.text);
+
+          return `<div class="dl ${l.type}" data-hunk="${hi}" data-line="${li}">
+            ${revertBtn}
+            <span class="ls">${s}</span>
+            <span class="ln">${l.old??''}</span>
+            <span class="ln">${l.new??''}</span>
+            <span class="lc">${content}</span>
+          </div>`;
+        }).join('');
+
+        return hintRow + lineRows;
+      }
+    }).join('');
+    
+    return `<div class="hunk" data-hunk-id="${hi}">
+      <div class="hunk-hdr">
+        <span class="hunk-info">${esc(hunk.header)}</span>
+        ${!readonly ? `<div class="hunk-btns">${revertBtn(file,hi)}</div>` : ''}
+      </div>${rows}
+    </div>`;
+  }).join('') + '</div>';
+}
+
+function buildSplit(file, hunks, readonly) {
+  const leftCols = hunks.map((hunk, hi) => {
+    const lines = [];
+    hunk.lines.forEach(l => {
+      if (l.type === 'context') {
+        lines.push({type:'context',num:l.old,text:l.text, originalType: l.type});
+      } else if (l.type === 'removed') {
+        lines.push({type:'removed',num:l.old,text:l.text, originalType: l.type});
+      } else if (l.type === 'modified') {
+        lines.push({type:'modified',num:l.old,text:l.old_text || l.text, originalType: l.type});
+      } else if (l.type === 'added') {
+        lines.push({type:'empty',num:'',text:'', originalType: l.type});
+      } else {
+        lines.push({type:'empty',num:'',text:'', originalType: l.type});
+      }
+    });
+    
+    // 检测连续相同类型的行并合并撤回按钮
+    const lineGroups = [];
+    let currentGroup = null;
+    
+    lines.forEach((l, li) => {
+      const isChangeLine = (l.originalType === 'removed' || l.originalType === 'modified') && l.type !== 'empty';
+      
+      if (isChangeLine) {
+        const currentLineNum = l.num;
+        
+        if (currentGroup && currentGroup.type === l.originalType) {
+          const lastItem = currentGroup.lines[currentGroup.lines.length - 1];
+          const lastLineNum = lastItem.line.num;
+          
+          if (currentLineNum === lastLineNum + 1) {
+            currentGroup.lines.push({line: l, index: li});
+            currentGroup.endIndex = li;
+          } else {
+            lineGroups.push(currentGroup);
+            currentGroup = {
+              type: l.originalType,
+              startIndex: li,
+              endIndex: li,
+              lines: [{line: l, index: li}]
+            };
+          }
+        } else {
+          if (currentGroup) lineGroups.push(currentGroup);
+          currentGroup = {
+            type: l.originalType,
+            startIndex: li,
+            endIndex: li,
+            lines: [{line: l, index: li}]
+          };
+        }
+      } else {
+        if (currentGroup) {
+          lineGroups.push(currentGroup);
+          currentGroup = null;
+        }
+        lineGroups.push({
+          type: 'single',
+          startIndex: li,
+          endIndex: li,
+          lines: [{line: l, index: li}]
+        });
+      }
+    });
+    
+    if (currentGroup) lineGroups.push(currentGroup);
+    
+    const rows = lineGroups.map(group => {
+      if (group.type === 'single') {
+        const l = group.lines[0].line;
+        const li = group.lines[0].index;
+        let s = ' ';
+        if (l.type === 'removed') s = '-';
+        else if (l.type === 'modified') s = '~';
+        else if (l.type === 'empty') s = '';
+        
+        return `<div class="dl ${l.type}" data-line-id="${hi}-${li}" data-hunk="${hi}" data-line="${li}">
+          <span class="ls">${s}</span>
+          <span class="ln">${l.num??''}</span>
+          <span class="lc">${l.type!=='empty'?esc(l.text):''}</span>
+        </div>`;
+      } else {
+        const isSingleLine = group.lines.length === 1;
+        const startLi = group.startIndex;
+        const endLi = group.endIndex;
+        const startLineNum = group.lines[0].line.num;
+        const endLineNum = group.lines[group.lines.length - 1].line.num;
+
+        const hintRow = (!readonly && !isSingleLine) ?
+          `<div class="dl revert-block-hint" data-line-id="${hi}-${startLi}" data-hunk="${hi}" data-line="${startLi}">
+            <span class="ls"></span>
+            <span class="ln"></span>
+            <span class="lc"><span class="hint-tag">块撤回</span><span class="hint-text">已识别为连续变更块（${group.lines.length}行），可一键撤回</span><span class="hint-actions"><button class="hint-btn" onclick="askRevertMultiLines('${file.path.replace(/'/g,"\\'")}',${hi},${startLi},${endLi},'${file.status}')">撤回该块（${group.lines.length}）</button></span></span>
+          </div>` : '';
+
+        const lineRows = group.lines.map(({line: l, index: li}) => {
+          let s = ' ';
+          if (l.type === 'removed') s = '-';
+          else if (l.type === 'modified') s = '~';
+          else if (l.type === 'empty') s = '';
+
+          const revertBtn = (!readonly && l.type !== 'empty') ?
+            `<button class="line-revert" onclick="askRevertLine('${file.path.replace(/'/g,"\\'")}',${hi},${li},'${file.status}')" title="撤回第${l.num??''}行">
+              <span style="font-size:9px;font-weight:bold;">&gt;&gt;</span>
+            </button>` : '';
+
+          return `<div class="dl ${l.type}" data-line-id="${hi}-${li}" data-hunk="${hi}" data-line="${li}">
+            ${revertBtn}
+            <span class="ls">${s}</span>
+            <span class="ln">${l.num??''}</span>
+            <span class="lc">${l.type!=='empty'?esc(l.text):''}</span>
+          </div>`;
+        }).join('');
+
+        return hintRow + lineRows;
+      }
+    }).join('');
+    
+    return `<div class="hunk" data-hunk-id="${hi}">
+      <div class="hunk-hdr">
+        <span class="hunk-info">${esc(hunk.header)}</span>
+        ${!readonly ? `<div class="hunk-btns">${revertBtn(file,hi)}</div>` : ''}
+      </div>${rows}
+    </div>`;
+  }).join('');
+
+  const rightCols = hunks.map((hunk, hi) => {
+    const lines = [];
+    hunk.lines.forEach(l => {
+      if (l.type === 'context') {
+        lines.push({type:'context',num:l.new,text:l.text, originalType: l.type, editable: false});
+      } else if (l.type === 'added') {
+        lines.push({type:'added',num:l.new,text:l.text, originalType: l.type, editable: true});
+      } else if (l.type === 'modified') {
+        lines.push({type:'modified',num:l.new,text:l.text, originalType: l.type, editable: true});
+      } else if (l.type === 'removed') {
+        lines.push({type:'removed',num:'',text:'', originalType: l.type, editable: false});
+      } else {
+        lines.push({type:'empty',num:'',text:'', originalType: l.type, editable: false});
+      }
+    });
+    
+    const lineGroups = [];
+    let currentGroup = null;
+    
+    lines.forEach((l, li) => {
+      const isChangeLine = (l.originalType === 'added' || l.originalType === 'modified') && l.type !== 'removed';
+      
+      if (isChangeLine) {
+        const currentLineNum = l.num;
+        
+        if (currentGroup && currentGroup.type === l.originalType) {
+          const lastItem = currentGroup.lines[currentGroup.lines.length - 1];
+          const lastLineNum = lastItem.line.num;
+          
+          if (currentLineNum === lastLineNum + 1) {
+            currentGroup.lines.push({line: l, index: li});
+            currentGroup.endIndex = li;
+          } else {
+            lineGroups.push(currentGroup);
+            currentGroup = {
+              type: l.originalType,
+              startIndex: li,
+              endIndex: li,
+              lines: [{line: l, index: li}]
+            };
+          }
+        } else {
+          if (currentGroup) lineGroups.push(currentGroup);
+          currentGroup = {
+            type: l.originalType,
+            startIndex: li,
+            endIndex: li,
+            lines: [{line: l, index: li}]
+          };
+        }
+      } else {
+        if (currentGroup) {
+          lineGroups.push(currentGroup);
+          currentGroup = null;
+        }
+        lineGroups.push({
+          type: 'single',
+          startIndex: li,
+          endIndex: li,
+          lines: [{line: l, index: li}]
+        });
+      }
+    });
+    
+    if (currentGroup) lineGroups.push(currentGroup);
+    
+    const rows = lineGroups.map(group => {
+      if (group.type === 'single') {
+        const l = group.lines[0].line;
+        const li = group.lines[0].index;
+        let s = ' ';
+        if (l.type === 'added') s = '+';
+        else if (l.type === 'modified') s = '~';
+        else if (l.type === 'removed') s = '-';
+        else if (l.type === 'empty') s = '';
+        
+        let content = l.type!=='empty' && l.type!=='removed' ? esc(l.text) : '';
+        
+        return `<div class="dl ${l.type}" data-line-id="${hi}-${li}" data-hunk="${hi}" data-line="${li}">
+          <span class="ls">${s}</span>
+          <span class="ln">${l.num??''}</span>
+          <span class="lc">${content}</span>
+        </div>`;
+      } else {
+        const isSingleLine = group.lines.length === 1;
+        const startLi = group.startIndex;
+        const endLi = group.endIndex;
+        const startLineNum = group.lines[0].line.num;
+        const endLineNum = group.lines[group.lines.length - 1].line.num;
+
+        const hintRow = (!readonly && !isSingleLine) ?
+          `<div class="dl revert-block-hint" data-line-id="${hi}-${startLi}" data-hunk="${hi}" data-line="${startLi}">
+            <span class="ls"></span>
+            <span class="ln"></span>
+            <span class="lc"><span class="hint-tag">块撤回</span><span class="hint-text">已识别为连续变更块（${group.lines.length}行），可一键撤回</span><span class="hint-actions"><button class="hint-btn" onclick="askRevertMultiLines('${file.path.replace(/'/g,"\\'")}',${hi},${startLi},${endLi},'${file.status}')">撤回该块（${group.lines.length}）</button></span></span>
+          </div>` : '';
+
+        const lineRows = group.lines.map(({line: l, index: li}) => {
+          let s = ' ';
+          if (l.type === 'added') s = '+';
+          else if (l.type === 'modified') s = '~';
+          else if (l.type === 'removed') s = '-';
+          else if (l.type === 'empty') s = '';
+
+          const revertBtn = (!readonly && l.type !== 'removed' && l.type !== 'empty') ?
+            `<button class="line-revert" onclick="askRevertLine('${file.path.replace(/'/g,"\\'")}',${hi},${li},'${file.status}')" title="撤回第${l.num??''}行">
+              <span style="font-size:9px;font-weight:bold;">&gt;&gt;</span>
+            </button>` : '';
+
+          let content = l.type!=='empty' && l.type!=='removed' ? esc(l.text) : '';
+
+          return `<div class="dl ${l.type}" data-line-id="${hi}-${li}" data-hunk="${hi}" data-line="${li}">
+            ${revertBtn}
+            <span class="ls">${s}</span>
+            <span class="ln">${l.num??''}</span>
+            <span class="lc">${content}</span>
+          </div>`;
+        }).join('');
+
+        return hintRow + lineRows;
+      }
+    }).join('');
+    
+    return `<div class="hunk" data-hunk-id="${hi}">
+      <div class="hunk-hdr" style="background:var(--hunk-bg)">
+        <span class="hunk-info">${esc(hunk.header)}</span>
+      </div>${rows}
+    </div>`;
+  }).join('');
+
+  return `<div class="split-wrap">
+    <div class="sp">
+      <div class="sp-hdr" style="color:var(--danger)">原始版本
+        &nbsp;<span style="color:var(--text3);font-size:10px">${esc(file.path)}</span>
+      </div>${leftCols}
+    </div>
+    <div class="sp">
+      <div class="sp-hdr" style="color:var(--accent2)">当前版本
+        &nbsp;<span style="color:var(--text3);font-size:10px">${esc(file.path)}</span>
+      </div>${rightCols}
+    </div>
+  </div>`;
+}
+
+function revertBtn(file, hunkIdx) {
+  const fp  = file.path.replace(/'/g,"\\'");
+  const st  = file.status;
+  return `<button class="hunk-revert"
+    onclick="askRevertHunk('${fp}',${hunkIdx},'${st}')">
+    <span style="font-size:10px;font-weight:bold;">&gt;&gt;</span>
+  </button>`;
+}
+
+function setDiffMode(mode, el) {
+  diffMode = mode;
+  document.querySelectorAll('.dtab').forEach(t => t.classList.remove('active'));
+  el.classList.add('active');
+  if (curFile !== null) loadDiff(curFile);
+  else if (curLogFile !== null) loadCommitFileDiff(curCommit.full_hash, curLogFile.path, curLogFile.status);
+}
+
+function expandChangeViewContext(delta = 5) {
+  changeViewCtx = Math.min(200, Math.max(0, (changeViewCtx || 5) + (delta || 0)));
+  if (curFile !== null) {
+    loadDiff(curFile);
+  }
+}
+
+function clearDiff() {
+  document.getElementById('diffView').innerHTML =
+    `<div class="empty-state">
+      <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+        <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+        <polyline points="14 2 14 8 20 8"/>
+      </svg>
+      <p>从左侧点击文件查看差异</p>
+    </div>`;
+  document.getElementById('diffLabel').innerHTML = '';
+  document.getElementById('revertFileBtn').style.display = 'none';
+}
+
+function navFile(dir) {
+  if (curFile === null) { if (files.length) selectFile(0); return; }
+  const n = curFile + dir;
+  if (n >= 0 && n < files.length) selectFile(n);
+}
+
+// ── Revert ────────────────────────────────────────────────────────────────────
+function askRevertHunk(filepath, hunkIdx, status) {
+  pendingHunk = {filepath, hunkIdx, status};
+  const hunk  = curHunks[hunkIdx];
+  document.getElementById('revertHunkDesc').textContent =
+    `将撤回以下代码块中的变更，其余修改保持不变，操作不可撤销。\n\n${hunk?.header||''}`;
+  showModal('revertHunkModal');
+}
+
+// 真正的实时撤回 - 立即删除，后台保存，实时更新统计
+async function revertLineInstantly(filepath, hunkIdx, lineIdx, status) {
+  // 禁用自动刷新diff，避免撤回后被WebSocket推送打断
+  disableAutoRefreshDiff(8000);
+  
+  const hunk = curHunks[hunkIdx];
+  const line = hunk?.lines[lineIdx];
+  
+  if (!line) {
+    toast('无法找到该行', 'err');
+    return;
+  }
+  
+  // 确保只处理支持的行类型
+  if (line.type === 'context') {
+    toast('无法撤回上下文行', 'err');
+    return;
+  }
+  
+  // 1. 保存原始数据（用于失败回滚）
+  const originalHunks = JSON.parse(JSON.stringify(curHunks));
+  const originalFiles = JSON.parse(JSON.stringify(files));
+  
+  // 2. 立即更新数据结构（这样重新渲染时就是新数据）
+  curHunks[hunkIdx].lines.splice(lineIdx, 1);
+  
+  // 如果hunk没有行了，删除整个hunk
+  if (curHunks[hunkIdx].lines.length === 0) {
+    curHunks.splice(hunkIdx, 1);
+  }
+  
+  // 3. 立即更新文件统计数据
+  if (curFile !== null && files[curFile]) {
+    const fileData = files[curFile];
+    
+    // 根据行类型更新统计
+    if (line.type === 'added') {
+      fileData.added = Math.max(0, fileData.added - 1);
+    } else if (line.type === 'removed') {
+      fileData.removed = Math.max(0, fileData.removed - 1);
+    } else if (line.type === 'modified') {
+      fileData.modified = Math.max(0, fileData.modified - 1);
+    }
+    
+    // 立即刷新文件列表和统计
+    renderFileList();
+    updateStats();
+  }
+  
+  // 4. 立即重新渲染diff（使用新数据，新索引）
+  if (curFile !== null && files[curFile]) {
+    const f = files[curFile];
+    // 重新收集changeLocations
+    const changeLocations = [];
+    curHunks.forEach((hunk, hunkIndex) => {
+      hunk.lines.forEach((line, lineIndex) => {
+        if (line.type === 'added' || line.type === 'removed' || line.type === 'modified') {
+          changeLocations.push({
+            hunkIndex,
+            lineIndex,
+            lineNumber: line.new || line.old,
+            type: line.type,
+            text: line.text
+          });
+        }
+      });
+    });
+    renderDiffWithFullContext(f, curHunks, false, changeLocations);
+  }
+  
+  // 5. 立即显示成功反馈（乐观）
+  toast('✓ 已撤回', 'ok');
+  
+  // 6. 后台静默保存（不阻塞UI，不显示loading）
+  setTimeout(async () => {
+    try {
+      const res = await POST('/api/revert_line', {
+        path: filepath, 
+        hunk_index: hunkIdx, 
+        line_index: lineIdx, 
+        status,
+        ctx: (diffMode === 'unified') ? changeViewCtx : 5
+      });
+      
+      if (!res.ok) {
+        // 保存失败，静默回滚
+        console.warn('撤回失败，回滚UI:', res.msg || res.error);
+        
+        // 恢复数据
+        curHunks = originalHunks;
+        files = originalFiles;
+        
+        // 重新渲染
+        if (curFile !== null && files[curFile]) {
+          const f = files[curFile];
+          // 重新收集changeLocations
+          const changeLocations = [];
+          curHunks.forEach((hunk, hunkIndex) => {
+            hunk.lines.forEach((line, lineIndex) => {
+              if (line.type === 'added' || line.type === 'removed' || line.type === 'modified') {
+                changeLocations.push({
+                  hunkIndex,
+                  lineIndex,
+                  lineNumber: line.new || line.old,
+                  type: line.type,
+                  text: line.text
+                });
+              }
+            });
+          });
+          renderDiffWithFullContext(f, curHunks, false, changeLocations);
+        }
+        
+        // 恢复统计
+        renderFileList();
+        updateStats();
+        
+        toast('撤回失败，已恢复', 'err');
+      } else {
+        // 成功后，从后端获取最新的diff数据和文件统计
+        const diffRes = await GET(`/api/diff?path=${encodeURIComponent(filepath)}&status=${status}`);
+        if (diffRes.hunks) {
+          curHunks = diffRes.hunks;
+          
+          // 获取最新的文件内容
+          const contentRes = await POST('/api/file_content', {path: filepath});
+          if (contentRes && contentRes.ok && contentRes.content !== undefined && contentRes.content !== null) {
+            curFileContent = contentRes.content;
+          }
+          
+          // 重新渲染diff，使用最新的hunk数据（包含正确的header）
+          if (curFile !== null && files[curFile]) {
+            const f = files[curFile];
+            // 重新收集changeLocations
+            const changeLocations = [];
+            curHunks.forEach((hunk, hunkIndex) => {
+              hunk.lines.forEach((line, lineIndex) => {
+                if (line.type === 'added' || line.type === 'removed' || line.type === 'modified') {
+                  changeLocations.push({
+                    hunkIndex,
+                    lineIndex,
+                    lineNumber: line.new || line.old,
+                    type: line.type,
+                    text: line.text
+                  });
+                }
+              });
+            });
+            renderDiffWithFullContext(f, curHunks, false, changeLocations);
+            // 前端已主动把 diff 刷新到最新，跳过下一次 WS 推送触发的自动 loadDiff
+            skipNextAutoDiffRefresh = true;
+          }
+        }
+        
+        const filesRes = await GET('/api/files');
+        if (filesRes.files) {
+          filesRes.files.forEach(f => {
+            f.modified = Math.min(f.added, f.removed);
+            f.added -= f.modified;
+            f.removed -= f.modified;
+          });
+          
+          // 找到当前文件并更新统计
+          const currentPath = files[curFile]?.path;
+          const updatedFile = filesRes.files.find(f => f.path === currentPath);
+          if (updatedFile && curFile !== null) {
+            files[curFile] = updatedFile;
+            renderFileList();
+            updateStats();
+          }
+        }
+      }
+    } catch (error) {
+      console.error('撤回失败:', error);
+      // 网络错误也要回滚
+      curHunks = originalHunks;
+      files = originalFiles;
+      
+      if (curFile !== null && files[curFile]) {
+        const f = files[curFile];
+        // 重新收集changeLocations
+        const changeLocations = [];
+        curHunks.forEach((hunk, hunkIndex) => {
+          hunk.lines.forEach((line, lineIndex) => {
+            if (line.type === 'added' || line.type === 'removed' || line.type === 'modified') {
+              changeLocations.push({
+                hunkIndex,
+                lineIndex,
+                lineNumber: line.new || line.old,
+                type: line.type,
+                text: line.text
+              });
+            }
+          });
+        });
+        renderDiffWithFullContext(f, curHunks, false, changeLocations);
+      }
+      
+      renderFileList();
+      updateStats();
+      toast('网络错误，已恢复', 'err');
+    }
+  }, 0);
+}
+
+// 真正的实时多行撤回 - 立即删除多行，后台保存，实时更新统计
+async function revertMultiLinesInstantly(filepath, hunkIdx, startLineIdx, endLineIdx, status) {
+  // 禁用自动刷新diff，避免撤回后被WebSocket推送打断
+  disableAutoRefreshDiff(8000);
+  
+  const hunk = curHunks[hunkIdx];
+  if (!hunk) {
+    toast('无法找到该代码块', 'err');
+    return;
+  }
+  
+  // 获取要撤回的连续多行
+  const linesToRevert = [];
+  for (let i = startLineIdx; i <= endLineIdx && i < hunk.lines.length; i++) {
+    const line = hunk.lines[i];
+    if (line && line.type !== 'context') {
+      linesToRevert.push({line, originalIndex: i});
+    }
+  }
+  
+  if (linesToRevert.length === 0) {
+    toast('无法找到要撤回的代码行', 'err');
+    return;
+  }
+  
+  // 确保所有行类型相同
+  const firstType = linesToRevert[0].line.type;
+  const allSameType = linesToRevert.every(item => item.line.type === firstType);
+  if (!allSameType) {
+    toast('多行撤回要求所有行类型相同', 'err');
+    return;
+  }
+  
+  // 1. 保存原始数据（用于失败回滚）
+  const originalHunks = JSON.parse(JSON.stringify(curHunks));
+  const originalFiles = JSON.parse(JSON.stringify(files));
+  
+  // 2. 立即更新数据结构（从后往前删除，避免索引变化）
+  // 先按索引降序排序，这样删除时不会影响前面的索引
+  const sortedLines = [...linesToRevert].sort((a, b) => b.originalIndex - a.originalIndex);
+  sortedLines.forEach(({originalIndex}) => {
+    curHunks[hunkIdx].lines.splice(originalIndex, 1);
+  });
+  
+  // 如果hunk没有行了，删除整个hunk
+  if (curHunks[hunkIdx].lines.length === 0) {
+    curHunks.splice(hunkIdx, 1);
+  }
+  
+  // 3. 立即更新文件统计数据
+  if (curFile !== null && files[curFile]) {
+    const fileData = files[curFile];
+    const lineCount = linesToRevert.length;
+    
+    // 根据行类型更新统计
+    if (firstType === 'added') {
+      fileData.added = Math.max(0, fileData.added - lineCount);
+    } else if (firstType === 'removed') {
+      fileData.removed = Math.max(0, fileData.removed - lineCount);
+    } else if (firstType === 'modified') {
+      fileData.modified = Math.max(0, fileData.modified - lineCount);
+    }
+    
+    // 立即刷新文件列表和统计
+    renderFileList();
+    updateStats();
+  }
+  
+  // 4. 立即重新渲染diff（使用新数据，新索引）
+  if (curFile !== null && files[curFile]) {
+    const f = files[curFile];
+    // 重新收集changeLocations
+    const changeLocations = [];
+    curHunks.forEach((hunk, hunkIndex) => {
+      hunk.lines.forEach((line, lineIndex) => {
+        if (line.type === 'added' || line.type === 'removed' || line.type === 'modified') {
+          changeLocations.push({
+            hunkIndex,
+            lineIndex,
+            lineNumber: line.new || line.old,
+            type: line.type,
+            text: line.text
+          });
+        }
+      });
+    });
+    renderDiffWithFullContext(f, curHunks, false, changeLocations);
+  }
+  
+  // 5. 立即显示成功反馈（乐观）
+  toast(`✓ 已撤回 ${linesToRevert.length} 行代码`, 'ok');
+  
+  // 6. 后台静默保存（不阻塞UI，不显示loading）
+  setTimeout(async () => {
+    try {
+      const res = await POST('/api/revert_multi_lines', {
+        path: filepath, 
+        hunk_index: hunkIdx, 
+        start_line_index: startLineIdx,
+        end_line_index: endLineIdx,
+        status,
+        ctx: (diffMode === 'unified') ? changeViewCtx : 5
+      });
+      
+      if (!res.ok) {
+        // 保存失败，静默回滚
+        console.warn('多行撤回失败，回滚UI:', res.msg || res.error);
+        
+        // 恢复数据
+        curHunks = originalHunks;
+        files = originalFiles;
+        
+        // 重新渲染
+        if (curFile !== null && files[curFile]) {
+          const f = files[curFile];
+          // 重新收集changeLocations
+          const changeLocations = [];
+          curHunks.forEach((hunk, hunkIndex) => {
+            hunk.lines.forEach((line, lineIndex) => {
+              if (line.type === 'added' || line.type === 'removed' || line.type === 'modified') {
+                changeLocations.push({
+                  hunkIndex,
+                  lineIndex,
+                  lineNumber: line.new || line.old,
+                  type: line.type,
+                  text: line.text
+                });
+              }
+            });
+          });
+          renderDiffWithFullContext(f, curHunks, false, changeLocations);
+        }
+        
+        // 恢复统计
+        renderFileList();
+        updateStats();
+        
+        toast('多行撤回失败，已恢复', 'err');
+      } else {
+        // 成功后，从后端获取最新的diff数据和文件统计
+        const diffRes = await GET(`/api/diff?path=${encodeURIComponent(filepath)}&status=${status}`);
+        if (diffRes.hunks) {
+          curHunks = diffRes.hunks;
+          
+          // 获取最新的文件内容
+          const contentRes = await POST('/api/file_content', {path: filepath});
+          if (contentRes && contentRes.ok && contentRes.content !== undefined && contentRes.content !== null) {
+            curFileContent = contentRes.content;
+          }
+          
+          // 重新渲染diff，使用最新的hunk数据（包含正确的header）
+          if (curFile !== null && files[curFile]) {
+            const f = files[curFile];
+            // 重新收集changeLocations
+            const changeLocations = [];
+            curHunks.forEach((hunk, hunkIndex) => {
+              hunk.lines.forEach((line, lineIndex) => {
+                if (line.type === 'added' || line.type === 'removed' || line.type === 'modified') {
+                  changeLocations.push({
+                    hunkIndex,
+                    lineIndex,
+                    lineNumber: line.new || line.old,
+                    type: line.type,
+                    text: line.text
+                  });
+                }
+              });
+            });
+            renderDiffWithFullContext(f, curHunks, false, changeLocations);
+            // 前端已主动把 diff 刷新到最新，跳过下一次 WS 推送触发的自动 loadDiff
+            skipNextAutoDiffRefresh = true;
+          }
+        }
+        
+        const filesRes = await GET('/api/files');
+        if (filesRes.files) {
+          filesRes.files.forEach(f => {
+            f.modified = Math.min(f.added, f.removed);
+            f.added -= f.modified;
+            f.removed -= f.modified;
+          });
+          
+          // 找到当前文件并更新统计
+          const currentPath = files[curFile]?.path;
+          const updatedFile = filesRes.files.find(f => f.path === currentPath);
+          if (updatedFile && curFile !== null) {
+            files[curFile] = updatedFile;
+            renderFileList();
+            updateStats();
+          }
+        }
+      }
+    } catch (error) {
+      console.error('多行撤回失败:', error);
+      // 网络错误也要回滚
+      curHunks = originalHunks;
+      files = originalFiles;
+      
+      if (curFile !== null && files[curFile]) {
+        const f = files[curFile];
+        // 重新收集changeLocations
+        const changeLocations = [];
+        curHunks.forEach((hunk, hunkIndex) => {
+          hunk.lines.forEach((line, lineIndex) => {
+            if (line.type === 'added' || line.type === 'removed' || line.type === 'modified') {
+              changeLocations.push({
+                hunkIndex,
+                lineIndex,
+                lineNumber: line.new || line.old,
+                type: line.type,
+                text: line.text
+              });
+            }
+          });
+        });
+        renderDiffWithFullContext(f, curHunks, false, changeLocations);
+      }
+      
+      renderFileList();
+      updateStats();
+      toast('网络错误，已恢复', 'err');
+    }
+  }, 0);
+}
+
+// 真正的实时撤回代码块 - 立即删除，后台保存，实时更新统计
+async function revertHunkInstantly(filepath, hunkIdx, status) {
+  // 禁用自动刷新diff，避免撤回后被WebSocket推送打断
+  disableAutoRefreshDiff(8000);
+  
+  const hunk = curHunks[hunkIdx];
+  
+  if (!hunk) {
+    toast('无法找到该代码块', 'err');
+    return;
+  }
+  
+  // 1. 保存原始数据
+  const originalHunks = JSON.parse(JSON.stringify(curHunks));
+  const originalFiles = JSON.parse(JSON.stringify(files));
+  
+  // 2. 计算这个hunk影响的统计
+  let addedCount = 0, removedCount = 0, modifiedCount = 0;
+  hunk.lines.forEach(line => {
+    if (line.type === 'added') addedCount++;
+    else if (line.type === 'removed') removedCount++;
+    else if (line.type === 'modified') modifiedCount++;
+  });
+  
+  // 3. 立即更新数据
+  curHunks.splice(hunkIdx, 1);
+  
+  // 4. 立即更新文件统计
+  if (curFile !== null && files[curFile]) {
+    const fileData = files[curFile];
+    fileData.added = Math.max(0, fileData.added - addedCount);
+    fileData.removed = Math.max(0, fileData.removed - removedCount);
+    fileData.modified = Math.max(0, fileData.modified - modifiedCount);
+    
+    renderFileList();
+    updateStats();
+  }
+  
+  // 5. 立即重新渲染diff
+  if (curFile !== null && files[curFile]) {
+    const f = files[curFile];
+    // 重新收集changeLocations
+    const changeLocations = [];
+    curHunks.forEach((hunk, hunkIndex) => {
+      hunk.lines.forEach((line, lineIndex) => {
+        if (line.type === 'added' || line.type === 'removed' || line.type === 'modified') {
+          changeLocations.push({
+            hunkIndex,
+            lineIndex,
+            lineNumber: line.new || line.old,
+            type: line.type,
+            text: line.text
+          });
+        }
+      });
+    });
+    renderDiffWithFullContext(f, curHunks, false, changeLocations);
+  }
+  
+  // 6. 立即反馈
+  toast('✓ 已撤回代码块', 'ok');
+  
+  // 7. 后台静默保存
+  setTimeout(async () => {
+    try {
+      const res = await POST('/api/revert_hunk', {
+        path: filepath,
+        hunk_index: hunkIdx,
+        status
+      });
+      
+      if (!res.ok) {
+        console.warn('撤回代码块失败，回滚:', res.msg || res.error);
+        
+        curHunks = originalHunks;
+        files = originalFiles;
+        
+        if (curFile !== null && files[curFile]) {
+          const f = files[curFile];
+          // 重新收集changeLocations
+          const changeLocations = [];
+          curHunks.forEach((hunk, hunkIndex) => {
+            hunk.lines.forEach((line, lineIndex) => {
+              if (line.type === 'added' || line.type === 'removed' || line.type === 'modified') {
+                changeLocations.push({
+                  hunkIndex,
+                  lineIndex,
+                  lineNumber: line.new || line.old,
+                  type: line.type,
+                  text: line.text
+                });
+              }
+            });
+          });
+          renderDiffWithFullContext(f, curHunks, false, changeLocations);
+        }
+        
+        renderFileList();
+        updateStats();
+        toast('撤回失败，已恢复', 'err');
+      } else {
+        // 成功后，从后端获取最新的diff数据和文件统计
+        const diffRes = await GET(`/api/diff?path=${encodeURIComponent(filepath)}&status=${status}`);
+        if (diffRes.hunks) {
+          curHunks = diffRes.hunks;
+          
+          // 获取最新的文件内容
+          const contentRes = await POST('/api/file_content', {path: filepath});
+          if (contentRes && contentRes.ok && contentRes.content !== undefined && contentRes.content !== null) {
+            curFileContent = contentRes.content;
+          }
+          
+          // 重新渲染diff，使用最新的hunk数据（包含正确的header）
+          if (curFile !== null && files[curFile]) {
+            const f = files[curFile];
+            // 重新收集changeLocations
+            const changeLocations = [];
+            curHunks.forEach((hunk, hunkIndex) => {
+              hunk.lines.forEach((line, lineIndex) => {
+                if (line.type === 'added' || line.type === 'removed' || line.type === 'modified') {
+                  changeLocations.push({
+                    hunkIndex,
+                    lineIndex,
+                    lineNumber: line.new || line.old,
+                    type: line.type,
+                    text: line.text
+                  });
+                }
+              });
+            });
+            renderDiffWithFullContext(f, curHunks, false, changeLocations);
+            // 前端已主动把 diff 刷新到最新，跳过下一次 WS 推送触发的自动 loadDiff
+            skipNextAutoDiffRefresh = true;
+          }
+        }
+        
+        const filesRes = await GET('/api/files');
+        if (filesRes.files) {
+          filesRes.files.forEach(f => {
+            f.modified = Math.min(f.added, f.removed);
+            f.added -= f.modified;
+            f.removed -= f.modified;
+          });
+          
+          const currentPath = files[curFile]?.path;
+          const updatedFile = filesRes.files.find(f => f.path === currentPath);
+          if (updatedFile && curFile !== null) {
+            files[curFile] = updatedFile;
+            renderFileList();
+            updateStats();
+          }
+        }
+      }
+    } catch (error) {
+      console.error('撤回代码块失败:', error);
+      curHunks = originalHunks;
+      files = originalFiles;
+      
+      if (curFile !== null && files[curFile]) {
+        const f = files[curFile];
+        // 重新收集changeLocations
+        const changeLocations = [];
+        curHunks.forEach((hunk, hunkIndex) => {
+          hunk.lines.forEach((line, lineIndex) => {
+            if (line.type === 'added' || line.type === 'removed' || line.type === 'modified') {
+              changeLocations.push({
+                hunkIndex,
+                lineIndex,
+                lineNumber: line.new || line.old,
+                type: line.type,
+                text: line.text
+              });
+            }
+          });
+        });
+        renderDiffWithFullContext(f, curHunks, false, changeLocations);
+      }
+      
+      renderFileList();
+      updateStats();
+      toast('网络错误，已恢复', 'err');
+    }
+  }, 0);
+}
+
+// 兼容旧的弹窗式撤回（用于整个文件）
+function askRevertLine(filepath, hunkIdx, lineIdx, status) {
+  // 直接调用实时撤回，无需弹窗确认
+  revertLineInstantly(filepath, hunkIdx, lineIdx, status);
+}
+
+// 多行撤回 - 撤回连续的相同类型操作
+function askRevertMultiLines(filepath, hunkIdx, startLineIdx, endLineIdx, status) {
+  // 直接调用实时多行撤回，无需弹窗确认
+  revertMultiLinesInstantly(filepath, hunkIdx, startLineIdx, endLineIdx, status);
+}
+
+function askRevertHunk(filepath, hunkIdx, status) {
+  // 直接调用实时撤回，无需弹窗确认
+  revertHunkInstantly(filepath, hunkIdx, status);
+}
+
+// 保留这个函数用于文件级别的撤回
+async function doRevertHunk() {
+  closeModal('revertHunkModal');
+  
+  if (pendingLine) {
+    const {filepath, hunkIdx, lineIdx, status} = pendingLine;
+    await revertLineInstantly(filepath, hunkIdx, lineIdx, status);
+    pendingLine = null;
+  } else if (pendingHunk) {
+    const {filepath, hunkIdx, status} = pendingHunk;
+    await revertHunkInstantly(filepath, hunkIdx, status);
+    pendingHunk = null;
+  }
+}
+
+function showRevertFileModal() {
+  if (curFile === null) return;
+  const f = files[curFile];
+  const titleEl = document.getElementById('revertFileTitle');
+  const confirmEl = document.getElementById('revertFileConfirmBtn');
+  if (f.status === 'U') {
+    if (titleEl) titleEl.textContent = '删除新增文件';
+    if (confirmEl) confirmEl.textContent = '确认删除';
+    document.getElementById('revertFileDesc').textContent =
+      `将删除新增文件 "${f.path}"（等同撤回新增），操作不可撤销。`;
+  } else if (f.status === 'D') {
+    if (titleEl) titleEl.textContent = '恢复已删除文件';
+    if (confirmEl) confirmEl.textContent = '确认恢复';
+    document.getElementById('revertFileDesc').textContent =
+      `将恢复已删除文件 "${f.path}"（从 HEAD 恢复），操作不可撤销。`;
+  } else {
+    if (titleEl) titleEl.textContent = '撤回整个文件';
+    if (confirmEl) confirmEl.textContent = '确认撤回';
+    document.getElementById('revertFileDesc').textContent =
+      `将撤回 "${f.path}" 的所有修改，恢复到最近一次提交的状态，操作不可撤销。`;
+  }
+}
+
+async function doRevertFile() {
+  closeModal('revertFileModal');
+  if (curFile === null) return;
+  
+  // 禁用自动刷新diff，避免撤回后被WebSocket推送打断
+  disableAutoRefreshDiff();
+  
+  // Show loading indicator
+  const diffView = document.getElementById('diffView');
+  diffView.innerHTML = '<div class="empty-state"><div class="spin"></div><p>撤回中...</p></div>';
+  
+  const f = files[curFile];
+  try {
+    const res = await POST('/api/revert_file', {path:f.path, status:f.status});
+    if (res.ok) {
+      toast(`✓ 已撤回 ${f.path}`,'ok');
+      curFile = null; clearDiff();
+      await refresh();
+    } else {
+      toast(`失败: ${res.error||res.msg}`,'err');
+      // Restore diff view if revert fails
+      if (curFile !== null) await loadDiff(curFile);
+    }
+  } catch (error) {
+    toast(`失败: ${error.message}`,'err');
+    // Restore diff view if error occurs
+    if (curFile !== null) await loadDiff(curFile);
+  }
+}
+
+async function doRevertAll() {
+  closeModal('revertAllModal');
+  
+  // 禁用自动刷新diff，避免撤回后被WebSocket推送打断
+  disableAutoRefreshDiff();
+  
+  // Show loading indicator
+  const diffView = document.getElementById('diffView');
+  const fileList = document.getElementById('fileList');
+  
+  // Add loading state to diff view
+  diffView.innerHTML = '<div class="empty-state"><div class="spin"></div><p>撤回中...</p></div>';
+  
+  // Add loading state to file list
+  fileList.innerHTML = '<div style="padding:20px;text-align:center;"><div class="spin"></div><p style="margin-top:10px;color:var(--text2);">撤回中...</p></div>';
+  
+  try {
+    const res = await POST('/api/revert_all',{});
+    if (res.ok) {
+      toast('✓ 已撤回所有修改','ok');
+      curFile = null; clearDiff(); await refresh();
+    } else {
+      toast(`部分失败: ${(res.errors||[]).slice(0,2).join(', ')}`,'err');
+      await refresh();
+    }
+  } catch (error) {
+    toast(`失败: ${error.message}`,'err');
+    await refresh();
+  }
+}
+
+// ── Commit ────────────────────────────────────────────────────────────────────
+async function doCommit(push=false) {
+  const msg = document.getElementById('commitMsg').value.trim();
+  if (!msg) { toast('请输入提交信息','err'); return; }
+  const paths = [...checkedSet].map(i=>files[i]?.path).filter(Boolean);
+  if (!paths.length) { toast('请选择要提交的文件','err'); return; }
+
+  // Disable buttons during commit
+  const commitBtns = document.querySelectorAll('#tabCommit .commit-actions button');
+  const oldTexts = [];
+  commitBtns.forEach((b, idx) => {
+    oldTexts[idx] = b.innerHTML;
+    b.disabled = true;
+    b.innerHTML = '<span style="font-size:11px">提交中...</span>';
+  });
+
+  try {
+    // 如果只选择了一个文件，并且在 diff 中勾选了部分 hunk，则按块提交
+    let res = null;
+    const canPartial = (
+      paths.length === 1 &&
+      curFile !== null &&
+      files[curFile] &&
+      files[curFile].path === paths[0] &&
+      (curHunks || []).length > 0
+    );
+
+    if (canPartial) {
+      const f = files[curFile];
+      const selectedSet = ensureDefaultHunkSelection(f.path, curHunks.length);
+      const isPartial = selectedSet.size > 0 && selectedSet.size < curHunks.length;
+      const unsupported = (f.status === 'U' || f.status === 'A' || f.status === 'D');
+      if (isPartial && !unsupported) {
+        const ctx = (diffMode === 'unified') ? changeViewCtx : 5;
+        res = await POST('/api/commit_hunks', {
+          message: msg,
+          path: f.path,
+          status: f.status,
+          hunks: [...selectedSet],
+          ctx
+        });
+        if (!res?.error) {
+          toast(`✓ 已提交 ${paths[0]}（按块）`,'ok');
+          // 清空该文件的按块勾选，避免下次复用旧选择
+          getSelectedCommitHunksSet(f.path).clear();
+        }
+      }
+    }
+
+    if (!res) {
+      res = await POST('/api/commit',{message:msg, files:paths});
+      if (!res?.error) {
+        toast(`✓ 已提交 ${paths.length} 个文件`,'ok');
+      }
+    }
+    if (res.error) { 
+      toast(`提交失败: ${res.error}`,'err'); 
+      return;
+    }
+    document.getElementById('commitMsg').value='';
+    
+    if (push) {
+      // Show loading for push
+      toast('推送中...','warn');
+      const pRes = await POST('/api/push',{});
+      if (pRes.ok) toast('✓ Push 完成','ok');
+      else toast(`Push 失败: ${pRes.msg}`,'err');
+    }
+    await refresh();
+  } catch (error) {
+    toast(`提交失败: ${error.message}`,'err');
+  } finally {
+    commitBtns.forEach((b, idx) => {
+      b.disabled = false;
+      b.innerHTML = oldTexts[idx] || b.innerHTML;
+    });
+  }
+}
+
+// ── Log ───────────────────────────────────────────────────────────────────────
+function renderLogList() {
+  const el    = document.getElementById('logList');
+  const q     = logFilter.toLowerCase();
+  const vis   = logData.filter(l =>
+    !q || l.msg.toLowerCase().includes(q) || l.author.toLowerCase().includes(q) || l.hash.includes(q)
+  );
+  document.getElementById('logCount').textContent = logData.length;
+  if (!vis.length) {
+    el.innerHTML = '<div style="padding:20px;color:var(--text3);text-align:center;font-size:12px">暂无提交</div>';
+    return;
+  }
+  
+  // Use DocumentFragment for better performance with large log lists
+  const fragment = document.createDocumentFragment();
+  
+  vis.forEach(l => {
+    const div = document.createElement('div');
+    div.className = 'log-item';
+    div.onclick = () => openCommit(l.full_hash);
+    const shortHash = l.hash || '';
+    const msg = l.msg || l.message || l.subject || '(无提交信息)';
+    div.innerHTML = `
+      <div class="log-hash" title="${esc(l.full_hash || l.hash)}">${esc(shortHash)}</div>
+      <div class="log-msg">${esc(msg)}</div>
+      <div class="log-meta">${esc(l.author)} · ${l.time}</div>
+    `;
+    fragment.appendChild(div);
+  });
+  
+  // Clear and append all at once
+  el.innerHTML = '';
+  el.appendChild(fragment);
+}
+
+function filterLog(q) { debouncedFilterLog(q); }
+
+async function openCommit(fullHash) {
+  // Switch to detail sub-view
+  switchToLogDetail();
+  document.getElementById('ldHash').textContent = '';
+  document.getElementById('ldMsg').textContent  = '加载中...';
+  document.getElementById('ldMeta').textContent = '';
+  document.getElementById('ldFileList').innerHTML =
+    '<div style="padding:16px;color:var(--text3)"><div class="spin"></div></div>';
+
+  const res = await GET(`/api/commit_detail?hash=${encodeURIComponent(fullHash)}`);
+  if (res.error) { toast(res.error,'err'); return; }
+
+  // 后端返回的是扁平结构：{hash, full_hash, subject, message, body, files: [...]}
+  const c = res.commit || res || {};
+  curCommit      = c;
+  curCommitFiles = c.files || res.files || [];
+
+  // 使用hash字段（已经是短hash），不需要再slice
+  document.getElementById('ldHash').textContent = c.hash || fullHash.slice(0,7);
+  // 使用subject字段，如果为空则显示message
+  document.getElementById('ldMsg').textContent  = c.subject || c.message || '(无提交信息)';
+  document.getElementById('ldMeta').textContent =
+    `${c.author||''} · ${c.date ? c.date.slice(0,16) : ''}`;
+
+  const fl = document.getElementById('ldFileList');
+  if (!curCommitFiles.length) {
+    fl.innerHTML = '<div style="padding:16px;color:var(--text3);font-size:12px">无变更文件</div>';
+    return;
+  }
+  fl.innerHTML = curCommitFiles.map((f,i) => {
+    const segs = f.path.replace(/\\/g,'/').split('/');
+    const name = segs[segs.length-1];
+    return `<div class="lf" onclick="selectLogFile(${i})">
+      <span class="lf-st ${f.status||'M'}">${f.status||'M'}</span>
+      <span class="lf-name" title="${esc(f.path)}">${esc(name)}</span>
+      <span class="lf-delta">
+        ${f.added   > 0 ? `<span class="a">+${f.added}</span>`   : ''}
+        ${f.removed > 0 ? `<span class="r">-${f.removed}</span>` : ''}
+      </span>
+      <button class="btn" style="margin-left:auto;padding:2px 8px" title="将工作区该文件覆盖为此提交的完整内容" onclick="event.stopPropagation();restoreFromCommit('${(c.full_hash||fullHash).replace(/'/g,"\\'")}', '${f.path.replace(/'/g,"\\'")}')">整文件恢复</button>
+    </div>`;
+  }).join('');
+}
+
+async function restoreFromCommit(commitHash, filepath) {
+  if (!commitHash || !filepath) return;
+  const ok = confirm(`将工作区文件恢复为该提交版本：\n\n${filepath}\n\n此操作会覆盖当前工作区内容，是否继续？`);
+  if (!ok) return;
+  const res = await POST('/api/restore_file', {hash: commitHash, path: filepath});
+  if (res.ok) {
+    toast('✓ 已从历史版本恢复文件','ok');
+    await refresh();
+    // 恢复后优先展示工作区 diff（如果该文件在变更列表里）
+    const idx = files.findIndex(x => x.path === filepath);
+    if (idx >= 0) await selectFile(idx);
+    else clearDiff();
+  } else {
+    toast(`恢复失败: ${res.msg||res.error}`,'err');
+  }
+}
+
+async function selectLogFile(i) {
+  const f = curCommitFiles[i];
+  if (!f || !curCommit) return;
+  curLogFile = f;
+  curFile    = null;  // 取消工作区文件选中
+
+  document.querySelectorAll('.lf').forEach((el,j) => el.classList.toggle('active', j===i));
+  document.querySelectorAll('.fi').forEach(el => el.classList.remove('active'));
+
+  await loadCommitFileDiff(curCommit.full_hash, f.path, f.status);
+}
+
+function switchToLogDetail() {
+  document.getElementById('tabLog').classList.remove('show');
+  document.getElementById('tabLogDetail').classList.add('show');
+}
+
+function backToLog() {
+  document.getElementById('tabLogDetail').classList.remove('show');
+  document.getElementById('tabLog').classList.add('show');
+  curCommit = null; curCommitFiles = []; curLogFile = null;
+}
+
+// ── Tab switching ─────────────────────────────────────────────────────────────
+function switchTab(name, el) {
+  document.querySelectorAll('.vtab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.vtab-content').forEach(c => c.classList.remove('show'));
+  el.classList.add('active');
+  if (name === 'log') {
+    if (logMode === 'detail' && curCommit)
+      document.getElementById('tabLogDetail').classList.add('show');
+    else
+      document.getElementById('tabLog').classList.add('show');
+  } else {
+    document.getElementById(`tab${name.charAt(0).toUpperCase()+name.slice(1)}`).classList.add('show');
+  }
+}
+
+// ── Modal / Toast ─────────────────────────────────────────────────────────────
+function showModal(id) {
+  if (id === 'revertFileModal') showRevertFileModal();
+  document.getElementById(id).classList.add('show');
+}
+function closeModal(id) { document.getElementById(id).classList.remove('show'); }
+
+document.querySelectorAll('.overlay').forEach(o =>
+  o.addEventListener('click', e => { if (e.target===o) o.classList.remove('show'); }));
+
+function toast(msg, type='info') {
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(()=>{ el.style.opacity='0'; el.style.transition='opacity .3s';
+    setTimeout(()=>el.remove(),300); }, 2800);
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function esc(s) {
+  return String(s||'')
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;');
+}
+
+// ── Resizers ──────────────────────────────────────────────────────────────────
+function makeResizer(id, targetSel, dir='right') {
+  const rz = document.getElementById(id);
+  let drag=false, startX, startW;
+  rz.addEventListener('mousedown', e => {
+    drag=true; startX=e.clientX;
+    startW=document.querySelector(targetSel).offsetWidth;
+    rz.classList.add('drag');
+    document.body.style.cursor='col-resize';
+    document.body.style.userSelect='none';
+  });
+  document.addEventListener('mousemove', e => {
+    if (!drag) return;
+    const dx = dir==='right' ? e.clientX-startX : startX-e.clientX;
+    const el = document.querySelector(targetSel);
+    const w  = Math.max(160, Math.min(520, startW+dx));
+    el.style.width=el.style.minWidth=el.style.maxWidth=w+'px';
+  });
+  document.addEventListener('mouseup', ()=>{
+    if (drag) {
+      drag=false; rz.classList.remove('drag');
+      document.body.style.cursor='';
+      document.body.style.userSelect='';
+    }
+  });
+}
+makeResizer('r1','.sidebar','right');
+makeResizer('r2','#rightPanel','left');
+
+// ── Boot ──────────────────────────────────────────────────────────────────────
+window.addEventListener('load', async () => {
+  const res = await GET('/api/status').catch(()=>null);
+  if (res?.valid && res.repo) {
+    const b = await GET('/api/branches');
+    showApp(res.repo, b.current||'main');
+    await refresh();
+  }
+  
+  // 启动WebSocket心跳
+  startWebSocketHeartbeat();
+  
+  // 添加Ctrl+S快捷保存
+  document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+      e.preventDefault();
+      if (curFile) {
+        // 保存文件
+        saveFile(files[curFile].path);
+      }
+    }
+  });
+  
+  // 为可编辑文本框添加事件监听器
+  document.addEventListener('click', (e) => {
+    if (e.target.classList.contains('editable-line')) {
+      e.target.focus();
+    }
+  });
+  
+  // 为可编辑文本框添加自动调整高度的功能
+  document.addEventListener('input', (e) => {
+    if (e.target.classList.contains('editable-line')) {
+      const textarea = e.target;
+      textarea.style.height = 'auto';
+      textarea.style.height = Math.min(textarea.scrollHeight, 100) + 'px';
+    }
+  });
+});
+</script>
+</body>
+</html>
