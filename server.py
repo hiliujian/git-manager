@@ -69,6 +69,10 @@ REPO_PATH = None
 WS_PORT = 7843  # WebSocket端口号
 ws_clients = set()  # WebSocket客户端集合
 last_file_state = None  # 上次的文件状态（用于检测变化）
+_changed_files_cache = {
+    "ts": 0.0,
+    "files": None,
+}
 
 # ════════════════════════════════════════════════════════
 #  WebSocket 实时通信
@@ -96,26 +100,83 @@ def get_file_state_hash():
     if not REPO_PATH:
         return None
     try:
-        files = get_changed_files()
-        # 创建一个包含文件路径、状态、修改时间的字符串
+        # 轻量级状态：基于 git status porcelain 输出 + 相关文件 mtime
+        # 仅用 status 输出会导致“持续编辑但状态不变（一直是 M）”时无法触发推送。
+        # 这里额外叠加 mtime，避免触发昂贵的 git diff 统计。
+        out, err, code = run_git(["status", "--porcelain=v1", "-u", "-z"])
+        if code != 0:
+            logger.debug(f"获取文件状态失败: {err}")
+            return None
+
+        entries = (out or "").split("\x00")
         state_items = []
-        for f in files:
-            file_path = os.path.join(REPO_PATH, f['path'])
-            if os.path.exists(file_path):
-                mtime = os.path.getmtime(file_path)
-                state_items.append((f['path'], f['status'], mtime))
-            else:
-                # 文件不存在（可能被删除）：必须使用稳定值，否则会导致每秒 hash 变化、触发推送风暴
-                state_items.append((f['path'], f['status'], 0))
-        
-        state_str = json.dumps(
-            sorted(state_items),
-            sort_keys=True
-        )
-        return hashlib.md5(state_str.encode()).hexdigest()
+        i = 0
+        while i < len(entries):
+            entry = entries[i]
+            if not entry:
+                i += 1
+                continue
+            if len(entry) < 4:
+                i += 1
+                continue
+
+            xy = entry[:2]
+            path = entry[3:]
+            idx_s = xy[0]
+
+            paths = [(path, xy)]
+            # Rename/Copy 在 -z 下会额外带一个 path
+            if idx_s in ("R", "C") and (i + 1) < len(entries):
+                new_path = entries[i + 1]
+                if new_path:
+                    paths.append((new_path, xy))
+                i += 1
+
+            for p, flag in paths:
+                p_key = (p or "").replace("\\", "/")
+                if not p_key:
+                    continue
+                full = os.path.join(REPO_PATH, p_key)
+                if os.path.exists(full):
+                    try:
+                        mtime = os.path.getmtime(full)
+                    except Exception:
+                        mtime = 0
+                else:
+                    # 文件不存在（删除/重命名旧路径等）：必须使用稳定值
+                    mtime = 0
+                state_items.append((p_key, flag, mtime))
+
+            i += 1
+
+        state_str = json.dumps(sorted(state_items), sort_keys=True)
+        return hashlib.md5(state_str.encode("utf-8", errors="replace")).hexdigest()
     except Exception as e:
         logger.error(f"获取文件状态哈希失败: {e}")
         return None
+
+
+def get_changed_files_cached(max_age_sec=1.0):
+    """带短缓存的变更文件列表。
+
+    典型场景：
+    - 前端 /api/files 轮询备份
+    - WebSocket 初始化/按需请求
+    """
+    now = time.time()
+    try:
+        ts = float(_changed_files_cache.get("ts") or 0.0)
+    except Exception:
+        ts = 0.0
+
+    cached = _changed_files_cache.get("files")
+    if cached is not None and (now - ts) <= float(max_age_sec):
+        return cached
+
+    files = get_changed_files()
+    _changed_files_cache["ts"] = now
+    _changed_files_cache["files"] = files
+    return files
 
 
 def watch_repository():
@@ -131,7 +192,7 @@ def watch_repository():
                     last_file_state = current_state
                     
                     # 获取最新的文件列表
-                    files = get_changed_files()
+                    files = get_changed_files_cached(max_age_sec=0)
                     
                     # 广播更新消息
                     broadcast_to_clients({
@@ -159,7 +220,7 @@ def handle_websocket(websocket: ServerConnection):
         
         # 如果已经打开了仓库，立即发送当前状态
         if REPO_PATH:
-            files = get_changed_files()
+            files = get_changed_files_cached()
             websocket.send(json.dumps({
                 'type': 'files_updated',
                 'files': files
@@ -175,7 +236,7 @@ def handle_websocket(websocket: ServerConnection):
                     websocket.send(json.dumps({'type': 'pong'}))
                 elif msg_type == 'request_files':
                     if REPO_PATH:
-                        files = get_changed_files()
+                        files = get_changed_files_cached()
                         websocket.send(json.dumps({
                             'type': 'files_updated',
                             'files': files
@@ -331,10 +392,10 @@ def get_changed_files():
         return m
 
     # 批量统计增删行：最多执行 3 次 diff（而不是每个文件 3 次）
-    ns_out, _, _ = run_git(["diff", "HEAD", "--numstat", "-z"])
+    ns_out, _, _ = run_git(["diff", "HEAD",     "--numstat", "-z"])
     ns_map = parse_numstat_z(ns_out)
     if not ns_map:
-        ns_out2, _, _ = run_git(["diff", "--numstat", "-z"])
+        ns_out2, _, _ = run_git(["diff",             "--numstat", "-z"])
         ns_map = parse_numstat_z(ns_out2)
     ns_cached_out, _, _ = run_git(["diff", "--cached", "--numstat", "-z"])
     ns_cached_map = parse_numstat_z(ns_cached_out)
@@ -392,7 +453,7 @@ def get_changed_files():
         })
         i += 1
     
-    logger.info(f"成功获取变更文件列表，共 {len(files)} 个文件")
+    logger.debug(f"成功获取变更文件列表，共 {len(files)} 个文件")
     return files
 
 
@@ -1301,7 +1362,15 @@ class Handler(BaseHTTPRequestHandler):
             if not REPO_PATH:
                 self.send_json({"error":"未打开仓库"}, 400)
                 return
-            self.send_json({"files": get_changed_files()})
+            try:
+                max_age = float(qget("max_age") or "")
+            except Exception:
+                max_age = 1.0
+            if max_age < 0:
+                max_age = 0.0
+            if max_age > 10:
+                max_age = 10.0
+            self.send_json({"files": get_changed_files_cached(max_age_sec=max_age)})
 
         elif p == "/api/diff":
             logger.debug("处理 /api/diff 请求")
