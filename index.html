@@ -4104,6 +4104,62 @@ function toast(msg, type='info') {
     setTimeout(()=>el.remove(),300); }, 2800);
 }
 
+function enableHorizontalScrollForChangeNavigation() {
+  // Wheel: use vertical wheel to scroll horizontally when hovering the bar
+  document.addEventListener('wheel', (e) => {
+    const nav = e.target && (e.target.closest ? e.target.closest('.change-navigation') : null);
+    if (!nav) return;
+    if (Math.abs(e.deltaY) < 1) return;
+    // Let trackpad horizontal scrolling (deltaX) work naturally; we only map deltaY
+    nav.scrollLeft += e.deltaY;
+    e.preventDefault();
+  }, { passive: false });
+
+  // Drag-to-scroll with mouse
+  let dragNav = null;
+  let dragStartX = 0;
+  let dragStartLeft = 0;
+  let dragging = false;
+
+  document.addEventListener('mousedown', (e) => {
+    const nav = e.target && (e.target.closest ? e.target.closest('.change-navigation') : null);
+    if (!nav) return;
+    // Only left button
+    if (e.button !== 0) return;
+    dragNav = nav;
+    dragStartX = e.clientX;
+    dragStartLeft = nav.scrollLeft;
+    dragging = false;
+    nav.style.cursor = 'grabbing';
+    nav.style.userSelect = 'none';
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!dragNav) return;
+    const dx = e.clientX - dragStartX;
+    if (!dragging && Math.abs(dx) < 3) return;
+    dragging = true;
+    dragNav.scrollLeft = dragStartLeft - dx;
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (!dragNav) return;
+    dragNav.style.cursor = '';
+    dragNav.style.userSelect = '';
+    dragNav = null;
+    dragging = false;
+  });
+
+  // Prevent accidental click when user was dragging
+  document.addEventListener('click', (e) => {
+    if (!dragging) return;
+    const nav = e.target && (e.target.closest ? e.target.closest('.change-navigation') : null);
+    if (!nav) return;
+    e.preventDefault();
+    e.stopPropagation();
+  }, true);
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function esc(s) {
   return String(s||'')
@@ -4148,6 +4204,8 @@ window.addEventListener('load', async () => {
     showApp(res.repo, b.current||'main');
     await refresh();
   }
+
+  enableHorizontalScrollForChangeNavigation();
   
   // 启动WebSocket心跳
   startWebSocketHeartbeat();
