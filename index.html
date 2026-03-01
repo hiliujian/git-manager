@@ -67,8 +67,39 @@ body{font-family:'Outfit',sans-serif;color:var(--text);font-size:13px;display:fl
 .branch-tag{display:flex;align-items:center;gap:4px;background:var(--bg4);
   border:1px solid var(--border2);border-radius:20px;padding:2px 10px;
   font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--accent2);cursor:default;}
+.branch-wrap{position:relative;display:flex;align-items:center;}
+.branch-menu{position:absolute;top:34px;left:0;min-width:260px;max-width:420px;
+  background:rgba(26,28,36,.94);border:1px solid rgba(61,66,98,.85);border-radius:12px;
+  box-shadow:0 22px 60px #000000aa;z-index:600;padding:10px;display:none;
+  backdrop-filter: blur(10px);}
+.branch-menu.show{display:block;}
+.branch-menu .bm-title{display:flex;align-items:center;gap:8px;font-size:10px;color:var(--text2);
+  padding:4px 6px 8px;letter-spacing:.5px;}
+.branch-menu .bm-kbd{margin-left:auto;color:var(--text3);font-size:10px;font-family:'JetBrains Mono',monospace;}
+.branch-menu .bm-search{padding:0 4px 10px;}
+.branch-menu .bm-search input{width:100%;height:26px;border-radius:9px;
+  background:rgba(19,20,26,.85);border:1px solid rgba(61,66,98,.6);
+  outline:none;color:var(--text);font-size:11px;padding:0 10px;
+  font-family:'JetBrains Mono',monospace;}
+.branch-menu .bm-search input:focus{border-color:rgba(110,180,247,.9);box-shadow:0 0 0 2px rgba(110,180,247,.18);}
+.branch-menu .bm-list{max-height:320px;overflow:auto;padding:0 2px;}
+.branch-menu .bm-section{padding:8px 6px 6px;color:var(--text3);font-size:10px;letter-spacing:1px;text-transform:uppercase;}
+.branch-menu .bm-item{display:flex;align-items:center;gap:10px;padding:8px 8px;
+  border-radius:10px;color:var(--text);text-decoration:none;font-size:12px;cursor:pointer;
+  border:1px solid transparent;}
+.branch-menu .bm-item:hover{background:rgba(33,36,46,.9);border-color:rgba(61,66,98,.45);}
+.branch-menu .bm-item.active{background:rgba(33,36,46,.95);border:1px solid rgba(110,180,247,.45);}
+.branch-menu .bm-dot{width:7px;height:7px;border-radius:50%;background:var(--text3);opacity:.7;}
+.branch-menu .bm-dot.local{background:rgba(93,214,168,.9);opacity:.85;}
+.branch-menu .bm-dot.remote{background:rgba(110,180,247,.9);opacity:.85;}
+.branch-menu .bm-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-family:'JetBrains Mono',monospace;font-size:11px;}
+.branch-menu .bm-scope{font-size:10px;color:var(--text3);}
 .repo-label{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--text3);
-  max-width:520px;overflow-x:auto;overflow-y:hidden;white-space:nowrap;}
+  flex:1;min-width:0;display:flex;align-items:center;gap:8px;
+  overflow-x:auto;overflow-y:hidden;white-space:nowrap;
+  scrollbar-width:none;-ms-overflow-style:none;}
+.repo-label::-webkit-scrollbar{height:0 !important;}
 .origin-link-btn{display:inline-flex;align-items:center;max-width:420px;
   padding:1px 8px;border-radius:999px;border:1px solid rgba(125,211,252,.55);
   background:transparent;color:#7dd3fc;text-decoration:none;cursor:pointer;
@@ -93,6 +124,11 @@ body{font-family:'Outfit',sans-serif;color:var(--text);font-size:13px;display:fl
   border-radius:3px;border:none;background:transparent;color:var(--text2);cursor:pointer;transition:all .12s;}
 .icon-btn:hover{background:var(--bg5);color:var(--text);}
 
+/* ── COLLAPSE BUTTONS ── */
+.collapse-btn{width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;
+  border-radius:3px;border:none;background:transparent;color:var(--text2);cursor:pointer;transition:all .12s;}
+.collapse-btn:hover{background:var(--bg5);color:var(--text);}
+
 /* ── REPO OPENER ── */
 #opener{flex:1;display:flex;align-items:center;justify-content:center;}
 .open-card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;
@@ -111,6 +147,25 @@ body{font-family:'Outfit',sans-serif;color:var(--text);font-size:13px;display:fl
 
 /* ── MAIN LAYOUT ── */
 #app{flex:1;display:flex;overflow:hidden;}
+
+/* Collapsed left/right panel (keep a small handle so user can expand) */
+#app.left-collapsed .sidebar{width:34px !important;min-width:34px !important;max-width:34px !important;}
+#app.left-collapsed .sidebar .ph{padding:0 !important;justify-content:center;}
+#app.left-collapsed .sidebar .icon-btn{display:none !important;}
+#app.left-collapsed .sidebar .ph-title,
+#app.left-collapsed .sidebar .badge,
+#app.left-collapsed .sidebar .sf-search,
+#app.left-collapsed .sidebar .file-list,
+#app.left-collapsed .sidebar .sf-foot{display:none !important;}
+
+#app.right-collapsed #rightPanel{width:34px !important;min-width:34px !important;max-width:34px !important;}
+#app.right-collapsed #rightPanel .vtabs{justify-content:center;}
+#app.right-collapsed #rightPanel .vtab,
+#app.right-collapsed #rightPanel .vtabs > div[style]{display:none !important;}
+#app.right-collapsed #rightPanel .vtab-content{display:none !important;}
+
+#app.left-collapsed #r1,
+#app.right-collapsed #r2{display:none !important;}
 
 /* ── PANEL HEADER ── */
 .ph{height:30px;min-height:30px;display:flex;align-items:center;padding:0 10px;
@@ -294,7 +349,7 @@ body{font-family:'Outfit',sans-serif;color:var(--text);font-size:13px;display:fl
   color:var(--accent);
   background:transparent;
 }
-.revert-block-hint .hint-actions{margin-left:auto;display:flex;align-items:center;gap:6px;}
+.revert-block-hint .hint-actions{margin-left:auto;display:flex;align-items:center;gap:6px;pointer-events:auto;}
 .revert-block-hint .hint-btn{
   height:18px;
   padding:0 8px;
@@ -306,6 +361,12 @@ body{font-family:'Outfit',sans-serif;color:var(--text);font-size:13px;display:fl
   font-family:'JetBrains Mono',monospace;
   cursor:pointer;
   transition:all .12s;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  position:relative;
+  z-index:2;
+  pointer-events:auto;
 }
 .revert-block-hint .hint-btn:hover{background:rgba(242, 114, 114, 0.12);border-color:#6b1f1e;box-shadow:0 0 8px rgba(242, 114, 114, 0.18);}
 
@@ -413,12 +474,19 @@ body{font-family:'Outfit',sans-serif;color:var(--text);font-size:13px;display:fl
 <!-- Topbar -->
 <div class="topbar">
   <div class="logo"><div class="logo-dot">G</div>GitManager</div>
-  <div class="branch-tag" id="branchTag" style="display:none">
-    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-      <line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/>
-      <path d="M18 9a9 9 0 01-9 9"/>
-    </svg>
-    <span id="branchName"></span>
+  <div class="branch-wrap">
+    <div class="branch-tag" id="branchTag" style="display:none">
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/>
+        <path d="M18 9a9 9 0 01-9 9"/>
+      </svg>
+      <span id="branchName"></span>
+    </div>
+    <div class="branch-menu" id="branchMenu">
+      <div class="bm-title">切换分支 <span class="bm-kbd">Esc</span></div>
+      <div class="bm-search"><input id="branchMenuSearch" placeholder="搜索分支..." /></div>
+      <div class="bm-list" id="branchMenuList"></div>
+    </div>
   </div>
   <span class="repo-label" id="repoLabel"></span>
   <div class="row ml">
@@ -474,6 +542,11 @@ body{font-family:'Outfit',sans-serif;color:var(--text);font-size:13px;display:fl
       <button class="icon-btn" title="刷新" onclick="refresh()">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
           <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/>
+        </svg>
+      </button>
+      <button class="collapse-btn" id="toggleLeftBtn" title="收起左侧栏" onclick="toggleLeftPanel()">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="15 18 9 12 15 6"/>
         </svg>
       </button>
     </div>
@@ -533,6 +606,12 @@ body{font-family:'Outfit',sans-serif;color:var(--text);font-size:13px;display:fl
     <div class="vtabs">
       <div class="vtab active" onclick="switchTab('commit',this)">提交</div>
       <div class="vtab" onclick="switchTab('log',this)">历史日志</div>
+      <div style="margin-left:auto"></div>
+      <button class="collapse-btn" id="toggleRightBtn" title="收起右侧栏" onclick="toggleRightPanel()">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="9 18 15 12 9 6"/>
+        </svg>
+      </button>
     </div>
 
     <!-- Commit -->
@@ -574,8 +653,8 @@ body{font-family:'Outfit',sans-serif;color:var(--text);font-size:13px;display:fl
         <div class="log-detail-hash" id="ldHash"></div>
         <div class="log-detail-msg" id="ldMsg"></div>
         <div class="log-detail-meta" style="margin-top:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          <button class="btn red" id="revertCommitBtn" style="padding:2px 10px" title="撤回该提交（git revert），会生成一个新的回滚提交" onclick="revertCommitFromHistory()">Revert</button>
-          <button class="btn blue" id="pushCommitBtn" style="padding:2px 10px" title="推送当前分支" onclick="pushFromHistory()">Push</button>
+          <button class="btn red" id="revertCommitBtn" style="padding:2px 10px;display:none" title="撤回该提交（git revert），会生成一个新的回滚提交" onclick="revertCommitFromHistory()">Revert</button>
+          <button class="btn blue" id="pushCommitBtn" style="padding:2px 10px;display:none" title="推送当前分支" onclick="pushFromHistory()">Push</button>
           <span style="color:var(--text3);font-size:11px">撤回该提交（git revert），会生成一个新的回滚提交</span>
         </div>
         <div class="log-detail-meta" id="ldMeta"></div>
@@ -621,10 +700,10 @@ body{font-family:'Outfit',sans-serif;color:var(--text);font-size:13px;display:fl
 
 <div class="overlay" id="confirmModal">
   <div class="modal">
-    <h3 id="confirmTitle">确认操作</h3>
-    <p id="confirmDesc" style="white-space:pre-wrap"></p>
+    <h3 id="confirmTitle">确认</h3>
+    <p id="confirmMessage"></p>
     <div class="modal-btns">
-      <button class="btn" id="confirmCancelBtn">取消</button>
+      <button class="btn" id="confirmCancelBtn" onclick="closeModal('confirmModal')">取消</button>
       <button class="btn blue" id="confirmOkBtn">确定</button>
     </div>
   </div>
@@ -914,6 +993,8 @@ let curCommitFiles = [];       // 当前提交文件列表
 let curLogFile  = null;        // 当前查看的历史文件
 
 let refreshBusy = false;
+let lastBranchesRes = null;
+let branchMenuQuery = '';
 
 // Debounced functions
 const debouncedFilterFiles = debounce((q) => {
@@ -954,6 +1035,7 @@ async function openRepo() {
   const res = await POST('/api/open_repo', {path});
   if (res.error) { err.textContent = res.error; return; }
   err.textContent = '';
+  try { localStorage.setItem('lastRepoPath', path); } catch (e) {}
   showApp(res.repo, res.branch);
   await refresh();
 }
@@ -971,6 +1053,7 @@ function showApp(repo, branch) {
   document.getElementById('pullBtn').style.display    = 'flex';
   document.getElementById('refreshBtn').style.display = 'flex';
   document.getElementById('changeBtn').style.display  = 'flex';
+  initBranchDropdown();
   
   // 启动WebSocket连接
   connectWebSocket();
@@ -987,6 +1070,8 @@ function goToOpener() {
   document.getElementById('repoLabel').textContent   = '';
   ['pullBtn','refreshBtn','changeBtn'].forEach(id =>
     document.getElementById(id).style.display = 'none');
+
+  try { localStorage.removeItem('lastRepoPath'); } catch (e) {}
   
   // 关闭WebSocket连接
   if (ws) {
@@ -1000,6 +1085,43 @@ function goToOpener() {
   
   // Stop real-time refresh
   stopRealTimeRefresh();
+}
+
+async function tryAutoOpenRepoOnLoad() {
+  const err = document.getElementById('openErr');
+  const input = document.getElementById('repoInput');
+  let status = null;
+  try { status = await GET('/api/status'); } catch (e) { status = null; }
+
+  if (status && status.valid && status.repo) {
+    let cur = '';
+    try {
+      const b = await GET('/api/branches');
+      cur = (b && b.current) ? b.current : '';
+    } catch (e) { cur = ''; }
+    showApp(status.repo, cur);
+    await refresh();
+    return;
+  }
+
+  let cached = '';
+  try { cached = localStorage.getItem('lastRepoPath') || ''; } catch (e) { cached = ''; }
+  cached = (cached || '').trim();
+  if (!cached) return;
+
+  if (input) input.value = cached;
+  if (err) err.textContent = '正在恢复上次仓库...';
+
+  const res = await POST('/api/open_repo', { path: cached });
+  if (res && !res.error && res.repo) {
+    if (err) err.textContent = '';
+    showApp(res.repo, res.branch);
+    await refresh();
+    return;
+  }
+
+  if (err) err.textContent = (res && res.error) ? res.error : '恢复失败';
+  try { localStorage.removeItem('lastRepoPath'); } catch (e) {}
 }
 
 // ── Refresh ───────────────────────────────────────────────────────────────────
@@ -1045,6 +1167,7 @@ async function refresh() {
       minute: '2-digit'
     }) : ''
   }));
+  lastBranchesRes = bRes;
   if (bRes.current) document.getElementById('branchName').textContent = bRes.current;
 
   // 重建 checkedSet（保留已有，追加新文件）
@@ -1073,6 +1196,49 @@ async function refresh() {
   btn.style.opacity = '';
   btn.style.pointerEvents = '';
   refreshBusy = false;
+}
+
+async function pullUpdate() {
+  const ok = await showConfirm({
+    title: '更新项目（Pull）',
+    message: '确认从远端拉取最新提交并更新到本地？\n\n若出现冲突，需要你手动解决后再提交。',
+    okText: '开始更新',
+    cancelText: '取消',
+  });
+  if (!ok) return;
+
+  const btn = document.getElementById('pullBtn');
+  if (btn) { btn.style.opacity = '.5'; btn.style.pointerEvents = 'none'; }
+  toast('更新中...','warn');
+
+  const res = await POST('/api/pull', {});
+
+  if (btn) { btn.style.opacity = ''; btn.style.pointerEvents = ''; }
+
+  if (res && res.ok) {
+    toast('✓ 更新完成','ok');
+    await refresh();
+    return;
+  }
+
+  if (res && res.has_conflicts) {
+    const list = (res.conflict_files || []).slice(0, 12).join('\n');
+    const more = (res.conflict_files || []).length > 12 ? `\n... 等 ${(res.conflict_files || []).length} 个文件` : '';
+    await showConfirm({
+      title: '更新发生冲突',
+      message:
+        `检测到合并冲突，请先在本地解决冲突：\n\n${list}${more}\n\n处理建议：\n1) 打开冲突文件，手动解决标记（<<<<<<</=======/>>>>>>>)\n2) 解决后执行提交（commit）\n3) 如需推送，再执行 Push`,
+      okText: '知道了',
+      cancelText: '关闭',
+      danger: true,
+    });
+    await refresh();
+    return;
+  }
+
+  const msg = (res && (res.error || res.msg)) ? (res.error || res.msg) : '更新失败';
+  toast(msg,'err');
+  await refresh();
 }
 
 async function refreshFilesOnly(forceDiffReload=false) {
@@ -1451,13 +1617,42 @@ function ensureDefaultHunkSelection(filepath, hunksLen) {
 
 function ensureDefaultLineSelection(filepath, hunks) {
   const set = getSelectedCommitLinesSet(filepath);
+
+  const desired = commitLinesDesiredByPath.get(filepath);
+  const idx = files.findIndex(f => f && f.path === filepath);
+  const fileChecked = (idx >= 0) ? checkedSet.has(idx) : null;
+
+  // If already initialized, we still need to handle "newly appeared" changed lines when
+  // the file is currently fully selected (e.g. when watching changes).
   if (commitLinesInitByPath.get(filepath)) {
+    let total = 0;
+    const changeKeys = [];
+    (hunks || []).forEach((hunk, hi) => {
+      (hunk.lines || []).forEach((l, li) => {
+        if (l.type === 'added' || l.type === 'removed' || l.type === 'modified') {
+          total++;
+          changeKeys.push(getLineKey(hi, li));
+        }
+      });
+    });
+
+    const prevTotal = commitLinesTotalByPath.get(filepath);
+    commitLinesTotalByPath.set(filepath, total);
+
+    // Only auto-select new change lines when:
+    // - file is checked (not half checked)
+    // - previous state was "all selected" (set.size >= prevTotal)
+    // - not explicitly desired=false
+    if (desired !== false && fileChecked === true && Number.isFinite(prevTotal) && prevTotal >= 0 && set.size >= prevTotal && total > prevTotal) {
+      changeKeys.forEach(k => set.add(k));
+    }
+
+    syncCheckedSetForFile(filepath);
     return set;
   }
 
-  const desired = commitLinesDesiredByPath.get(filepath);
+  // First-time init for this file
   set.clear();
-
   let total = 0;
   (hunks || []).forEach((hunk, hi) => {
     (hunk.lines || []).forEach((l, li) => {
@@ -1673,44 +1868,37 @@ function renderDiffWithFullContext(file, hunks, readonly, changeLocations = []) 
   // Split file into lines
   const lines = workingContent.split('\n');
   console.log('Rendering diff with', lines.length, 'lines,', lineChanges.size, 'changes');
-
-  // Merge adjacent change locations within the same hunk to improve readability
-  const mergedChangeLocations = [];
-  const sortedLocations = (changeLocations || []).slice().sort((a, b) => {
-    const ha = a?.hunkIndex ?? 0;
-    const hb = b?.hunkIndex ?? 0;
-    if (ha !== hb) return ha - hb;
-    const la = a?.lineIndex ?? 0;
-    const lb = b?.lineIndex ?? 0;
-    return la - lb;
-  });
-  for (const ch of sortedLocations) {
-    const ln = Number(ch?.lineNumber);
-    if (!Number.isFinite(ln)) continue;
-    const last = mergedChangeLocations.length ? mergedChangeLocations[mergedChangeLocations.length - 1] : null;
-    if (
-      last &&
-      last.hunkIndex === ch.hunkIndex &&
-      last.type === ch.type &&
-      ln === (last.endLine + 1)
-    ) {
-      last.endLine = ln;
-      last.endLineIndex = ch.lineIndex;
-    } else {
-      mergedChangeLocations.push({
-        hunkIndex: ch.hunkIndex,
-        startLineIndex: ch.lineIndex,
-        endLineIndex: ch.lineIndex,
-        startLine: ln,
-        endLine: ln,
-        type: ch.type,
-      });
-    }
-  }
   
   // Build change navigation bar
   let navigationHtml = '';
-  if (mergedChangeLocations.length > 0) {
+  if (changeLocations.length > 0) {
+    // Merge consecutive line numbers into ranges for display
+    const mergedChangeLocations = (() => {
+      const items = (changeLocations || [])
+        .filter(c => c && Number.isFinite(Number(c.lineNumber)))
+        .map(c => ({...c, lineNumber: Number(c.lineNumber)}))
+        .sort((a, b) => a.lineNumber - b.lineNumber);
+      const out = [];
+      for (const c of items) {
+        const last = out[out.length - 1];
+        if (last && c.lineNumber === last._end + 1) {
+          last._end = c.lineNumber;
+          // If a range contains mixed types, present as modified
+          if (last.type !== c.type) last.type = 'modified';
+          continue;
+        }
+        out.push({
+          ...c,
+          _start: c.lineNumber,
+          _end: c.lineNumber,
+        });
+      }
+      return out.map(x => ({
+        ...x,
+        displayText: (x._start === x._end) ? String(x._start) : `${x._start}~${x._end}`
+      }));
+    })();
+
     navigationHtml = `<div class="change-navigation">
       <span style="font-size:10px; color:var(--text3); margin-right:10px;">修改位置:</span>
       ${mergedChangeLocations.map((change, index) => {
@@ -1719,9 +1907,8 @@ function renderDiffWithFullContext(file, hunks, readonly, changeLocations = []) 
         else if (change.type === 'removed') typeClass = 'change-removed';
         else if (change.type === 'modified') typeClass = 'change-modified';
         
-        const label = (change.endLine > change.startLine) ? `${change.startLine}~${change.endLine}` : `${change.startLine}`;
-        return `<a href="#" class="change-nav-item ${typeClass}" onclick="scrollToLine(${change.startLine}); return false;">
-          ${label}
+        return `<a href="#" class="change-nav-item ${typeClass}" onclick="scrollToLine(${change.lineNumber}); return false;">
+          ${change.displayText || change.lineNumber}
         </a>`;
       }).join('')}
     </div>`;
@@ -2083,9 +2270,6 @@ function renderDiffWithFullContext(file, hunks, readonly, changeLocations = []) 
         ` onmouseenter="showDiffTooltip('${escJsString(line.tip)}', event)" onmousemove="moveDiffTooltip(event)" onmouseleave="hideDiffTooltip()"` : '';
 
       let content = esc(line.text);
-      if (!readonly && (line.type === 'added' || line.type === 'modified')) {
-        content = `<textarea class="editable-line" data-path="${file.path}" data-hunk="${line.hunkIndex}" data-line="${line.originalLineIndex}" data-type="${line.type}" style="width:100%;border:none;background:transparent;resize:none;outline:none;font-family:inherit;font-size:inherit;line-height:20px;height:20px;overflow:hidden;color:inherit;min-height:20px;">${line.text}</textarea>`;
-      }
 
       if (line.type === 'removed' && !content) {
         content = `<span style="color:var(--text3)">[已删除]</span>`;
@@ -2108,24 +2292,99 @@ function renderDiffWithFullContext(file, hunks, readonly, changeLocations = []) 
       const hdrText = hunk.header || '';
       rows += `<div class="hunk-hdr"><span class="hunk-info">${esc(hdrText)}</span></div>`;
 
-      (hunk.lines || []).forEach((l, lineIndex) => {
-        const cur = {
-          type: l.type,
-          hunkIndex,
-          originalLineIndex: lineIndex,
-          num: (l.new ?? l.old ?? ''),
-          text: (l.type === 'context') ? (l.text ?? '') : (l.type === 'removed' ? '' : (l.text ?? '')),
-          tip: (l.type === 'modified') ? (l.old_text ?? '') : (l.type === 'removed' ? (l.text ?? '') : '')
-        };
-
-        const curNum = Number(cur.num);
-        if (firstShownNum === null && Number.isFinite(curNum)) firstShownNum = curNum;
-        if (Number.isFinite(curNum) && lastShownNum !== null && Number.isFinite(lastShownNum) && curNum > lastShownNum + 1) {
-          rows += renderGapRow(lastShownNum, curNum);
+      const renderHintRow = (count, startIdx, endIdx) => {
+        let total = 0;
+        let sel = 0;
+        const h = (hunks || [])[hunkIndex];
+        if (h && Array.isArray(h.lines)) {
+          for (let li = startIdx; li <= endIdx; li++) {
+            const l = h.lines[li];
+            if (!l) continue;
+            if (l.type === 'added' || l.type === 'removed' || l.type === 'modified') {
+              total++;
+              if (selectedLinesSet.has(getLineKey(hunkIndex, li))) sel++;
+            }
+          }
         }
-        rows += renderLine(cur);
-        if (Number.isFinite(curNum)) lastShownNum = curNum;
-      });
+        const isAll = total > 0 && sel === total;
+        const isNone = sel === 0;
+        const isPart = !isAll && !isNone;
+        const checkedAttr = isAll ? 'checked' : '';
+        const indetAttr = isPart ? 'data-indet="1"' : '';
+        const commitCb = (!readonly) ? `<input class="commit-cb" type="checkbox" ${checkedAttr} ${indetAttr} onclick="event.stopPropagation()" onchange="toggleCommitBlock('${fpEsc}',${hunkIndex},${startIdx},${endIdx},this.checked)">` : '';
+        const btn = (!readonly) ? `<button class="hint-btn" onclick="askRevertMultiLines('${fpEsc}',${hunkIndex},${startIdx},${endIdx},'${file.status}')">块撤回（${count}）</button>` : '';
+        const actions = `<span class="dl-actions">${commitCb}${btn}</span>`;
+        return `<div class="dl revert-block-hint">${actions}<span class="ls"></span><span class="ln"></span><span class="lc"><span class="hint-tag">块撤回</span><span class="hint-text">已识别为连续变更块（${count}行），可一键撤回</span></span></div>`;
+      };
+
+      const lines = (hunk.lines || []);
+      let li = 0;
+      while (li < lines.length) {
+        const l = lines[li];
+        const isChangeLine = l && (l.type === 'added' || l.type === 'removed' || l.type === 'modified');
+        if (!isChangeLine) {
+          const cur = {
+            type: l.type,
+            hunkIndex,
+            originalLineIndex: li,
+            num: (l.new ?? l.old ?? ''),
+            text: (l.type === 'context') ? (l.text ?? '') : (l.type === 'removed' ? '' : (l.text ?? '')),
+            tip: (l.type === 'modified') ? (l.old_text ?? '') : (l.type === 'removed' ? (l.text ?? '') : '')
+          };
+
+          const curNum = Number(cur.num);
+          if (firstShownNum === null && Number.isFinite(curNum)) firstShownNum = curNum;
+          if (Number.isFinite(curNum) && lastShownNum !== null && Number.isFinite(lastShownNum) && curNum > lastShownNum + 1) {
+            rows += renderGapRow(lastShownNum, curNum);
+          }
+          rows += renderLine(cur);
+          if (Number.isFinite(curNum)) lastShownNum = curNum;
+          li++;
+          continue;
+        }
+
+        // Build consecutive same-type + consecutive line-number group
+        const startIdx = li;
+        const t = l.type;
+        let prevNum = Number(l.new ?? l.old ?? NaN);
+        let endIdx = li;
+        li++;
+        while (li < lines.length) {
+          const n = lines[li];
+          const nIsChange = n && (n.type === 'added' || n.type === 'removed' || n.type === 'modified');
+          if (!nIsChange || n.type !== t) break;
+          const nNum = Number(n.new ?? n.old ?? NaN);
+          if (!Number.isFinite(prevNum) || !Number.isFinite(nNum) || nNum !== prevNum + 1) break;
+          prevNum = nNum;
+          endIdx = li;
+          li++;
+        }
+
+        const count = endIdx - startIdx + 1;
+        if (!readonly && count > 1) {
+          rows += renderHintRow(count, startIdx, endIdx);
+        }
+
+        for (let k = startIdx; k <= endIdx; k++) {
+          const x = lines[k];
+          const cur = {
+            type: x.type,
+            hunkIndex,
+            originalLineIndex: k,
+            num: (x.new ?? x.old ?? ''),
+            text: (x.type === 'context') ? (x.text ?? '') : (x.type === 'removed' ? '' : (x.text ?? '')),
+            tip: (x.type === 'modified') ? (x.old_text ?? '') : (x.type === 'removed' ? (x.text ?? '') : '')
+          };
+
+          const curNum = Number(cur.num);
+          if (firstShownNum === null && Number.isFinite(curNum)) firstShownNum = curNum;
+          if (Number.isFinite(curNum) && lastShownNum !== null && Number.isFinite(lastShownNum) && curNum > lastShownNum + 1) {
+            rows += renderGapRow(lastShownNum, curNum);
+          }
+          rows += renderLine(cur);
+          if (Number.isFinite(curNum)) lastShownNum = curNum;
+        }
+      }
     });
 
     if (firstShownNum !== null && firstShownNum > 1) {
@@ -2190,9 +2449,6 @@ function renderDiffWithFullContext(file, hunks, readonly, changeLocations = []) 
         ` onmouseenter="showDiffTooltip('${escJsString(line.tip)}', event)" onmousemove="moveDiffTooltip(event)" onmouseleave="hideDiffTooltip()"` : '';
 
       let content = esc(line.text);
-      if (!readonly && (line.type === 'added' || line.type === 'modified')) {
-        content = `<textarea class="editable-line" data-path="${file.path}" data-hunk="${line.hunkIndex}" data-line="${line.originalLineIndex}" data-type="${line.type}" style="width:100%;border:none;background:transparent;resize:none;outline:none;font-family:inherit;font-size:inherit;line-height:20px;height:20px;overflow:hidden;color:inherit;min-height:20px;">${line.text}</textarea>`;
-      }
 
       if (line.type === 'removed' && !content) {
         content = `<span style="color:var(--text3)">[已删除]</span>`;
@@ -2215,24 +2471,99 @@ function renderDiffWithFullContext(file, hunks, readonly, changeLocations = []) 
       const hdrText = hunk.header || '';
       rows += `<div class="hunk-hdr"><span class="hunk-info">${esc(hdrText)}</span></div>`;
 
-      (hunk.lines || []).forEach((l, lineIndex) => {
-        const cur = {
-          type: l.type,
-          hunkIndex,
-          originalLineIndex: lineIndex,
-          num: (l.new ?? l.old ?? ''),
-          text: (l.type === 'context') ? (l.text ?? '') : (l.type === 'removed' ? '' : (l.text ?? '')),
-          tip: (l.type === 'modified') ? (l.old_text ?? '') : (l.type === 'removed' ? (l.text ?? '') : '')
-        };
-
-        const curNum = Number(cur.num);
-        if (firstShownNum === null && Number.isFinite(curNum)) firstShownNum = curNum;
-        if (Number.isFinite(curNum) && lastShownNum !== null && Number.isFinite(lastShownNum) && curNum > lastShownNum + 1) {
-          rows += renderGapRow(lastShownNum, curNum);
+      const renderHintRow = (count, startIdx, endIdx) => {
+        let total = 0;
+        let sel = 0;
+        const h = (hunks || [])[hunkIndex];
+        if (h && Array.isArray(h.lines)) {
+          for (let li = startIdx; li <= endIdx; li++) {
+            const l = h.lines[li];
+            if (!l) continue;
+            if (l.type === 'added' || l.type === 'removed' || l.type === 'modified') {
+              total++;
+              if (selectedLinesSet.has(getLineKey(hunkIndex, li))) sel++;
+            }
+          }
         }
-        rows += renderLine(cur);
-        if (Number.isFinite(curNum)) lastShownNum = curNum;
-      });
+        const isAll = total > 0 && sel === total;
+        const isNone = sel === 0;
+        const isPart = !isAll && !isNone;
+        const checkedAttr = isAll ? 'checked' : '';
+        const indetAttr = isPart ? 'data-indet="1"' : '';
+        const commitCb = (!readonly) ? `<input class="commit-cb" type="checkbox" ${checkedAttr} ${indetAttr} onclick="event.stopPropagation()" onchange="toggleCommitBlock('${fpEsc}',${hunkIndex},${startIdx},${endIdx},this.checked)">` : '';
+        const btn = (!readonly) ? `<button class="hint-btn" onclick="askRevertMultiLines('${fpEsc}',${hunkIndex},${startIdx},${endIdx},'${file.status}')">块撤回（${count}）</button>` : '';
+        const actions = `<span class="dl-actions">${commitCb}${btn}</span>`;
+        return `<div class="dl revert-block-hint">${actions}<span class="ls"></span><span class="ln"></span><span class="lc"><span class="hint-tag">块撤回</span><span class="hint-text">已识别为连续变更块（${count}行），可一键撤回</span></span></div>`;
+      };
+
+      const lines = (hunk.lines || []);
+      let li = 0;
+      while (li < lines.length) {
+        const l = lines[li];
+        const isChangeLine = l && (l.type === 'added' || l.type === 'removed' || l.type === 'modified');
+        if (!isChangeLine) {
+          const cur = {
+            type: l.type,
+            hunkIndex,
+            originalLineIndex: li,
+            num: (l.new ?? l.old ?? ''),
+            text: (l.type === 'context') ? (l.text ?? '') : (l.type === 'removed' ? '' : (l.text ?? '')),
+            tip: (l.type === 'modified') ? (l.old_text ?? '') : (l.type === 'removed' ? (l.text ?? '') : '')
+          };
+
+          const curNum = Number(cur.num);
+          if (firstShownNum === null && Number.isFinite(curNum)) firstShownNum = curNum;
+          if (Number.isFinite(curNum) && lastShownNum !== null && Number.isFinite(lastShownNum) && curNum > lastShownNum + 1) {
+            rows += renderGapRow(lastShownNum, curNum);
+          }
+          rows += renderLine(cur);
+          if (Number.isFinite(curNum)) lastShownNum = curNum;
+          li++;
+          continue;
+        }
+
+        // Build consecutive same-type + consecutive line-number group
+        const startIdx = li;
+        const t = l.type;
+        let prevNum = Number(l.new ?? l.old ?? NaN);
+        let endIdx = li;
+        li++;
+        while (li < lines.length) {
+          const n = lines[li];
+          const nIsChange = n && (n.type === 'added' || n.type === 'removed' || n.type === 'modified');
+          if (!nIsChange || n.type !== t) break;
+          const nNum = Number(n.new ?? n.old ?? NaN);
+          if (!Number.isFinite(prevNum) || !Number.isFinite(nNum) || nNum !== prevNum + 1) break;
+          prevNum = nNum;
+          endIdx = li;
+          li++;
+        }
+
+        const count = endIdx - startIdx + 1;
+        if (!readonly && count > 1) {
+          rows += renderHintRow(count, startIdx, endIdx);
+        }
+
+        for (let k = startIdx; k <= endIdx; k++) {
+          const x = lines[k];
+          const cur = {
+            type: x.type,
+            hunkIndex,
+            originalLineIndex: k,
+            num: (x.new ?? x.old ?? ''),
+            text: (x.type === 'context') ? (x.text ?? '') : (x.type === 'removed' ? '' : (x.text ?? '')),
+            tip: (x.type === 'modified') ? (x.old_text ?? '') : (x.type === 'removed' ? (x.text ?? '') : '')
+          };
+
+          const curNum = Number(cur.num);
+          if (firstShownNum === null && Number.isFinite(curNum)) firstShownNum = curNum;
+          if (Number.isFinite(curNum) && lastShownNum !== null && Number.isFinite(lastShownNum) && curNum > lastShownNum + 1) {
+            rows += renderGapRow(lastShownNum, curNum);
+          }
+          rows += renderLine(cur);
+          if (Number.isFinite(curNum)) lastShownNum = curNum;
+        }
+      }
     });
 
     if (firstShownNum !== null && firstShownNum > 1) {
@@ -3821,10 +4152,6 @@ async function doCommit(push=false) {
       else toast(`Push 失败: ${pRes.msg}`,'err');
     }
     await refresh();
-
-    if (!push && (res?.full_hash || res?.hash)) {
-      openCommitAfterLocalCommit(res.full_hash || res.hash);
-    }
   } catch (error) {
     toast(`提交失败: ${error.message}`,'err');
   } finally {
@@ -3836,159 +4163,6 @@ async function doCommit(push=false) {
 }
 
 // ── Log ───────────────────────────────────────────────────────────────────────
-function activateRightTab(name) {
-  const tabs = Array.from(document.querySelectorAll('.right-panel .vtabs .vtab'));
-  const idx = name === 'log' ? 1 : 0;
-  const el = tabs[idx] || tabs[0];
-  if (el) switchTab(name, el);
-}
-
-function updateCommitActionButtons(pushed) {
-  const rb = document.getElementById('revertCommitBtn');
-  const pb = document.getElementById('pushCommitBtn');
-
-  // pushed === true  => show Revert, hide Push
-  // pushed === false => show Push,  hide Revert
-  // pushed === null  => hide both (loading/unknown)
-  if (rb) rb.style.display = (pushed === true) ? '' : 'none';
-  if (pb) pb.style.display = (pushed === false) ? '' : 'none';
-}
-
-function setCommitActionButtonsDisabled(disabled) {
-  const rb = document.getElementById('revertCommitBtn');
-  const pb = document.getElementById('pushCommitBtn');
-  if (rb) rb.disabled = !!disabled;
-  if (pb) pb.disabled = !!disabled;
-}
-
-function showConfirm(opts = {}) {
-  const title = opts.title || '确认操作';
-  const message = opts.message || '';
-  const okText = opts.okText || '确定';
-  const cancelText = opts.cancelText || '取消';
-  const danger = !!opts.danger;
-
-  const overlay = document.getElementById('confirmModal');
-  const titleEl = document.getElementById('confirmTitle');
-  const descEl = document.getElementById('confirmDesc');
-  const okBtn = document.getElementById('confirmOkBtn');
-  const cancelBtn = document.getElementById('confirmCancelBtn');
-  if (!overlay || !titleEl || !descEl || !okBtn || !cancelBtn) {
-    return Promise.resolve(false);
-  }
-
-  titleEl.textContent = title;
-  descEl.textContent = message;
-  okBtn.textContent = okText;
-  cancelBtn.textContent = cancelText;
-
-  okBtn.classList.toggle('red', danger);
-  okBtn.classList.toggle('blue', !danger);
-
-  overlay.classList.add('show');
-
-  return new Promise(resolve => {
-    let done = false;
-    const finish = (val) => {
-      if (done) return;
-      done = true;
-      overlay.classList.remove('show');
-      okBtn.removeEventListener('click', onOk);
-      cancelBtn.removeEventListener('click', onCancel);
-      overlay.removeEventListener('click', onOverlay);
-      document.removeEventListener('keydown', onKey);
-      resolve(val);
-    };
-    const onOk = () => finish(true);
-    const onCancel = () => finish(false);
-    const onOverlay = (e) => { if (e.target === overlay) finish(false); };
-    const onKey = (e) => { if (e.key === 'Escape') finish(false); };
-
-    okBtn.addEventListener('click', onOk);
-    cancelBtn.addEventListener('click', onCancel);
-    overlay.addEventListener('click', onOverlay);
-    document.addEventListener('keydown', onKey);
-  });
-}
-
-async function pullUpdate() {
-  const ok = await showConfirm({
-    title: '更新项目（Pull）',
-    message: '确认从远端拉取最新提交并更新到本地？\n\n若出现冲突，需要你手动解决后再提交。',
-    okText: '开始更新',
-    cancelText: '取消',
-  });
-  if (!ok) return;
-
-  const btn = document.getElementById('pullBtn');
-  if (btn) { btn.style.opacity = '.5'; btn.style.pointerEvents = 'none'; }
-  toast('更新中...','warn');
-
-  const res = await POST('/api/pull', {});
-
-  if (btn) { btn.style.opacity = ''; btn.style.pointerEvents = ''; }
-
-  if (res && res.ok) {
-    toast('✓ 更新完成','ok');
-    await refresh();
-    return;
-  }
-
-  if (res && res.has_conflicts) {
-    const list = (res.conflict_files || []).slice(0, 12).join('\n');
-    const more = (res.conflict_files || []).length > 12 ? `\n... 等 ${(res.conflict_files || []).length} 个文件` : '';
-    await showConfirm({
-      title: '更新发生冲突',
-      message:
-        `检测到合并冲突，请先在本地解决冲突：\n\n${list}${more}\n\n处理建议：\n1) 打开冲突文件，手动解决标记（<<<<<<</=======/>>>>>>>)\n2) 解决后执行提交（commit）\n3) 如需推送，再执行 Push`,
-      okText: '知道了',
-      cancelText: '关闭',
-      danger: true,
-    });
-    await refresh();
-    return;
-  }
-
-  const msg = (res && (res.error || res.msg)) ? (res.error || res.msg) : '更新失败';
-  toast(msg,'err');
-  await refresh();
-}
-
-async function openCommitAfterLocalCommit(commitHash) {
-  const ok = await showConfirm({
-    title: '提交已完成',
-    message: `${commitHash}\n\n是否跳转到历史中查看该提交，并可手动 Push？`,
-    okText: '跳转到历史',
-    cancelText: '稍后',
-  });
-  if (!ok) return;
-  activateRightTab('log');
-  await refresh();
-  await openCommit(commitHash);
-}
-
-async function pushFromHistory() {
-  const ok = await showConfirm({
-    title: '推送到远端',
-    message: '确认推送当前分支到远端？',
-    okText: '推送',
-    cancelText: '取消',
-  });
-  if (!ok) return;
-
-  setCommitActionButtonsDisabled(true);
-  toast('推送中...','warn');
-  const res = await POST('/api/push',{});
-  if (res.ok) toast('✓ Push 完成','ok');
-  else toast(`Push 失败: ${res.msg||res.error}`,'err');
-  await refresh();
-
-  if (curCommit && (curCommit.full_hash || curCommit.hash)) {
-    await openCommit(curCommit.full_hash || curCommit.hash);
-  }
-  setCommitActionButtonsDisabled(false);
-}
-
 function renderLogList() {
   const el    = document.getElementById('logList');
   const q     = logFilter.toLowerCase();
@@ -4024,6 +4198,61 @@ function renderLogList() {
 }
 
 function filterLog(q) { debouncedFilterLog(q); }
+
+// ── Log actions ───────────────────────────────────────────────────────────────
+function activateRightTab(name) {
+  const tabs = Array.from(document.querySelectorAll('.right-panel .vtabs .vtab'));
+  const idx = name === 'log' ? 1 : 0;
+  const el = tabs[idx] || tabs[0];
+  if (el) switchTab(name, el);
+}
+
+function updateCommitActionButtons(pushed) {
+  const rb = document.getElementById('revertCommitBtn');
+  const pb = document.getElementById('pushCommitBtn');
+
+  // pushed === true  => show Revert, hide Push
+  // pushed === false => show Push,  hide Revert
+  // pushed === null  => hide both (loading/unknown)
+  if (rb) rb.style.display = (pushed === true) ? '' : 'none';
+  if (pb) pb.style.display = (pushed === false) ? '' : 'none';
+}
+
+async function openCommitAfterLocalCommit(commitHash) {
+  const ok = confirm(`提交已完成：\n\n${commitHash}\n\n是否跳转到历史中查看该提交，并可手动 Push？`);
+  if (!ok) return;
+  activateRightTab('log');
+  await refresh();
+  await openCommit(commitHash);
+}
+
+async function pushFromHistory() {
+  const ok = confirm('确认推送当前分支到远端？');
+  if (!ok) return;
+  toast('推送中...','warn');
+  const res = await POST('/api/push',{});
+  if (res.ok) toast('✓ Push 完成','ok');
+  else toast(`Push 失败: ${res.msg||res.error}`,'err');
+  await refresh();
+}
+
+async function revertCommitFromHistory() {
+  const fullHash = (curCommit && (curCommit.full_hash || curCommit.hash)) ? (curCommit.full_hash || curCommit.hash) : '';
+  if (!fullHash) return;
+  const ok = confirm(`确认撤回该提交（git revert）？\n\n${fullHash}\n\n此操作会生成一个新的回滚提交。`);
+  if (!ok) return;
+  toast('撤回中...','warn');
+  const res = await POST('/api/revert_commit', {hash: fullHash});
+  if (res && res.ok) {
+    toast('✓ Revert 完成','ok');
+    await refresh();
+    // revert 会产生新提交，刷新历史列表
+    activateRightTab('log');
+  } else {
+    toast(`Revert 失败: ${(res && (res.msg||res.error)) ? (res.msg||res.error) : '未知错误'}`,'err');
+    await refresh();
+  }
+}
 
 async function openCommit(fullHash) {
   // Switch to detail sub-view
@@ -4080,44 +4309,9 @@ async function openCommit(fullHash) {
   }).join('');
 }
 
-async function revertCommitFromHistory() {
-  if (!curCommit || !(curCommit.full_hash || curCommit.hash)) {
-    toast('未选择提交','err');
-    return;
-  }
-  const commitHash = curCommit.full_hash || curCommit.hash;
-  const ok = await showConfirm({
-    title: '撤回该提交',
-    message:
-      `将执行 git revert：\n\n${commitHash}\n\n注意：\n1) 会产生一个新的回滚提交\n2) 若有冲突，需要你手动解决后再继续\n`,
-    okText: '确认撤回',
-    cancelText: '取消',
-    danger: true,
-  });
-  if (!ok) return;
-
-  setCommitActionButtonsDisabled(true);
-  const res = await POST('/api/revert_commit', {hash: commitHash});
-  if (res.ok) {
-    toast('✓ 已撤回该提交（已生成新的回滚提交）','ok');
-    await refresh();
-    backToLog();
-  } else {
-    toast(res.error||res.msg||'撤回失败','err');
-    await refresh();
-  }
-  setCommitActionButtonsDisabled(false);
-}
-
 async function restoreFromCommit(commitHash, filepath) {
   if (!commitHash || !filepath) return;
-  const ok = await showConfirm({
-    title: '整文件恢复',
-    message: `将工作区文件恢复为该提交版本：\n\n${filepath}\n\n此操作会覆盖当前工作区内容，是否继续？`,
-    okText: '确认恢复',
-    cancelText: '取消',
-    danger: true,
-  });
+  const ok = confirm(`将工作区文件恢复为该提交版本：\n\n${filepath}\n\n此操作会覆盖当前工作区内容，是否继续？`);
   if (!ok) return;
   const res = await POST('/api/restore_file', {hash: commitHash, path: filepath});
   if (res.ok) {
@@ -4153,7 +4347,6 @@ function backToLog() {
   document.getElementById('tabLogDetail').classList.remove('show');
   document.getElementById('tabLog').classList.add('show');
   curCommit = null; curCommitFiles = []; curLogFile = null;
-  updateCommitActionButtons(null);
 }
 
 // ── Tab switching ─────────────────────────────────────────────────────────────
@@ -4178,6 +4371,187 @@ function showModal(id) {
 }
 function closeModal(id) { document.getElementById(id).classList.remove('show'); }
 
+function showConfirm({title='确认', message='', okText='确定', cancelText='取消', danger=false, hideCancel=false}={}) {
+  return new Promise(resolve => {
+    const m = document.getElementById('confirmModal');
+    const t = document.getElementById('confirmTitle');
+    const msg = document.getElementById('confirmMessage');
+    const ok = document.getElementById('confirmOkBtn');
+    const cancel = document.getElementById('confirmCancelBtn');
+
+    t.textContent = title;
+    msg.textContent = message;
+    ok.textContent = okText;
+    cancel.textContent = cancelText;
+
+    ok.className = danger ? 'btn red' : 'btn blue';
+    cancel.style.display = hideCancel ? 'none' : '';
+
+    const cleanup = () => {
+      ok.onclick = null;
+      cancel.onclick = null;
+      m.onclick = null;
+    };
+
+    ok.onclick = () => { cleanup(); closeModal('confirmModal'); resolve(true); };
+    cancel.onclick = () => { cleanup(); closeModal('confirmModal'); resolve(false); };
+    m.onclick = (e) => {
+      if (e.target === m) {
+        cleanup();
+        closeModal('confirmModal');
+        resolve(false);
+      }
+    };
+
+    m.classList.add('show');
+  });
+}
+
+function renderBranchMenu() {
+  const menu = document.getElementById('branchMenu');
+  const list = document.getElementById('branchMenuList');
+  if (!menu || !list) return;
+
+  const cur = (lastBranchesRes && lastBranchesRes.current) ? lastBranchesRes.current : (document.getElementById('branchName')?.textContent || '').trim();
+  let branches = (lastBranchesRes && Array.isArray(lastBranchesRes.branches)) ? lastBranchesRes.branches : [];
+  const q = (branchMenuQuery || '').trim().toLowerCase();
+  if (q) {
+    branches = branches.filter(x => String(x || '').toLowerCase().includes(q));
+  }
+
+  if (!branches.length) {
+    list.innerHTML = `<div style="padding:10px 8px; color:var(--text3); font-size:11px">无分支信息</div>`;
+    return;
+  }
+
+  const locals = branches.filter(x => !String(x || '').trim().startsWith('remotes/'));
+  const remotes = branches.filter(x => String(x || '').trim().startsWith('remotes/'));
+
+  const renderItems = (arr, scopeLabel) => arr.map(b => {
+    const name = String(b || '').trim();
+    const isRemote = name.startsWith('remotes/');
+    const active = (name === cur);
+    const dotClass = isRemote ? 'remote' : 'local';
+    return `<div class="bm-item ${active ? 'active' : ''}" data-branch="${esc(name)}" onclick="selectBranchFromMenu(this)">
+      <span class="bm-dot ${dotClass}"></span>
+      <span class="bm-name">${esc(name)}</span>
+      <span class="bm-scope">${scopeLabel}</span>
+    </div>`;
+  }).join('');
+
+  let html = '';
+  if (locals.length) {
+    html += `<div class="bm-section">local</div>` + renderItems(locals, 'local');
+  }
+  if (remotes.length) {
+    html += `<div class="bm-section">remote</div>` + renderItems(remotes, 'remote');
+  }
+  if (!html) {
+    html = `<div style="padding:10px 8px; color:var(--text3); font-size:11px">无匹配分支</div>`;
+  }
+  list.innerHTML = html;
+}
+
+function toggleBranchMenu(forceOpen = null) {
+  const menu = document.getElementById('branchMenu');
+  if (!menu) return;
+  const wantOpen = (forceOpen === null) ? (!menu.classList.contains('show')) : !!forceOpen;
+  if (wantOpen) menu.classList.add('show');
+  else menu.classList.remove('show');
+}
+
+function closeBranchMenu() {
+  toggleBranchMenu(false);
+}
+
+async function selectBranchFromMenu(el) {
+  const b = (el && el.getAttribute('data-branch')) ? el.getAttribute('data-branch') : '';
+  const branch = (b || '').trim();
+  if (!branch) return;
+
+  const cur = (lastBranchesRes && lastBranchesRes.current) ? lastBranchesRes.current : (document.getElementById('branchName')?.textContent || '').trim();
+  if (branch === cur) {
+    closeBranchMenu();
+    return;
+  }
+
+  const ok = await showConfirm({
+    title: '切换分支',
+    message: `确认切换到分支：${branch} ?\n\n若工作区有未提交修改，将拒绝切换。`,
+    okText: '切换',
+    cancelText: '取消',
+  });
+  if (!ok) return;
+
+  toast('切换中...','info');
+  const res = await POST('/api/switch_branch', {branch});
+  if (res && res.ok) {
+    if (res.current) document.getElementById('branchName').textContent = res.current;
+    toast('✓ 已切换分支','ok');
+    closeBranchMenu();
+    await refresh();
+    return;
+  }
+
+  const msg = (res && (res.error || res.msg)) ? (res.error || res.msg) : '切换分支失败';
+  await showConfirm({
+    title: '切换失败',
+    message: msg + ((res && res.output) ? `\n\n${res.output}` : ''),
+    okText: '知道了',
+    hideCancel: true,
+    danger: true,
+  });
+  closeBranchMenu();
+  await refresh();
+}
+
+function initBranchDropdown() {
+  const tag = document.getElementById('branchTag');
+  const menu = document.getElementById('branchMenu');
+  const search = document.getElementById('branchMenuSearch');
+  if (!tag || !menu) return;
+
+  if (!tag.getAttribute('data-branch-inited')) {
+    tag.setAttribute('data-branch-inited', '1');
+    tag.style.cursor = 'pointer';
+    tag.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      branchMenuQuery = '';
+      if (search) search.value = '';
+      if (!lastBranchesRes || !Array.isArray(lastBranchesRes.branches) || !lastBranchesRes.branches.length) {
+        const bRes = await GET('/api/branches');
+        lastBranchesRes = bRes;
+      }
+      renderBranchMenu();
+      toggleBranchMenu();
+      if (search) setTimeout(() => search.focus(), 0);
+    });
+  }
+
+  if (!document.body.getAttribute('data-branch-body-inited')) {
+    document.body.setAttribute('data-branch-body-inited','1');
+    document.addEventListener('click', () => closeBranchMenu());
+    menu.addEventListener('click', (e) => e.stopPropagation());
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeBranchMenu();
+    });
+
+    if (search) {
+      search.addEventListener('click', (e) => e.stopPropagation());
+      search.addEventListener('input', () => {
+        branchMenuQuery = (search.value || '');
+        renderBranchMenu();
+      });
+      search.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          closeBranchMenu();
+        }
+      });
+    }
+  }
+}
+
 document.querySelectorAll('.overlay').forEach(o =>
   o.addEventListener('click', e => { if (e.target===o) o.classList.remove('show'); }));
 
@@ -4188,62 +4562,6 @@ function toast(msg, type='info') {
   document.body.appendChild(el);
   setTimeout(()=>{ el.style.opacity='0'; el.style.transition='opacity .3s';
     setTimeout(()=>el.remove(),300); }, 2800);
-}
-
-function enableHorizontalScrollForChangeNavigation() {
-  // Wheel: use vertical wheel to scroll horizontally when hovering the bar
-  document.addEventListener('wheel', (e) => {
-    const nav = e.target && (e.target.closest ? e.target.closest('.change-navigation') : null);
-    if (!nav) return;
-    if (Math.abs(e.deltaY) < 1) return;
-    // Let trackpad horizontal scrolling (deltaX) work naturally; we only map deltaY
-    nav.scrollLeft += e.deltaY;
-    e.preventDefault();
-  }, { passive: false });
-
-  // Drag-to-scroll with mouse
-  let dragNav = null;
-  let dragStartX = 0;
-  let dragStartLeft = 0;
-  let dragging = false;
-
-  document.addEventListener('mousedown', (e) => {
-    const nav = e.target && (e.target.closest ? e.target.closest('.change-navigation') : null);
-    if (!nav) return;
-    // Only left button
-    if (e.button !== 0) return;
-    dragNav = nav;
-    dragStartX = e.clientX;
-    dragStartLeft = nav.scrollLeft;
-    dragging = false;
-    nav.style.cursor = 'grabbing';
-    nav.style.userSelect = 'none';
-  });
-
-  document.addEventListener('mousemove', (e) => {
-    if (!dragNav) return;
-    const dx = e.clientX - dragStartX;
-    if (!dragging && Math.abs(dx) < 3) return;
-    dragging = true;
-    dragNav.scrollLeft = dragStartLeft - dx;
-  });
-
-  document.addEventListener('mouseup', () => {
-    if (!dragNav) return;
-    dragNav.style.cursor = '';
-    dragNav.style.userSelect = '';
-    dragNav = null;
-    dragging = false;
-  });
-
-  // Prevent accidental click when user was dragging
-  document.addEventListener('click', (e) => {
-    if (!dragging) return;
-    const nav = e.target && (e.target.closest ? e.target.closest('.change-navigation') : null);
-    if (!nav) return;
-    e.preventDefault();
-    e.stopPropagation();
-  }, true);
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -4272,57 +4590,62 @@ function makeResizer(id, targetSel, dir='right') {
     el.style.width=el.style.minWidth=el.style.maxWidth=w+'px';
   });
   document.addEventListener('mouseup', ()=>{
-    if (drag) {
-      drag=false; rz.classList.remove('drag');
-      document.body.style.cursor='';
-      document.body.style.userSelect='';
-    }
+    if (!drag) return;
+    drag=false;
+    rz.classList.remove('drag');
+    document.body.style.cursor='';
+    document.body.style.userSelect='';
+    setTimeout(() => { try { refresh(); } catch(e) {} }, 0);
   });
 }
-makeResizer('r1','.sidebar','right');
-makeResizer('r2','#rightPanel','left');
 
-// ── Boot ──────────────────────────────────────────────────────────────────────
-window.addEventListener('load', async () => {
-  const res = await GET('/api/status').catch(()=>null);
-  if (res?.valid && res.repo) {
-    const b = await GET('/api/branches');
-    showApp(res.repo, b.current||'main');
-    await refresh();
+function updatePanelToggleButtons() {
+  const app = document.getElementById('app');
+  if (!app) return;
+
+  const leftCollapsed = app.classList.contains('left-collapsed');
+  const rightCollapsed = app.classList.contains('right-collapsed');
+
+  const leftBtn = document.getElementById('toggleLeftBtn');
+  if (leftBtn) {
+    leftBtn.title = leftCollapsed ? '展开左侧栏' : '收起左侧栏';
+    leftBtn.innerHTML = leftCollapsed
+      ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>'
+      : '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>';
   }
 
-  enableHorizontalScrollForChangeNavigation();
-  
-  // 启动WebSocket心跳
-  startWebSocketHeartbeat();
-  
-  // 添加Ctrl+S快捷保存
-  document.addEventListener('keydown', (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === 's') {
-      e.preventDefault();
-      if (curFile) {
-        // 保存文件
-        saveFile(files[curFile].path);
-      }
-    }
-  });
-  
-  // 为可编辑文本框添加事件监听器
-  document.addEventListener('click', (e) => {
-    if (e.target.classList.contains('editable-line')) {
-      e.target.focus();
-    }
-  });
-  
-  // 为可编辑文本框添加自动调整高度的功能
-  document.addEventListener('input', (e) => {
-    if (e.target.classList.contains('editable-line')) {
-      const textarea = e.target;
-      textarea.style.height = 'auto';
-      textarea.style.height = Math.min(textarea.scrollHeight, 100) + 'px';
-    }
-  });
-});
+  const rightBtn = document.getElementById('toggleRightBtn');
+  if (rightBtn) {
+    rightBtn.title = rightCollapsed ? '展开右侧栏' : '收起右侧栏';
+    rightBtn.innerHTML = rightCollapsed
+      ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>'
+      : '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>';
+  }
+}
+
+function toggleLeftPanel() {
+  const app = document.getElementById('app');
+  if (!app) return;
+  app.classList.toggle('left-collapsed');
+  updatePanelToggleButtons();
+}
+
+function toggleRightPanel() {
+  const app = document.getElementById('app');
+  if (!app) return;
+  app.classList.toggle('right-collapsed');
+  updatePanelToggleButtons();
+}
+
+makeResizer('r1','.sidebar','right');
+makeResizer('r2','#rightPanel','left');
+updatePanelToggleButtons();
+
+(async () => {
+  try {
+    await tryAutoOpenRepoOnLoad();
+  } catch (e) {}
+})();
 </script>
 </body>
 </html>

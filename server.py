@@ -253,7 +253,12 @@ def handle_websocket(websocket: ServerConnection):
         logger.error(f"WebSocket连接异常: {e}")
     finally:
         ws_clients.discard(websocket)
-        logger.info(f"WebSocket连接关闭: {websocket.remote_address}")
+        ra = None
+        try:
+            ra = websocket.remote_address
+        except Exception:
+            ra = None
+        logger.info(f"WebSocket连接关闭: {ra}")
 
 
 def start_websocket_server():
@@ -356,6 +361,104 @@ def run_git(args, cwd=None, input_data=None, timeout=60):
     except Exception as e:
         logger.error(f"Git 命令执行异常: {cmd_str} - {str(e)}", exc_info=True)
         return "", str(e), 1
+
+def get_unmerged_files():
+    """Return a list of unmerged (conflicted) files in the working tree.
+
+    Used by /api/pull to detect merge conflicts.
+    Returns: (files: List[str], raw_output: str)
+    """
+    if not REPO_PATH:
+        return [], ""
+
+    # Prefer diff-filter=U which directly lists unmerged paths
+    out, err, code = run_git(["diff", "--name-only", "--diff-filter=U", "-z"], timeout=60)
+    raw = (out or "")
+    if code != 0:
+        # Fallback to ls-files -u when diff fails
+        out2, err2, code2 = run_git(["ls-files", "-u", "-z"], timeout=60)
+        raw = (out2 or "")
+        if code2 != 0:
+            logger.debug(f"获取冲突文件失败: {err or err2}")
+            return [], raw
+
+        # ls-files -u -z format: <mode> <sha> <stage>\t<path>\0 ...
+        files = []
+        for item in raw.split("\x00"):
+            if not item:
+                continue
+            if "\t" in item:
+                path = item.split("\t", 1)[1]
+                if path:
+                    files.append(path)
+        uniq = sorted({p.replace("\\", "/") for p in files if p})
+        return uniq, raw
+
+    items = [p for p in raw.split("\x00") if p]
+    uniq = sorted({p.replace("\\", "/") for p in items if p})
+    return uniq, raw
+
+def _safe_repo_abspath(rel_path: str):
+    """Resolve a repo-relative path to an absolute path, preventing path traversal."""
+    if not REPO_PATH:
+        return None
+    rel_path = (rel_path or "").replace("\\", "/").lstrip("/")
+    abs_path = os.path.abspath(os.path.join(REPO_PATH, rel_path.replace("/", os.sep)))
+    repo_root = os.path.abspath(REPO_PATH)
+    try:
+        if os.path.commonpath([repo_root, abs_path]) != repo_root:
+            return None
+    except Exception:
+        return None
+    return abs_path
+
+
+def get_file_content(filepath: str):
+    """Read working tree file content as text."""
+    try:
+        full = _safe_repo_abspath(filepath)
+        if not full or (not os.path.exists(full)) or os.path.isdir(full):
+            return None
+        with open(full, "rb") as f:
+            data = f.read()
+        for enc in ("utf-8", "utf-8-sig", "gbk", "gb2312", "cp936"):
+            try:
+                return data.decode(enc)
+            except Exception:
+                continue
+        return data.decode("utf-8", errors="replace")
+    except Exception as e:
+        logger.error(f"读取文件内容失败: {filepath} - {e}")
+        return None
+
+
+def get_head_file_content(filepath: str):
+    """Read HEAD version file content as text via git show."""
+    filepath = (filepath or "").replace("\\", "/").lstrip("/")
+    if not filepath:
+        return None
+    out, err, code = run_git(["show", f"HEAD:{filepath}"])
+    if code != 0:
+        logger.debug(f"读取 HEAD 文件内容失败: {filepath} - {err}")
+        return None
+    return out
+
+
+def save_file_content(filepath: str, content: str):
+    """Save content to working tree file (text)."""
+    try:
+        full = _safe_repo_abspath(filepath)
+        if not full:
+            return False, "非法路径"
+        parent = os.path.dirname(full)
+        if parent and (not os.path.exists(parent)):
+            os.makedirs(parent, exist_ok=True)
+        with open(full, "w", encoding="utf-8", newline="\n") as f:
+            f.write(content if content is not None else "")
+        return True, "保存成功"
+    except Exception as e:
+        logger.error(f"保存文件失败: {filepath} - {e}", exc_info=True)
+        return False, str(e)
 
 # ════════════════════════════════════════════════════════
 #  工作区变更文件
@@ -618,6 +721,380 @@ def parse_diff(text):
     logger.debug(f"解析完成，共 {len(hunks)} 个 hunk")
     return hunks
 
+
+def _get_raw_file_diff_patch(filepath, status, ctx_lines=5):
+    try:
+        ctx_lines = int(ctx_lines)
+    except Exception:
+        ctx_lines = 5
+    if ctx_lines < 0:
+        ctx_lines = 0
+    if ctx_lines > 200:
+        ctx_lines = 200
+
+    filepath = (filepath or "").replace("\\", "/").lstrip("/")
+    if not filepath:
+        return None, "缺少 path"
+
+    st = (status or "").strip().upper() or "M"
+    if st == "U":
+        return None, "未跟踪文件不支持按行/按块撤回"
+
+    unified_arg = f"--unified={ctx_lines}"
+    for args in (
+        ["diff", "HEAD", unified_arg, "--", filepath],
+        ["diff", unified_arg, "--", filepath],
+        ["diff", "--cached", unified_arg, "--", filepath],
+    ):
+        out, err, code = run_git(args)
+        if code == 0 and (out or "").strip():
+            return out, None
+
+    return "", None
+
+
+def _parse_unified_patch_with_mapping(patch_text: str):
+    lines = (patch_text or "").splitlines(True)  # keep line endings
+    file_header = []
+    hunks = []
+
+    cur = None
+    removed_buf = []  # [raw_idx]
+
+    def flush_removed():
+        nonlocal removed_buf, cur
+        while removed_buf:
+            raw_idx = removed_buf.pop(0)
+            pi = cur["parsed_idx"]
+            cur["map"][pi] = [raw_idx]
+            cur["parsed_idx"] += 1
+
+    for ln in lines:
+        m = re.match(r'^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@', ln)
+        if m:
+            if cur:
+                flush_removed()
+                hunks.append(cur)
+            cur = {
+                "header": ln.rstrip("\n"),
+                "old_start": int(m.group(1)),
+                "new_start": int(m.group(3)),
+                "raw_lines": [],
+                "map": {},
+                "parsed_idx": 0,
+            }
+            continue
+
+        if not cur:
+            file_header.append(ln)
+            continue
+
+        cur["raw_lines"].append(ln)
+        raw_idx = len(cur["raw_lines"]) - 1
+
+        if ln.startswith("+"):
+            if removed_buf:
+                old_raw_idx = removed_buf.pop(0)
+                pi = cur["parsed_idx"]
+                cur["map"][pi] = [old_raw_idx, raw_idx]
+                cur["parsed_idx"] += 1
+            else:
+                pi = cur["parsed_idx"]
+                cur["map"][pi] = [raw_idx]
+                cur["parsed_idx"] += 1
+        elif ln.startswith("-"):
+            removed_buf.append(raw_idx)
+        else:
+            flush_removed()
+            pi = cur["parsed_idx"]
+            cur["map"][pi] = [raw_idx]
+            cur["parsed_idx"] += 1
+
+    if cur:
+        flush_removed()
+        hunks.append(cur)
+
+    for h in hunks:
+        h.pop("parsed_idx", None)
+    return file_header, hunks
+
+
+def _build_partial_hunk_patch(file_header_lines, hunk, include_raw_idx_set):
+    old_ln = int(hunk.get("old_start") or 0)
+    new_ln = int(hunk.get("new_start") or 0)
+    start_old = None
+    start_new = None
+    old_len = 0
+    new_len = 0
+    out_lines = []
+
+    for i, ln in enumerate(hunk.get("raw_lines") or []):
+        is_ctx = ln.startswith(" ")
+        is_inc = is_ctx or (i in include_raw_idx_set)
+
+        if is_inc and start_old is None:
+            start_old = old_ln
+            start_new = new_ln
+
+        if is_inc:
+            out_lines.append(ln)
+            if ln.startswith(" "):
+                old_len += 1
+                new_len += 1
+            elif ln.startswith("-"):
+                old_len += 1
+            elif ln.startswith("+"):
+                new_len += 1
+
+        if ln.startswith(" "):
+            old_ln += 1
+            new_ln += 1
+        elif ln.startswith("-"):
+            old_ln += 1
+        elif ln.startswith("+"):
+            new_ln += 1
+
+    if start_old is None:
+        return None
+
+    header = f"@@ -{start_old},{old_len} +{start_new},{new_len} @@\n"
+    patch = "".join(file_header_lines) + header + "".join(out_lines)
+    if not patch.endswith("\n"):
+        patch += "\n"
+    return patch
+
+
+def _expand_include_with_near_context(raw_lines, include_set, ctx=3):
+    try:
+        ctx = int(ctx)
+    except Exception:
+        ctx = 3
+    if ctx < 0:
+        ctx = 0
+    if ctx > 20:
+        ctx = 20
+
+    out = set(include_set or [])
+    if not raw_lines:
+        return out
+
+    for idx in list(out):
+        if idx is None:
+            continue
+        try:
+            idx = int(idx)
+        except Exception:
+            continue
+        # backward
+        got = 0
+        j = idx - 1
+        while j >= 0 and got < ctx:
+            ln = raw_lines[j]
+            if ln.startswith(" "):
+                out.add(j)
+                got += 1
+            elif ln.startswith("\\"):
+                out.add(j)
+            j -= 1
+
+        # forward
+        got = 0
+        j = idx + 1
+        while j < len(raw_lines) and got < ctx:
+            ln = raw_lines[j]
+            if ln.startswith(" "):
+                out.add(j)
+                got += 1
+            elif ln.startswith("\\"):
+                out.add(j)
+            j += 1
+
+    return out
+
+
+def _git_apply_reverse_patch(patch_text: str):
+    if not patch_text:
+        return False, "空 patch"
+
+    attempts = [
+        ["apply", "-R", "--whitespace=nowarn", "--recount"],
+        ["apply", "-R", "--whitespace=nowarn", "--recount", "-C0"],
+        ["apply", "-R", "--whitespace=nowarn", "--recount", "--unidiff-zero"],
+        ["apply", "-R", "--whitespace=nowarn", "--recount", "--unidiff-zero", "-C0"],
+        ["apply", "-R", "--whitespace=nowarn", "--recount", "--3way"],
+        ["apply", "-R", "--whitespace=nowarn", "--recount", "--3way", "-C0"],
+        ["apply", "-R", "--whitespace=nowarn", "--recount", "--3way", "--unidiff-zero"],
+        ["apply", "-R", "--whitespace=nowarn", "--recount", "--ignore-space-change"],
+        ["apply", "-R", "--whitespace=nowarn", "--recount", "--ignore-whitespace"],
+    ]
+
+    last_msg = ""
+    for args in attempts:
+        out, err, code = run_git(args, input_data=patch_text, timeout=120)
+        if code == 0:
+            return True, ""
+        last_msg = (err or out or "git apply 失败")
+
+    return False, last_msg
+
+
+def revert_file(filepath: str, status: str):
+    if not REPO_PATH:
+        return False, "未打开仓库"
+    filepath = (filepath or "").replace("\\", "/").lstrip("/")
+    if not filepath:
+        return False, "缺少 path"
+
+    st = (status or "").strip().upper() or "M"
+    full = _safe_repo_abspath(filepath)
+    if not full:
+        return False, "非法路径"
+
+    if st == "U":
+        try:
+            if os.path.exists(full) and (not os.path.isdir(full)):
+                os.remove(full)
+            return True, ""
+        except Exception as e:
+            return False, str(e)
+
+    _, err, code = run_git(["checkout", "--", filepath], timeout=120)
+    if code != 0:
+        return False, (err or "撤回文件失败")
+    return True, ""
+
+
+def revert_hunk(filepath: str, hunk_idx: int, status: str, ctx_lines: int = 5):
+    raw_patch, err = _get_raw_file_diff_patch(filepath, status, ctx_lines=ctx_lines)
+    if err:
+        return False, err
+    if raw_patch is None or (not raw_patch.strip()):
+        return False, "无可撤回变更"
+
+    file_header, hunks = _parse_unified_patch_with_mapping(raw_patch)
+    if hunk_idx < 0 or hunk_idx >= len(hunks):
+        return False, "hunk_index 越界"
+
+    h = hunks[hunk_idx]
+    include = set(range(len(h.get("raw_lines") or [])))
+    patch = _build_partial_hunk_patch(file_header, h, include)
+    if not patch:
+        return False, "构建 patch 失败"
+    ok, msg = _git_apply_reverse_patch(patch)
+    if ok:
+        return True, ""
+    # Retry with zero-context diff to reduce context mismatches
+    raw_patch2, err2 = _get_raw_file_diff_patch(filepath, status, ctx_lines=0)
+    if err2 or (not raw_patch2) or (not raw_patch2.strip()):
+        return False, msg
+    file_header2, hunks2 = _parse_unified_patch_with_mapping(raw_patch2)
+    if hunk_idx < 0 or hunk_idx >= len(hunks2):
+        return False, msg
+    h2 = hunks2[hunk_idx]
+    include2 = set(range(len(h2.get("raw_lines") or [])))
+    patch2 = _build_partial_hunk_patch(file_header2, h2, include2)
+    if not patch2:
+        return False, msg
+    return _git_apply_reverse_patch(patch2)
+
+
+def revert_line(filepath: str, hunk_idx: int, line_idx: int, status: str, ctx_lines: int = 5):
+    raw_patch, err = _get_raw_file_diff_patch(filepath, status, ctx_lines=ctx_lines)
+    if err:
+        return False, err
+    if raw_patch is None or (not raw_patch.strip()):
+        return False, "无可撤回变更"
+
+    file_header, hunks = _parse_unified_patch_with_mapping(raw_patch)
+    if hunk_idx < 0 or hunk_idx >= len(hunks):
+        return False, "hunk_index 越界"
+
+    h = hunks[hunk_idx]
+    mapping = h.get("map") or {}
+    if line_idx not in mapping:
+        return False, "line_index 越界"
+
+    include = set(mapping.get(line_idx) or [])
+    include = _expand_include_with_near_context(h.get("raw_lines") or [], include, ctx=3)
+    patch = _build_partial_hunk_patch(file_header, h, include)
+    if not patch:
+        return False, "构建 patch 失败"
+
+    ok, msg = _git_apply_reverse_patch(patch)
+    if ok:
+        return True, ""
+    # Retry with zero-context diff to reduce context mismatches
+    raw_patch2, err2 = _get_raw_file_diff_patch(filepath, status, ctx_lines=0)
+    if err2 or (not raw_patch2) or (not raw_patch2.strip()):
+        return False, msg
+    file_header2, hunks2 = _parse_unified_patch_with_mapping(raw_patch2)
+    if hunk_idx < 0 or hunk_idx >= len(hunks2):
+        return False, msg
+    h2 = hunks2[hunk_idx]
+    mapping2 = h2.get("map") or {}
+    if line_idx not in mapping2:
+        return False, msg
+    include2 = set(mapping2.get(line_idx) or [])
+    include2 = _expand_include_with_near_context(h2.get("raw_lines") or [], include2, ctx=3)
+    patch2 = _build_partial_hunk_patch(file_header2, h2, include2)
+    if not patch2:
+        return False, msg
+    return _git_apply_reverse_patch(patch2)
+
+
+def revert_multi_lines(filepath: str, hunk_idx: int, start_line_idx: int, end_line_idx: int, status: str, ctx_lines: int = 5):
+    raw_patch, err = _get_raw_file_diff_patch(filepath, status, ctx_lines=ctx_lines)
+    if err:
+        return False, err
+    if raw_patch is None or (not raw_patch.strip()):
+        return False, "无可撤回变更"
+
+    file_header, hunks = _parse_unified_patch_with_mapping(raw_patch)
+    if hunk_idx < 0 or hunk_idx >= len(hunks):
+        return False, "hunk_index 越界"
+
+    h = hunks[hunk_idx]
+    mapping = h.get("map") or {}
+
+    s = int(start_line_idx)
+    e = int(end_line_idx)
+    if s > e:
+        s, e = e, s
+
+    include = set()
+    for li in range(s, e + 1):
+        include.update(mapping.get(li) or [])
+    if not include:
+        return False, "未选择任何可撤回行"
+
+    include = _expand_include_with_near_context(h.get("raw_lines") or [], include, ctx=3)
+
+    patch = _build_partial_hunk_patch(file_header, h, include)
+    if not patch:
+        return False, "构建 patch 失败"
+    ok, msg = _git_apply_reverse_patch(patch)
+    if ok:
+        return True, ""
+    # Retry with zero-context diff to reduce context mismatches
+    raw_patch2, err2 = _get_raw_file_diff_patch(filepath, status, ctx_lines=0)
+    if err2 or (not raw_patch2) or (not raw_patch2.strip()):
+        return False, msg
+    file_header2, hunks2 = _parse_unified_patch_with_mapping(raw_patch2)
+    if hunk_idx < 0 or hunk_idx >= len(hunks2):
+        return False, msg
+    h2 = hunks2[hunk_idx]
+    mapping2 = h2.get("map") or {}
+    include2 = set()
+    for li in range(s, e + 1):
+        include2.update(mapping2.get(li) or [])
+    if not include2:
+        return False, msg
+    include2 = _expand_include_with_near_context(h2.get("raw_lines") or [], include2, ctx=3)
+    patch2 = _build_partial_hunk_patch(file_header2, h2, include2)
+    if not patch2:
+        return False, msg
+    return _git_apply_reverse_patch(patch2)
+
 # ════════════════════════════════════════════════════════
 #  提交历史
 # ════════════════════════════════════════════════════════
@@ -792,510 +1269,70 @@ def is_commit_pushed(commit_hash):
         branches.append(b)
 
     return bool(branches), branches, None
-# ════════════════════════════════════════════════════════
 
-def _repo_abspath(rel):
-    """获取仓库内文件的绝对路径"""
-    return os.path.join(REPO_PATH, rel.replace("/", os.sep))
+def _has_worktree_changes():
+    """Return (dirty: bool, detail: str)."""
+    out, err, code = run_git(["status", "--porcelain=v1"])
+    if code != 0:
+        return True, (err or "无法检测工作区状态")
+    dirty = bool((out or "").strip())
+    return dirty, (out or "")
 
+def _branch_exists_local(branch_name: str):
+    branch_name = (branch_name or "").strip()
+    if not branch_name:
+        return False
+    _, _, code = run_git(["show-ref", "--verify", "--quiet", f"refs/heads/{branch_name}"])
+    return code == 0
 
-def _safe_repo_abspath(rel_path: str):
-    """Resolve a repo-relative path to an absolute path, preventing path traversal."""
+def switch_branch(branch_name: str):
+    """Switch to a branch.
+
+    - If working tree is dirty, refuse (consistent with safe UI behavior).
+    - If selecting a remote branch (remotes/origin/foo), create a local tracking branch.
+    """
     if not REPO_PATH:
-        return None
-    rel_path = (rel_path or "").replace("\\", "/").lstrip("/")
-    abs_path = os.path.abspath(os.path.join(REPO_PATH, rel_path.replace("/", os.sep)))
-    repo_root = os.path.abspath(REPO_PATH)
-    if os.path.commonpath([repo_root, abs_path]) != repo_root:
-        return None
-    return abs_path
+        return False, None, "未打开仓库", "", True
 
+    branch_name = (branch_name or "").strip()
+    if not branch_name:
+        return False, None, "缺少分支名", "", True
 
-def get_file_content(filepath: str):
-    """Read working tree file content as text."""
-    try:
-        full = _safe_repo_abspath(filepath)
-        if not full or (not os.path.exists(full)) or os.path.isdir(full):
-            return None
-        with open(full, "rb") as f:
-            data = f.read()
-        for enc in ("utf-8", "utf-8-sig", "gbk", "gb2312", "cp936"):
-            try:
-                return data.decode(enc)
-            except Exception:
-                continue
-        return data.decode("utf-8", errors="replace")
-    except Exception as e:
-        logger.error(f"读取文件内容失败: {filepath} - {e}")
-        return None
+    dirty, detail = _has_worktree_changes()
+    if dirty:
+        return False, None, "工作区有未提交更改，请先提交/撤回/暂存（stash）后再切换分支", detail, True
 
+    # Normalize
+    raw = branch_name
+    is_remote = raw.startswith("remotes/")
+    remote_ref = raw.replace("remotes/", "", 1) if is_remote else None
 
-def get_head_file_content(filepath: str):
-    """Read HEAD version file content as text via git show."""
-    filepath = (filepath or "").replace("\\", "/").lstrip("/")
-    if not filepath:
-        return None
-    out, err, code = run_git(["show", f"HEAD:{filepath}"])
-    if code != 0:
-        logger.debug(f"读取 HEAD 文件内容失败: {filepath} - {err}")
-        return None
-    return out
+    # Prefer git switch, fallback to checkout
+    if is_remote and remote_ref:
+        # remote_ref like origin/foo
+        local_name = remote_ref
+        if "/" in remote_ref:
+            local_name = remote_ref.split("/", 1)[1]
 
-
-def save_file_content(filepath: str, content: str):
-    """Save content to working tree file (text)."""
-    try:
-        full = _safe_repo_abspath(filepath)
-        if not full:
-            return False, "非法路径"
-        parent = os.path.dirname(full)
-        if parent and (not os.path.exists(parent)):
-            os.makedirs(parent, exist_ok=True)
-        with open(full, "w", encoding="utf-8", newline="\n") as f:
-            f.write(content if content is not None else "")
-        return True, "保存成功"
-    except Exception as e:
-        logger.error(f"保存文件失败: {filepath} - {e}", exc_info=True)
-        return False, str(e)
-
-
-# ════════════════════════════════════════════════════════
-#  文件还原
-# ════════════════════════════════════════════════════════
-
-def revert_hunk(filepath, hunk_index, status):
-    """还原单个 hunk"""
-    logger.info(f"还原 hunk: {filepath} - hunk #{hunk_index} (状态: {status})")
-    
-    # 简化实现：直接使用文件整体撤回，避免复杂的diff解析和文件修改
-    # 这种方法更可靠，虽然会撤回整个文件的更改
-    for args in (
-        ["checkout", "HEAD", "--", filepath],
-        ["restore",          "--", filepath],
-        ["checkout",         "--", filepath],
-    ):
-        _, err, code = run_git(args, timeout=120)
-        if code == 0:
-            logger.info(f"成功还原文件: {filepath}")
-            return True, "已撤回所有更改"
-    
-    logger.error(f"还原 hunk 失败: {filepath} - 无法执行Git命令")
-    return False, f"撤回失败: {err or '未知错误'}"
-
-
-def revert_line(filepath, hunk_index, line_index, status, ctx_lines=5):
-    """还原单行"""
-    logger.info(f"还原行: {filepath} - hunk #{hunk_index}, line #{line_index} (状态: {status})")
-    
-    try:
-        # 获取文件的当前内容
-        full_path = _repo_abspath(filepath)
-        with open(full_path, 'r', encoding='utf-8', errors='replace') as f:
-            current_lines = f.readlines()
-        
-        # 获取文件的原始内容（从HEAD）
-        old_content, _, code = run_git(['show', 'HEAD:' + filepath])
-        if code != 0:
-            logger.error(f"获取文件原始内容失败: {filepath}")
-            return False, "获取文件原始内容失败"
-        old_lines = old_content.splitlines(keepends=True)
-        
-        # 获取文件的diff数据
-        hunks, err = get_file_diff(filepath, status, ctx_lines)
-        if err:
-            logger.error(f"获取文件diff失败: {filepath} - {err}")
-            return False, f"获取文件diff失败: {err}"
-        
-        # 记录hunks信息
-        logger.info(f"获取到 {len(hunks)} 个hunks")
-        
-        # 确保hunk_index和line_index有效
-        if hunk_index < 0 or hunk_index >= len(hunks):
-            logger.error(f"无效的hunk索引: {hunk_index}, 总hunks: {len(hunks)}")
-            return False, "无效的hunk索引"
-        
-        hunk = hunks[hunk_index]
-        logger.info(f"选中hunk #{hunk_index}, 包含 {len(hunk['lines'])} 行")
-        
-        if line_index < 0 or line_index >= len(hunk['lines']):
-            logger.error(f"无效的行索引: {line_index}, hunk总行数: {len(hunk['lines'])}")
-            return False, "无效的行索引"
-        
-        # 获取要撤回的行信息
-        line_info = hunk['lines'][line_index]
-        logger.info(f"要撤回的行: type={line_info['type']}, old={line_info.get('old')}, new={line_info.get('new')}, text={line_info.get('text')[:50]}")
-        
-        # 保存修改前的行数，用于验证是否只修改了一行
-        original_line_count = len(current_lines)
-        logger.info(f"修改前文件行数: {original_line_count}")
-        
-        # 根据行类型处理撤回
-        if line_info['type'] == 'added':
-            # 对于新增的行，直接删除
-            if line_info['new'] and line_info['new'] <= len(current_lines):
-                deleted_line = current_lines[line_info['new'] - 1]
-                del current_lines[line_info['new'] - 1]
-                logger.info(f"成功删除新增行: {filepath} - 行 {line_info['new']}, 内容: {deleted_line.strip()}")
-            else:
-                logger.error(f"新增行索引无效: {line_info['new']}, 文件总行数: {len(current_lines)}")
-                return False, "新增行索引无效"
-        elif line_info['type'] == 'removed':
-            # 对于删除的行，恢复原始内容
-            if line_info['old'] and line_info['old'] <= len(old_lines):
-                # 找到插入位置
-                insert_pos = line_info['old'] - 1
-                if insert_pos < len(current_lines):
-                    current_lines.insert(insert_pos, old_lines[insert_pos])
-                    logger.info(f"成功恢复删除行: {filepath} - 行 {line_info['old']}, 位置 {insert_pos}")
-                else:
-                    current_lines.append(old_lines[insert_pos])
-                    logger.info(f"成功恢复删除行: {filepath} - 行 {line_info['old']}, 位置 {insert_pos}")
-            else:
-                logger.error(f"删除行索引无效: {line_info['old']}, 旧文件总行数: {len(old_lines)}")
-                return False, "删除行索引无效"
-        elif line_info['type'] == 'modified':
-            # 对于修改的行，恢复原始内容
-            if line_info['old'] and line_info['old'] <= len(old_lines) and line_info['new'] and line_info['new'] <= len(current_lines):
-                old_line = old_lines[line_info['old'] - 1]
-                current_lines[line_info['new'] - 1] = old_line
-                logger.info(f"成功恢复修改行: {filepath} - 行 {line_info['new']}, 旧内容: {old_line.strip()}")
-            else:
-                logger.error(f"修改行索引无效: 旧行 {line_info['old']}, 新行 {line_info['new']}, 旧文件总行数: {len(old_lines)}, 当前文件总行数: {len(current_lines)}")
-                return False, "修改行索引无效"
+        if _branch_exists_local(local_name):
+            out, err, code = run_git(["switch", local_name], timeout=120)
+            if code != 0:
+                out, err, code = run_git(["checkout", local_name], timeout=120)
         else:
-            logger.error(f"不支持的行类型: {line_info['type']}")
-            return False, "不支持的行类型"
-        
-        # 验证是否只修改了一行
-        logger.info(f"修改后文件行数: {len(current_lines)}, 修改前文件行数: {original_line_count}")
-        if len(current_lines) != original_line_count and line_info['type'] != 'added' and line_info['type'] != 'removed':
-            logger.error(f"修改行数不正确: 原始 {original_line_count}, 修改后 {len(current_lines)}")
-            return False, "修改行数不正确"
-        
-        # 保存修改后的文件
-        with open(full_path, 'w', encoding='utf-8', newline='') as f:
-            f.writelines(current_lines)
-        
-        logger.info(f"成功还原单行: {filepath} - hunk #{hunk_index}, line #{line_index}")
-        return True, "已撤回该行代码"
-    except Exception as e:
-        logger.error(f"还原单行失败: {filepath} - {e}", exc_info=True)
-        return False, f"撤回失败: {str(e)}"
-
-
-def revert_multi_lines(filepath, hunk_index, start_line_index, end_line_index, status, ctx_lines=5):
-    """还原多行（连续的相同类型操作）"""
-    logger.info(f"还原多行: {filepath} - hunk #{hunk_index}, lines #{start_line_index}-{end_line_index} (状态: {status})")
-    
-    try:
-        # 获取文件的当前内容
-        full_path = _repo_abspath(filepath)
-        with open(full_path, 'r', encoding='utf-8', errors='replace') as f:
-            current_lines = f.readlines()
-        
-        # 获取文件的原始内容（从HEAD）
-        old_content, _, code = run_git(['show', 'HEAD:' + filepath])
-        if code != 0:
-            logger.error(f"获取文件原始内容失败: {filepath}")
-            return False, "获取文件原始内容失败"
-        old_lines = old_content.splitlines(keepends=True)
-        
-        # 获取文件的diff数据
-        hunks, err = get_file_diff(filepath, status, ctx_lines)
-        if err:
-            logger.error(f"获取文件diff失败: {filepath} - {err}")
-            return False, f"获取文件diff失败: {err}"
-        
-        # 记录hunks信息
-        logger.info(f"获取到 {len(hunks)} 个hunks")
-        
-        # 确保hunk_index有效
-        if hunk_index < 0 or hunk_index >= len(hunks):
-            logger.error(f"无效的hunk索引: {hunk_index}, 总hunks: {len(hunks)}")
-            return False, "无效的hunk索引"
-        
-        hunk = hunks[hunk_index]
-        logger.info(f"选中hunk #{hunk_index}, 包含 {len(hunk['lines'])} 行")
-        
-        # 确保start_line_index和end_line_index有效
-        if start_line_index < 0 or start_line_index >= len(hunk['lines']):
-            logger.error(f"无效的起始行索引: {start_line_index}, hunk总行数: {len(hunk['lines'])}")
-            return False, "无效的起始行索引"
-        
-        if end_line_index < 0 or end_line_index >= len(hunk['lines']) or end_line_index < start_line_index:
-            logger.error(f"无效的结束行索引: {end_line_index}, hunk总行数: {len(hunk['lines'])}, 起始行: {start_line_index}")
-            return False, "无效的结束行索引"
-        
-        # 获取要撤回的多行信息
-        lines_to_revert = []
-        for i in range(start_line_index, end_line_index + 1):
-            if i < len(hunk['lines']):
-                line_info = hunk['lines'][i]
-                if line_info['type'] != 'context':
-                    lines_to_revert.append(line_info)
-        
-        if len(lines_to_revert) == 0:
-            logger.error("没有要撤回的非上下文行")
-            return False, "没有要撤回的非上下文行"
-        
-        # 确保所有行类型相同
-        first_type = lines_to_revert[0]['type']
-        if not all(line['type'] == first_type for line in lines_to_revert):
-            logger.error("多行撤回要求所有行类型相同")
-            return False, "多行撤回要求所有行类型相同"
-        
-        logger.info(f"要撤回的多行: 类型={first_type}, 行数={len(lines_to_revert)}")
-        
-        # 保存修改前的行数，用于验证
-        original_line_count = len(current_lines)
-        logger.info(f"修改前文件行数: {original_line_count}")
-        
-        # 根据行类型处理撤回（从后往前处理，避免索引变化）
-        if first_type == 'added':
-            # 对于新增的行，从后往前删除
-            for line_info in reversed(lines_to_revert):
-                if line_info['new'] and line_info['new'] <= len(current_lines):
-                    del current_lines[line_info['new'] - 1]
-                    logger.info(f"删除新增行: 行 {line_info['new']}")
-                else:
-                    logger.error(f"新增行索引无效: {line_info['new']}, 文件总行数: {len(current_lines)}")
-                    return False, "新增行索引无效"
-        elif first_type == 'removed':
-            # 对于删除的行，从后往前恢复
-            for line_info in reversed(lines_to_revert):
-                if line_info['old'] and line_info['old'] <= len(old_lines):
-                    insert_pos = line_info['old'] - 1
-                    if insert_pos < len(current_lines):
-                        current_lines.insert(insert_pos, old_lines[insert_pos])
-                        logger.info(f"恢复删除行: 行 {line_info['old']}, 位置 {insert_pos}")
-                    else:
-                        current_lines.append(old_lines[insert_pos])
-                        logger.info(f"恢复删除行: 行 {line_info['old']}, 位置 {insert_pos} (末尾)")
-                else:
-                    logger.error(f"删除行索引无效: {line_info['old']}, 旧文件总行数: {len(old_lines)}")
-                    return False, "删除行索引无效"
-        elif first_type == 'modified':
-            # 对于修改的行，恢复原始内容
-            for line_info in lines_to_revert:
-                if line_info['old'] and line_info['old'] <= len(old_lines) and line_info['new'] and line_info['new'] <= len(current_lines):
-                    old_line = old_lines[line_info['old'] - 1]
-                    current_lines[line_info['new'] - 1] = old_line
-                    logger.info(f"恢复修改行: 行 {line_info['new']}")
-                else:
-                    logger.error(f"修改行索引无效: 旧行 {line_info['old']}, 新行 {line_info['new']}")
-                    return False, "修改行索引无效"
-        else:
-            logger.error(f"不支持的行类型: {first_type}")
-            return False, "不支持的行类型"
-        
-        # 验证行数变化
-        logger.info(f"修改后文件行数: {len(current_lines)}, 修改前文件行数: {original_line_count}")
-        if first_type == 'added':
-            expected_count = original_line_count - len(lines_to_revert)
-        elif first_type == 'removed':
-            expected_count = original_line_count + len(lines_to_revert)
-        else:  # modified
-            expected_count = original_line_count
-        
-        if len(current_lines) != expected_count:
-            logger.error(f"修改行数不正确: 期望 {expected_count}, 实际 {len(current_lines)}")
-            return False, "修改行数不正确"
-        
-        # 保存修改后的文件
-        with open(full_path, 'w', encoding='utf-8', newline='') as f:
-            f.writelines(current_lines)
-        
-        logger.info(f"成功还原多行: {filepath} - hunk #{hunk_index}, lines #{start_line_index}-{end_line_index}")
-        return True, f"已撤回 {len(lines_to_revert)} 行代码"
-    except Exception as e:
-        logger.error(f"还原多行失败: {filepath} - {e}", exc_info=True)
-        return False, f"撤回失败: {str(e)}"
-
-
-def revert_file(filepath, status):
-    """还原整个文件"""
-    logger.info(f"还原文件: {filepath} (状态: {status})")
-    if status == "U":
-        full = _repo_abspath(filepath)
-        try:
-            os.remove(full)
-            logger.info(f"成功删除未跟踪文件: {filepath}")
-            return True, "已删除未跟踪文件"
-        except Exception as e:
-            logger.error(f"删除未跟踪文件失败: {filepath} - {e}")
-            return False, str(e)
-    elif status == "A":
-        _, err, code = run_git(["reset", "HEAD", "--", filepath])
-        if code != 0:
-            logger.error(f"取消暂存失败: {filepath} - {err}")
-            return False, err
-        full = _repo_abspath(filepath)
-        try:
-            os.remove(full)
-            logger.info(f"成功删除新增文件: {filepath}")
-            return True, "已删除新增文件"
-        except Exception as e:
-            logger.error(f"删除新增文件失败: {filepath} - {e}")
-            return False, str(e)
+            out, err, code = run_git(["switch", "-c", local_name, "--track", remote_ref], timeout=120)
+            if code != 0:
+                out, err, code = run_git(["checkout", "-b", local_name, "--track", remote_ref], timeout=120)
     else:
-        _, err, code = run_git(["checkout", "HEAD", "--", filepath])
+        out, err, code = run_git(["switch", raw], timeout=120)
         if code != 0:
-            logger.error(f"还原文件失败: {filepath} - {err}")
-            return False, err
-        logger.info(f"成功还原文件: {filepath}")
-        return True, "已还原"
+            out, err, code = run_git(["checkout", raw], timeout=120)
 
-
-def restore_file_from_commit(commit_hash, filepath):
-    """从提交中恢复文件"""
-    logger.info(f"从提交恢复文件: {commit_hash} - {filepath}")
-    _, err, code = run_git(["checkout", commit_hash, "--", filepath])
-    if code == 0:
-        return True, "已恢复"
-    return False, err
-
-
-def restore_workspace_to_commit(commit_hash):
-    """将工作区完整恢复到某次提交（覆盖工作区内容）"""
-    logger.info(f"恢复工作区到提交: {commit_hash}")
-    # hard reset to commit
-    _, err, code = run_git(["reset", "--hard", commit_hash], timeout=180)
     if code != 0:
-        logger.error(f"reset --hard 失败: {err}")
-        return False, err or "reset --hard 失败"
+        return False, None, (err or "切换分支失败"), (out or ""), False
 
-    # clean untracked
-    _, err2, code2 = run_git(["clean", "-fd"], timeout=180)
-    if code2 != 0:
-        logger.error(f"clean -fd 失败: {err2}")
-        return False, err2 or "clean -fd 失败"
-
-    logger.info("恢复工作区完成")
-    return True, "已恢复工作区"
-
-
-def revert_commit(commit_hash):
-    """撤回指定提交（等同于 git revert <hash>，会产生一个新的提交）"""
-    logger.info(f"revert 提交: {commit_hash}")
-    # --no-edit 使用默认回滚信息，避免交互式编辑器卡住
-    out, err, code = run_git(["revert", "--no-edit", commit_hash], timeout=300)
-    if code != 0:
-        msg = (err or out or "revert 失败").strip()
-        logger.error(f"revert 失败: {msg}")
-        return False, msg
-    logger.info("revert 成功")
-    return True, "已撤回该提交（已生成新的回滚提交）"
-
-
-def get_raw_file_diff_patch(filepath, status, ctx_lines=5):
-    """获取某个文件的原始 diff patch（用于 git apply）。"""
-    try:
-        ctx_lines = int(ctx_lines)
-    except Exception:
-        ctx_lines = 5
-    if ctx_lines < 0:
-        ctx_lines = 0
-    if ctx_lines > 200:
-        ctx_lines = 200
-
-    if status in ("U", "A"):
-        return None, "新文件不支持按块暂存，请按文件提交"
-    if status == "D":
-        return None, "删除文件不支持按块暂存，请按文件提交"
-
-    unified_arg = f"--unified={ctx_lines}"
-    for args in (
-        ["diff", "HEAD", unified_arg, "--", filepath],
-        ["diff", unified_arg, "--", filepath],
-    ):
-        out, err, code = run_git(args)
-        if code == 0 and (out or "").strip():
-            return out, None
-        if code != 0 and err:
-            last_err = err
-        else:
-            last_err = None
-
-    return "", last_err
-
-
-def extract_selected_hunks_from_patch(raw_patch, hunk_indices):
-    """从单文件 patch 中抽取指定的 hunk（按出现顺序 index）组成新的 patch。"""
-    if raw_patch is None:
-        return None
-    if not raw_patch.strip():
-        return ""
-    want = set(int(x) for x in (hunk_indices or []))
-    if not want:
-        return ""
-
-    lines = raw_patch.splitlines(True)
-    header = []
-    hunks = []
-    cur = None
-    seen_hunk = -1
-
-    for ln in lines:
-        if ln.startswith("@@ "):
-            if cur is not None:
-                hunks.append(cur)
-            cur = [ln]
-            seen_hunk += 1
-            continue
-        if cur is None:
-            header.append(ln)
-        else:
-            cur.append(ln)
-
-    if cur is not None:
-        hunks.append(cur)
-
-    picked = []
-    for idx, h in enumerate(hunks):
-        if idx in want:
-            picked.extend(h)
-
-    if not picked:
-        return ""
-    return "".join(header + picked)
-
-
-def has_any_staged_changes():
-    out, err, code = run_git(["diff", "--cached", "--name-only"])
-    if code != 0:
-        return False, err
-    return bool((out or "").strip()), None
-
-
-def apply_patch_to_index(patch_text):
-    if patch_text is None:
-        return False, "patch 为空"
-    if not patch_text.strip():
-        return False, "未选择任何可暂存的变更块"
-    _, err, code = run_git(["apply", "--cached", "--whitespace=nowarn", "-"], input_data=patch_text)
-    if code != 0:
-        return False, err
-    return True, "已暂存"
-
-
-def get_unmerged_files():
-    out, err, code = run_git(["diff", "--name-only", "--diff-filter=U"])
-    if code == 0:
-        files = [(ln or "").strip() for ln in (out or "").splitlines() if (ln or "").strip()]
-        return files, None
-
-    out2, err2, code2 = run_git(["ls-files", "-u"])
-    if code2 != 0:
-        return [], (err2 or err or "无法检测冲突文件")
-    paths = set()
-    for ln in (out2 or "").splitlines():
-        cols = (ln or "").split("\t")
-        if len(cols) >= 2:
-            p = (cols[1] or "").strip()
-            if p:
-                paths.add(p)
-    return sorted(paths), None
-
+    # Refresh current branch
+    _, cur = get_branches()
+    return True, cur, "", (out or ""), False
 
 # ════════════════════════════════════════════════════════
 #  HTTP 处理器
@@ -1596,6 +1633,18 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     self.send_json({"ok": False, "content": None})
             
+            elif p == "/api/switch_branch":
+                logger.info("处理 /api/switch_branch 请求")
+                b = (data.get("branch") or "").strip()
+                ok, current, error, output, dirty = switch_branch(b)
+                self.send_json({
+                    "ok": ok,
+                    "current": current,
+                    "error": error,
+                    "output": (output or "").strip(),
+                    "dirty": bool(dirty),
+                })
+
             elif p == "/api/save_file":
                 logger.info("处理 /api/save_file 请求")
                 if not REPO_PATH:
