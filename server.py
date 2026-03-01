@@ -792,15 +792,76 @@ def is_commit_pushed(commit_hash):
         branches.append(b)
 
     return bool(branches), branches, None
-
-# ════════════════════════════════════════════════════════
-#  文件还原
 # ════════════════════════════════════════════════════════
 
 def _repo_abspath(rel):
     """获取仓库内文件的绝对路径"""
     return os.path.join(REPO_PATH, rel.replace("/", os.sep))
 
+
+def _safe_repo_abspath(rel_path: str):
+    """Resolve a repo-relative path to an absolute path, preventing path traversal."""
+    if not REPO_PATH:
+        return None
+    rel_path = (rel_path or "").replace("\\", "/").lstrip("/")
+    abs_path = os.path.abspath(os.path.join(REPO_PATH, rel_path.replace("/", os.sep)))
+    repo_root = os.path.abspath(REPO_PATH)
+    if os.path.commonpath([repo_root, abs_path]) != repo_root:
+        return None
+    return abs_path
+
+
+def get_file_content(filepath: str):
+    """Read working tree file content as text."""
+    try:
+        full = _safe_repo_abspath(filepath)
+        if not full or (not os.path.exists(full)) or os.path.isdir(full):
+            return None
+        with open(full, "rb") as f:
+            data = f.read()
+        for enc in ("utf-8", "utf-8-sig", "gbk", "gb2312", "cp936"):
+            try:
+                return data.decode(enc)
+            except Exception:
+                continue
+        return data.decode("utf-8", errors="replace")
+    except Exception as e:
+        logger.error(f"读取文件内容失败: {filepath} - {e}")
+        return None
+
+
+def get_head_file_content(filepath: str):
+    """Read HEAD version file content as text via git show."""
+    filepath = (filepath or "").replace("\\", "/").lstrip("/")
+    if not filepath:
+        return None
+    out, err, code = run_git(["show", f"HEAD:{filepath}"])
+    if code != 0:
+        logger.debug(f"读取 HEAD 文件内容失败: {filepath} - {err}")
+        return None
+    return out
+
+
+def save_file_content(filepath: str, content: str):
+    """Save content to working tree file (text)."""
+    try:
+        full = _safe_repo_abspath(filepath)
+        if not full:
+            return False, "非法路径"
+        parent = os.path.dirname(full)
+        if parent and (not os.path.exists(parent)):
+            os.makedirs(parent, exist_ok=True)
+        with open(full, "w", encoding="utf-8", newline="\n") as f:
+            f.write(content if content is not None else "")
+        return True, "保存成功"
+    except Exception as e:
+        logger.error(f"保存文件失败: {filepath} - {e}", exc_info=True)
+        return False, str(e)
+
+
+# ════════════════════════════════════════════════════════
+#  文件还原
+# ════════════════════════════════════════════════════════
 
 def revert_hunk(filepath, hunk_index, status):
     """还原单个 hunk"""
