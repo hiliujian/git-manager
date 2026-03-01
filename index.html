@@ -422,6 +422,13 @@ body{font-family:'Outfit',sans-serif;color:var(--text);font-size:13px;display:fl
   </div>
   <span class="repo-label" id="repoLabel"></span>
   <div class="row ml">
+    <button class="btn" id="pullBtn" style="display:none" onclick="pullUpdate()">
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <path d="M12 3v10"/>
+        <polyline points="8 9 12 13 16 9"/>
+        <path d="M4 17h16"/>
+      </svg>更新
+    </button>
     <button class="btn" id="refreshBtn" style="display:none" onclick="refresh()">
       <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
         <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/>
@@ -961,6 +968,7 @@ function showApp(repo, branch) {
   const repoLabelEl = document.getElementById('repoLabel');
   repoLabelEl.textContent = repo;
   repoLabelEl.setAttribute('data-repo', repo);
+  document.getElementById('pullBtn').style.display    = 'flex';
   document.getElementById('refreshBtn').style.display = 'flex';
   document.getElementById('changeBtn').style.display  = 'flex';
   
@@ -977,7 +985,7 @@ function goToOpener() {
   document.getElementById('app').style.display       = 'none';
   document.getElementById('branchTag').style.display = 'none';
   document.getElementById('repoLabel').textContent   = '';
-  ['refreshBtn','changeBtn'].forEach(id =>
+  ['pullBtn','refreshBtn','changeBtn'].forEach(id =>
     document.getElementById(id).style.display = 'none');
   
   // 关闭WebSocket连接
@@ -1665,20 +1673,55 @@ function renderDiffWithFullContext(file, hunks, readonly, changeLocations = []) 
   // Split file into lines
   const lines = workingContent.split('\n');
   console.log('Rendering diff with', lines.length, 'lines,', lineChanges.size, 'changes');
+
+  // Merge adjacent change locations within the same hunk to improve readability
+  const mergedChangeLocations = [];
+  const sortedLocations = (changeLocations || []).slice().sort((a, b) => {
+    const ha = a?.hunkIndex ?? 0;
+    const hb = b?.hunkIndex ?? 0;
+    if (ha !== hb) return ha - hb;
+    const la = a?.lineIndex ?? 0;
+    const lb = b?.lineIndex ?? 0;
+    return la - lb;
+  });
+  for (const ch of sortedLocations) {
+    const ln = Number(ch?.lineNumber);
+    if (!Number.isFinite(ln)) continue;
+    const last = mergedChangeLocations.length ? mergedChangeLocations[mergedChangeLocations.length - 1] : null;
+    if (
+      last &&
+      last.hunkIndex === ch.hunkIndex &&
+      last.type === ch.type &&
+      ln === (last.endLine + 1)
+    ) {
+      last.endLine = ln;
+      last.endLineIndex = ch.lineIndex;
+    } else {
+      mergedChangeLocations.push({
+        hunkIndex: ch.hunkIndex,
+        startLineIndex: ch.lineIndex,
+        endLineIndex: ch.lineIndex,
+        startLine: ln,
+        endLine: ln,
+        type: ch.type,
+      });
+    }
+  }
   
   // Build change navigation bar
   let navigationHtml = '';
-  if (changeLocations.length > 0) {
+  if (mergedChangeLocations.length > 0) {
     navigationHtml = `<div class="change-navigation">
       <span style="font-size:10px; color:var(--text3); margin-right:10px;">修改位置:</span>
-      ${changeLocations.map((change, index) => {
+      ${mergedChangeLocations.map((change, index) => {
         let typeClass = '';
         if (change.type === 'added') typeClass = 'change-added';
         else if (change.type === 'removed') typeClass = 'change-removed';
         else if (change.type === 'modified') typeClass = 'change-modified';
         
-        return `<a href="#" class="change-nav-item ${typeClass}" onclick="scrollToLine(${change.lineNumber}); return false;">
-          ${change.lineNumber}
+        const label = (change.endLine > change.startLine) ? `${change.startLine}~${change.endLine}` : `${change.startLine}`;
+        return `<a href="#" class="change-nav-item ${typeClass}" onclick="scrollToLine(${change.startLine}); return false;">
+          ${label}
         </a>`;
       }).join('')}
     </div>`;
@@ -3866,6 +3909,49 @@ function showConfirm(opts = {}) {
     overlay.addEventListener('click', onOverlay);
     document.addEventListener('keydown', onKey);
   });
+}
+
+async function pullUpdate() {
+  const ok = await showConfirm({
+    title: '更新项目（Pull）',
+    message: '确认从远端拉取最新提交并更新到本地？\n\n若出现冲突，需要你手动解决后再提交。',
+    okText: '开始更新',
+    cancelText: '取消',
+  });
+  if (!ok) return;
+
+  const btn = document.getElementById('pullBtn');
+  if (btn) { btn.style.opacity = '.5'; btn.style.pointerEvents = 'none'; }
+  toast('更新中...','warn');
+
+  const res = await POST('/api/pull', {});
+
+  if (btn) { btn.style.opacity = ''; btn.style.pointerEvents = ''; }
+
+  if (res && res.ok) {
+    toast('✓ 更新完成','ok');
+    await refresh();
+    return;
+  }
+
+  if (res && res.has_conflicts) {
+    const list = (res.conflict_files || []).slice(0, 12).join('\n');
+    const more = (res.conflict_files || []).length > 12 ? `\n... 等 ${(res.conflict_files || []).length} 个文件` : '';
+    await showConfirm({
+      title: '更新发生冲突',
+      message:
+        `检测到合并冲突，请先在本地解决冲突：\n\n${list}${more}\n\n处理建议：\n1) 打开冲突文件，手动解决标记（<<<<<<</=======/>>>>>>>)\n2) 解决后执行提交（commit）\n3) 如需推送，再执行 Push`,
+      okText: '知道了',
+      cancelText: '关闭',
+      danger: true,
+    });
+    await refresh();
+    return;
+  }
+
+  const msg = (res && (res.error || res.msg)) ? (res.error || res.msg) : '更新失败';
+  toast(msg,'err');
+  await refresh();
 }
 
 async function openCommitAfterLocalCommit(commitHash) {

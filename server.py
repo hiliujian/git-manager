@@ -1217,52 +1217,24 @@ def apply_patch_to_index(patch_text):
     return True, "已暂存"
 
 
-# ════════════════════════════════════════════════════════
-#  文件内容读取与保存
-# ════════════════════════════════════════════════════════
+def get_unmerged_files():
+    out, err, code = run_git(["diff", "--name-only", "--diff-filter=U"])
+    if code == 0:
+        files = [(ln or "").strip() for ln in (out or "").splitlines() if (ln or "").strip()]
+        return files, None
 
-def get_file_content(filepath):
-    """获取文件内容"""
-    logger.debug(f"读取文件内容: {filepath}")
-    try:
-        full = _repo_abspath(filepath)
-        with open(full, "r", encoding="utf-8", errors="replace") as f:
-            content = f.read()
-        logger.debug(f"成功读取文件内容: {filepath} - {len(content)} 字符")
-        return content
-    except Exception as e:
-        logger.error(f"读取文件内容失败: {filepath} - {e}")
-        return None
+    out2, err2, code2 = run_git(["ls-files", "-u"])
+    if code2 != 0:
+        return [], (err2 or err or "无法检测冲突文件")
+    paths = set()
+    for ln in (out2 or "").splitlines():
+        cols = (ln or "").split("\t")
+        if len(cols) >= 2:
+            p = (cols[1] or "").strip()
+            if p:
+                paths.add(p)
+    return sorted(paths), None
 
-
-def get_head_file_content(filepath):
-    """获取 HEAD 版本文件内容（作为原始版本展示用）"""
-    fp = (filepath or "").replace("\\", "/")
-    if not fp:
-        return None
-    try:
-        stdout, stderr, code = run_git(["show", f"HEAD:{fp}"])
-        if code != 0:
-            logger.debug(f"读取 HEAD 文件内容失败: {fp} - {stderr}")
-            return None
-        return stdout
-    except Exception as e:
-        logger.error(f"读取 HEAD 文件内容异常: {fp} - {e}")
-        return None
-
-
-def save_file_content(filepath, content):
-    """保存文件内容"""
-    logger.info(f"保存文件内容: {filepath} - {len(content)} 字符")
-    try:
-        full = _repo_abspath(filepath)
-        with open(full, "w", encoding="utf-8", newline="") as f:
-            f.write(content)
-        logger.info(f"成功保存文件内容: {filepath}")
-        return True, "保存成功"
-    except Exception as e:
-        logger.error(f"保存文件内容失败: {filepath} - {e}")
-        return False, f"保存失败: {e}"
 
 # ════════════════════════════════════════════════════════
 #  HTTP 处理器
@@ -1728,10 +1700,31 @@ class Handler(BaseHTTPRequestHandler):
                     logger.error(f"推送失败: {err}")
                 self.send_json({"ok": code == 0, "msg": err})
 
+            elif p == "/api/pull":
+                logger.info("处理 /api/pull 请求")
+                if not REPO_PATH:
+                    self.send_json({"error":"未打开仓库"}, 400)
+                    return
+
+                out, err, code = run_git(["pull", "--no-edit"], timeout=300)
+                output = (out or "")
+                error = (err or "")
+
+                conflict_files, _ = get_unmerged_files()
+                has_conflicts = bool(conflict_files)
+
+                ok = (code == 0) and (not has_conflicts)
+                self.send_json({
+                    "ok": ok,
+                    "output": output.strip(),
+                    "error": error.strip(),
+                    "has_conflicts": has_conflicts,
+                    "conflict_files": conflict_files,
+                })
+
             else:
                 logger.warning(f"未知的 POST 请求路径: {p}")
                 self.send_json({"error":"Not found"}, 404)
-
         except Exception as e:
             logger.error(f"处理 POST 请求异常: {p} - {str(e)}", exc_info=True)
             self.send_json({"error": f"服务器错误: {str(e)}"}, 500)
