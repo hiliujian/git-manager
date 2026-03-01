@@ -1710,8 +1710,13 @@ class Handler(BaseHTTPRequestHandler):
                 if not commit:
                     self.send_json({"error":"缺少 hash"}, 400)
                     return
-                ok, msg = revert_commit(commit)
-                self.send_json({"ok": ok, "msg": msg})
+                ok, msg, full_hash = revert_commit(commit)
+                self.send_json({
+                    "ok": ok,
+                    "msg": msg,
+                    "full_hash": full_hash,
+                    "hash": full_hash[:7] if full_hash else "",
+                })
 
             elif p == "/api/commit":
                 logger.info("处理 /api/commit 请求")
@@ -1806,6 +1811,8 @@ class Handler(BaseHTTPRequestHandler):
                 _, err, code = run_git(["push"], timeout=300)
                 if code == 0:
                     logger.info("推送成功")
+                    # Refresh remote-tracking refs so commit_push_status becomes accurate immediately
+                    run_git(["fetch", "--prune"], timeout=300)
                 else:
                     logger.error(f"推送失败: {err}")
                 self.send_json({"ok": code == 0, "msg": err})

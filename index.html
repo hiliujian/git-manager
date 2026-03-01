@@ -903,11 +903,19 @@ async function handleFilesUpdate(newFiles) {
   // 保存当前查看的文件路径
   const currentFilePath = curFile !== null && files[curFile] ? files[curFile].path : null;
   
-  // 计算每个文件的modified数量
+  // Apply accurate per-file stats overrides when available
   newFiles.forEach(file => {
-    file.modified = Math.min(file.added, file.removed);
-    file.added -= file.modified;
-    file.removed -= file.modified;
+    if (!file || !file.path) return;
+    const ov = fileStatsOverrideByPath.get(file.path);
+    if (ov) {
+      file.added = Math.max(0, Number(ov.added) || 0);
+      file.removed = Math.max(0, Number(ov.removed) || 0);
+      file.modified = Math.max(0, Number(ov.modified) || 0);
+    } else {
+      file.added = Math.max(0, Number(file.added) || 0);
+      file.removed = Math.max(0, Number(file.removed) || 0);
+      file.modified = Math.max(0, Number(file.modified) || 0);
+    }
   });
   
   files = newFiles;
@@ -991,6 +999,10 @@ let logMode     = 'list';      // 'list' | 'detail'
 let curCommit   = null;        // 当前查看提交
 let curCommitFiles = [];       // 当前提交文件列表
 let curLogFile  = null;        // 当前查看的历史文件
+
+// Accurate per-file stats derived from diff view (added/removed/modified line counts)
+// Key: file path, Value: {added, removed, modified}
+let fileStatsOverrideByPath = new Map();
 
 let refreshBusy = false;
 let lastBranchesRes = null;
@@ -1147,13 +1159,19 @@ async function refresh() {
   }
 
   files   = fRes.files  || [];
-  // 计算每个文件的modified数量
+  // Apply accurate per-file stats overrides when available
   files.forEach(file => {
-    // 对于modified行，Git会将其视为先删除后添加，所以我们可以通过比较added和removed来计算modified数量
-    // 但这只是一个近似值，准确的计算需要解析diff内容
-    file.modified = Math.min(file.added, file.removed);
-    file.added -= file.modified;
-    file.removed -= file.modified;
+    if (!file || !file.path) return;
+    const ov = fileStatsOverrideByPath.get(file.path);
+    if (ov) {
+      file.added = Math.max(0, Number(ov.added) || 0);
+      file.removed = Math.max(0, Number(ov.removed) || 0);
+      file.modified = Math.max(0, Number(ov.modified) || 0);
+    } else {
+      file.added = Math.max(0, Number(file.added) || 0);
+      file.removed = Math.max(0, Number(file.removed) || 0);
+      file.modified = Math.max(0, Number(file.modified) || 0);
+    }
   });
   // 映射日志数据字段: message -> msg, date -> time
   logData = (lRes.log || []).map(log => ({
@@ -1208,12 +1226,12 @@ async function pullUpdate() {
   if (!ok) return;
 
   const btn = document.getElementById('pullBtn');
-  if (btn) { btn.style.opacity = '.5'; btn.style.pointerEvents = 'none'; }
+  setButtonBusy(btn, true);
   toast('更新中...','warn');
 
   const res = await POST('/api/pull', {});
 
-  if (btn) { btn.style.opacity = ''; btn.style.pointerEvents = ''; }
+  setButtonBusy(btn, false);
 
   if (res && res.ok) {
     toast('✓ 更新完成','ok');
@@ -1245,13 +1263,19 @@ async function refreshFilesOnly(forceDiffReload=false) {
   const fRes = await GET('/api/files');
   if (fRes.error) return;
   const newFiles = fRes.files || [];
-  // 计算每个文件的modified数量
+  // Apply accurate per-file stats overrides when available
   newFiles.forEach(file => {
-    // 对于modified行，Git会将其视为先删除后添加，所以我们可以通过比较added和removed来计算modified数量
-    // 但这只是一个近似值，准确的计算需要解析diff内容
-    file.modified = Math.min(file.added, file.removed);
-    file.added -= file.modified;
-    file.removed -= file.modified;
+    if (!file || !file.path) return;
+    const ov = fileStatsOverrideByPath.get(file.path);
+    if (ov) {
+      file.added = Math.max(0, Number(ov.added) || 0);
+      file.removed = Math.max(0, Number(ov.removed) || 0);
+      file.modified = Math.max(0, Number(ov.modified) || 0);
+    } else {
+      file.added = Math.max(0, Number(file.added) || 0);
+      file.removed = Math.max(0, Number(file.removed) || 0);
+      file.modified = Math.max(0, Number(file.modified) || 0);
+    }
   });
   const same = JSON.stringify(newFiles) === JSON.stringify(files);
   // 即使 files 列表统计没变化，撤回/保存等操作也可能改变 diff 内容（比如 +1-1 变更）。
@@ -1395,14 +1419,7 @@ function toggleCheck(i) {
     if (hunksKnown) {
       setAllCommitLines(f.path, curHunks, checkedSet.has(i));
 
-      const changeLocations = [];
-      (curHunks || []).forEach((hunk, hunkIndex) => {
-        (hunk.lines || []).forEach((line, lineIndex) => {
-          if (line.type === 'added' || line.type === 'removed' || line.type === 'modified') {
-            changeLocations.push({ hunkIndex, lineIndex, lineNumber: line.new || line.old, type: line.type, text: line.text });
-          }
-        });
-      });
+      const changeLocations = buildChangeLocationsFromHunks(curHunks);
       renderDiffWithFullContext(f, curHunks, false, changeLocations);
     } else {
       // hunks 未加载，先记录期望，进入 diff 时应用
@@ -1462,16 +1479,33 @@ async function loadDiff(i) {
     return;
   }
   console.log('loadDiff: loading file', f.path);
+
+  const computeStatsFromHunks = (hunks) => {
+    let a = 0, r = 0, m = 0;
+    (hunks || []).forEach(h => {
+      (h.lines || []).forEach(l => {
+        if (!l || !l.type) return;
+        if (l.type === 'added') a++;
+        else if (l.type === 'removed') r++;
+        else if (l.type === 'modified') m++;
+      });
+    });
+    return { added: a, removed: r, modified: m };
+  };
+
+  const renderDiffLabelForFile = (fileObj) => {
+    const segs = fileObj.path.replace(/\\/g,'/').split('/');
+    const name = segs[segs.length-1];
+    document.getElementById('diffLabel').innerHTML =
+      `<span class="fi-st ${fileObj.status}" style="font-size:9px">${fileObj.status}</span>
+       <span class="fn">${esc(fileObj.path)}</span>
+       ${fileObj.added > 0 ? `<span style="color:var(--accent2);font-size:10px">+${fileObj.added}</span>` : ''}
+       ${fileObj.removed > 0 ? `<span style="color:var(--danger);font-size:10px">-${fileObj.removed}</span>` : ''}
+       ${fileObj.modified > 0 ? `<span style="color:var(--accent);font-size:10px">~${fileObj.modified}</span>` : ''}`;
+  };
   
-  // Update label
-  const segs = f.path.replace(/\\/g,'/').split('/');
-  const name = segs[segs.length-1];
-  document.getElementById('diffLabel').innerHTML =
-    `<span class="fi-st ${f.status}" style="font-size:9px">${f.status}</span>
-     <span class="fn">${esc(f.path)}</span>
-     ${f.added > 0 ? `<span style="color:var(--accent2);font-size:10px">+${f.added}</span>` : ''}
-     ${f.removed > 0 ? `<span style="color:var(--danger);font-size:10px">-${f.removed}</span>` : ''}
-     ${f.modified > 0 ? `<span style="color:var(--accent);font-size:10px">~${f.modified}</span>` : ''}`;
+  // Update label (best-effort, may be refined after hunks load)
+  renderDiffLabelForFile(f);
   document.getElementById('diffView').innerHTML =
     '<div class="empty-state"><div class="spin"></div><p>加载中...</p></div>';
 
@@ -1491,6 +1525,18 @@ async function loadDiff(i) {
     console.log('loadDiff: loaded', curHunks.length, 'hunks');
     // 按块提交：默认全选当前文件的所有 hunk
     ensureDefaultHunkSelection(f.path, curHunks.length);
+
+    // Sync exact stats from diff (keeps left file list consistent with code view)
+    try {
+      const st = computeStatsFromHunks(curHunks);
+      f.added = st.added;
+      f.removed = st.removed;
+      f.modified = st.modified;
+      try { fileStatsOverrideByPath.set(f.path, st); } catch (e) {}
+      renderDiffLabelForFile(f);
+      updateStats();
+      renderFileList();
+    } catch (e) {}
   } catch (error) {
     console.error('loadDiff: error loading diff hunks:', error);
     toast('加载差异失败: ' + error.message,'err');
@@ -1539,12 +1585,24 @@ async function loadDiff(i) {
   // Collect change locations for quick navigation
   const changeLocations = [];
   curHunks.forEach((hunk, hunkIndex) => {
+    let lastNewLineNumber = null;
     hunk.lines.forEach((line, lineIndex) => {
+      if (line && line.new !== undefined && line.new !== null && Number.isFinite(Number(line.new))) {
+        lastNewLineNumber = Number(line.new);
+      }
       if (line.type === 'added' || line.type === 'removed' || line.type === 'modified') {
+        const displayLn = (line.type === 'removed')
+          ? (line.old ?? line.new ?? lastNewLineNumber)
+          : (line.new ?? line.old);
+        const anchorLn = (line.type === 'removed')
+          ? (lastNewLineNumber ?? line.new ?? line.old)
+          : displayLn;
         changeLocations.push({
           hunkIndex,
           lineIndex,
-          lineNumber: line.new || line.old,
+          lineNumber: anchorLn,
+          anchorLineNumber: anchorLn,
+          displayLineNumber: displayLn,
           type: line.type,
           text: line.text
         });
@@ -1593,6 +1651,126 @@ function getSelectedCommitLinesSet(filepath) {
 
 function getLineKey(hunkIdx, lineIdx) {
   return `${hunkIdx}:${lineIdx}`;
+}
+
+function remapSelectedLineKeysAfterRemoval(filepath, hunkIdx, startLineIdx, removedCount, hunkWasRemoved) {
+  if (!filepath) return;
+  const set = getSelectedCommitLinesSet(filepath);
+  if (!set || set.size === 0) return;
+  const next = new Set();
+
+  set.forEach(k => {
+    const parts = String(k).split(':');
+    if (parts.length !== 2) return;
+    const hi = Number(parts[0]);
+    const li = Number(parts[1]);
+    if (!Number.isFinite(hi) || !Number.isFinite(li)) return;
+
+    if (hunkWasRemoved) {
+      if (hi === hunkIdx) return;
+      if (hi > hunkIdx) {
+        next.add(getLineKey(hi - 1, li));
+      } else {
+        next.add(getLineKey(hi, li));
+      }
+      return;
+    }
+
+    if (hi !== hunkIdx) {
+      next.add(getLineKey(hi, li));
+      return;
+    }
+
+    if (li < startLineIdx) {
+      next.add(getLineKey(hi, li));
+      return;
+    }
+    if (li >= startLineIdx + removedCount) {
+      next.add(getLineKey(hi, li - removedCount));
+      return;
+    }
+    // within removed range: drop
+  });
+
+  commitLinesSelectedByPath.set(filepath, next);
+  commitLinesInitByPath.set(filepath, true);
+}
+
+function buildChangeLocationsFromHunks(hunks) {
+  const out = [];
+  (hunks || []).forEach((hunk, hunkIndex) => {
+    let lastNewLineNumber = null;
+    (hunk && hunk.lines ? hunk.lines : []).forEach((line, lineIndex) => {
+      if (line && line.new !== undefined && line.new !== null && Number.isFinite(Number(line.new))) {
+        lastNewLineNumber = Number(line.new);
+      }
+      if (!line) return;
+      if (line.type !== 'added' && line.type !== 'removed' && line.type !== 'modified') return;
+
+      const displayLn = (line.type === 'removed')
+        ? (line.old ?? line.new ?? lastNewLineNumber)
+        : (line.new ?? line.old);
+      const anchorLn = (line.type === 'removed')
+        ? (lastNewLineNumber ?? line.new ?? line.old)
+        : displayLn;
+
+      out.push({
+        hunkIndex,
+        lineIndex,
+        lineNumber: anchorLn,
+        anchorLineNumber: anchorLn,
+        displayLineNumber: displayLn,
+        type: line.type,
+        text: line.text
+      });
+    });
+  });
+  return out;
+}
+
+function _buildChangedLineSignature(line) {
+  if (!line) return '';
+  const t = line.type || '';
+  const tx = (line.text === undefined || line.text === null) ? '' : String(line.text);
+  const ot = (line.old_text === undefined || line.old_text === null) ? '' : String(line.old_text);
+  return `${t}|${ot}|${tx}`;
+}
+
+function remapSelectedLineKeysBySignature(filepath, oldHunks, newHunks) {
+  if (!filepath) return;
+  const set = getSelectedCommitLinesSet(filepath);
+  if (!set || set.size === 0) return;
+
+  const sigToKeys = new Map();
+  (newHunks || []).forEach((h, hi) => {
+    (h && h.lines ? h.lines : []).forEach((l, li) => {
+      if (!l) return;
+      if (l.type !== 'added' && l.type !== 'removed' && l.type !== 'modified') return;
+      const sig = _buildChangedLineSignature(l);
+      if (!sigToKeys.has(sig)) sigToKeys.set(sig, []);
+      sigToKeys.get(sig).push(getLineKey(hi, li));
+    });
+  });
+
+  const next = new Set();
+  set.forEach(k => {
+    const parts = String(k).split(':');
+    if (parts.length !== 2) return;
+    const hi = Number(parts[0]);
+    const li = Number(parts[1]);
+    if (!Number.isFinite(hi) || !Number.isFinite(li)) return;
+    const l = (oldHunks || [])[hi]?.lines?.[li];
+    if (!l) return;
+    if (l.type !== 'added' && l.type !== 'removed' && l.type !== 'modified') return;
+    const sig = _buildChangedLineSignature(l);
+    const arr = sigToKeys.get(sig);
+    if (arr && arr.length) {
+      next.add(arr.shift());
+    }
+  });
+
+  commitLinesSelectedByPath.set(filepath, next);
+  commitLinesInitByPath.set(filepath, true);
 }
 
 function ensureDefaultHunkSelection(filepath, hunksLen) {
@@ -1736,12 +1914,20 @@ function toggleCommitHunk(filepath, hunkIdx, checked) {
     const f = files[curFile];
     const changeLocations = [];
     (curHunks || []).forEach((hunk, hunkIndex) => {
+      let lastNewLineNumber = null;
       (hunk.lines || []).forEach((line, lineIndex) => {
+        if (line && line.new !== undefined && line.new !== null && Number.isFinite(Number(line.new))) {
+          lastNewLineNumber = Number(line.new);
+        }
         if (line.type === 'added' || line.type === 'removed' || line.type === 'modified') {
+          const displayLn = (line.type === 'removed') ? (line.old ?? line.new ?? lastNewLineNumber) : (line.new ?? line.old);
+          const anchorLn = (line.type === 'removed') ? (lastNewLineNumber ?? line.new ?? line.old) : displayLn;
           changeLocations.push({
             hunkIndex,
             lineIndex,
-            lineNumber: line.new || line.old,
+            lineNumber: anchorLn,
+            anchorLineNumber: anchorLn,
+            displayLineNumber: displayLn,
             type: line.type,
             text: line.text
           });
@@ -1763,9 +1949,15 @@ function toggleCommitLine(filepath, hunkIdx, lineIdx, checked) {
     const f = files[curFile];
     const changeLocations = [];
     (curHunks || []).forEach((hunk, hunkIndex) => {
+      let lastNewLineNumber = null;
       (hunk.lines || []).forEach((line, li) => {
+        if (line && line.new !== undefined && line.new !== null && Number.isFinite(Number(line.new))) {
+          lastNewLineNumber = Number(line.new);
+        }
         if (line.type === 'added' || line.type === 'removed' || line.type === 'modified') {
-          changeLocations.push({ hunkIndex, lineIndex: li, lineNumber: line.new || line.old, type: line.type, text: line.text });
+          const displayLn = (line.type === 'removed') ? (line.old ?? line.new ?? lastNewLineNumber) : (line.new ?? line.old);
+          const anchorLn = (line.type === 'removed') ? (lastNewLineNumber ?? line.new ?? line.old) : displayLn;
+          changeLocations.push({ hunkIndex, lineIndex: li, lineNumber: anchorLn, anchorLineNumber: anchorLn, displayLineNumber: displayLn, type: line.type, text: line.text });
         }
       });
     });
@@ -1790,14 +1982,7 @@ function toggleCommitBlock(filepath, hunkIdx, startLineIdx, endLineIdx, checked)
 
   if (curFile !== null && files[curFile] && files[curFile].path === filepath) {
     const f = files[curFile];
-    const changeLocations = [];
-    (curHunks || []).forEach((hunk, hunkIndex) => {
-      (hunk.lines || []).forEach((line, li) => {
-        if (line.type === 'added' || line.type === 'removed' || line.type === 'modified') {
-          changeLocations.push({ hunkIndex, lineIndex: li, lineNumber: line.new || line.old, type: line.type, text: line.text });
-        }
-      });
-    });
+    const changeLocations = buildChangeLocationsFromHunks(curHunks);
     renderDiffWithFullContext(f, curHunks, false, changeLocations);
   }
 }
@@ -1872,25 +2057,38 @@ function renderDiffWithFullContext(file, hunks, readonly, changeLocations = []) 
   // Build change navigation bar
   let navigationHtml = '';
   if (changeLocations.length > 0) {
-    // Merge consecutive line numbers into ranges for display
+    // Merge into ranges for display (follow the same block boundary idea as "块撤回")
     const mergedChangeLocations = (() => {
       const items = (changeLocations || [])
-        .filter(c => c && Number.isFinite(Number(c.lineNumber)))
-        .map(c => ({...c, lineNumber: Number(c.lineNumber)}))
-        .sort((a, b) => a.lineNumber - b.lineNumber);
+        .filter(c => c && Number.isFinite(Number(c.displayLineNumber ?? c.lineNumber)))
+        .map(c => ({
+          ...c,
+          lineNumber: Number(c.displayLineNumber ?? c.lineNumber),
+          anchorLineNumber: Number.isFinite(Number(c.anchorLineNumber)) ? Number(c.anchorLineNumber) : Number(c.lineNumber),
+          hunkIndex: Number.isFinite(Number(c.hunkIndex)) ? Number(c.hunkIndex) : 0,
+          lineIndex: Number.isFinite(Number(c.lineIndex)) ? Number(c.lineIndex) : 0,
+        }))
+        .sort((a, b) => (a.hunkIndex - b.hunkIndex) || (a.lineIndex - b.lineIndex) || (a.lineNumber - b.lineNumber));
       const out = [];
       for (const c of items) {
         const last = out[out.length - 1];
-        if (last && c.lineNumber === last._end + 1) {
+        const canMerge = !!(last &&
+          c.hunkIndex === last.hunkIndex &&
+          c.lineIndex === last._lastLineIndex + 1 &&
+          c.lineNumber === last._end + 1 &&
+          c.type === last.type);
+
+        if (canMerge) {
           last._end = c.lineNumber;
-          // If a range contains mixed types, present as modified
-          if (last.type !== c.type) last.type = 'modified';
+          last._lastLineIndex = c.lineIndex;
           continue;
         }
         out.push({
           ...c,
           _start: c.lineNumber,
           _end: c.lineNumber,
+          _lastLineIndex: c.lineIndex,
+          _anchorStart: c.anchorLineNumber,
         });
       }
       return out.map(x => ({
@@ -1907,7 +2105,8 @@ function renderDiffWithFullContext(file, hunks, readonly, changeLocations = []) 
         else if (change.type === 'removed') typeClass = 'change-removed';
         else if (change.type === 'modified') typeClass = 'change-modified';
         
-        return `<a href="#" class="change-nav-item ${typeClass}" onclick="scrollToLine(${change.lineNumber}); return false;">
+        const anchor = Number.isFinite(Number(change._anchorStart)) ? Number(change._anchorStart) : Number(change.anchorLineNumber ?? change.lineNumber);
+        return `<a href="#" class="change-nav-item ${typeClass}" onclick="scrollToLine(${anchor}); return false;">
           ${change.displayText || change.lineNumber}
         </a>`;
       }).join('')}
@@ -3374,14 +3573,20 @@ async function revertLineInstantly(filepath, hunkIdx, lineIdx, status) {
   // 1. 保存原始数据（用于失败回滚）
   const originalHunks = JSON.parse(JSON.stringify(curHunks));
   const originalFiles = JSON.parse(JSON.stringify(files));
+  const originalSelectedKeys = new Set(getSelectedCommitLinesSet(filepath));
   
   // 2. 立即更新数据结构（这样重新渲染时就是新数据）
   curHunks[hunkIdx].lines.splice(lineIdx, 1);
   
   // 如果hunk没有行了，删除整个hunk
+  let hunkWasRemoved = false;
   if (curHunks[hunkIdx].lines.length === 0) {
     curHunks.splice(hunkIdx, 1);
+    hunkWasRemoved = true;
   }
+
+  // Keep commit line checkbox selection stable after index shifts
+  remapSelectedLineKeysAfterRemoval(filepath, hunkIdx, lineIdx, 1, hunkWasRemoved);
   
   // 3. 立即更新文件统计数据
   if (curFile !== null && files[curFile]) {
@@ -3404,21 +3609,7 @@ async function revertLineInstantly(filepath, hunkIdx, lineIdx, status) {
   // 4. 立即重新渲染diff（使用新数据，新索引）
   if (curFile !== null && files[curFile]) {
     const f = files[curFile];
-    // 重新收集changeLocations
-    const changeLocations = [];
-    curHunks.forEach((hunk, hunkIndex) => {
-      hunk.lines.forEach((line, lineIndex) => {
-        if (line.type === 'added' || line.type === 'removed' || line.type === 'modified') {
-          changeLocations.push({
-            hunkIndex,
-            lineIndex,
-            lineNumber: line.new || line.old,
-            type: line.type,
-            text: line.text
-          });
-        }
-      });
-    });
+    const changeLocations = buildChangeLocationsFromHunks(curHunks);
     renderDiffWithFullContext(f, curHunks, false, changeLocations);
   }
   
@@ -3443,25 +3634,13 @@ async function revertLineInstantly(filepath, hunkIdx, lineIdx, status) {
         // 恢复数据
         curHunks = originalHunks;
         files = originalFiles;
+        commitLinesSelectedByPath.set(filepath, new Set(originalSelectedKeys));
+        commitLinesInitByPath.set(filepath, true);
         
         // 重新渲染
         if (curFile !== null && files[curFile]) {
           const f = files[curFile];
-          // 重新收集changeLocations
-          const changeLocations = [];
-          curHunks.forEach((hunk, hunkIndex) => {
-            hunk.lines.forEach((line, lineIndex) => {
-              if (line.type === 'added' || line.type === 'removed' || line.type === 'modified') {
-                changeLocations.push({
-                  hunkIndex,
-                  lineIndex,
-                  lineNumber: line.new || line.old,
-                  type: line.type,
-                  text: line.text
-                });
-              }
-            });
-          });
+          const changeLocations = buildChangeLocationsFromHunks(curHunks);
           renderDiffWithFullContext(f, curHunks, false, changeLocations);
         }
         
@@ -3474,7 +3653,10 @@ async function revertLineInstantly(filepath, hunkIdx, lineIdx, status) {
         // 成功后，从后端获取最新的diff数据和文件统计
         const diffRes = await GET(`/api/diff?path=${encodeURIComponent(filepath)}&status=${status}`);
         if (diffRes.hunks) {
+          const prevHunks = curHunks;
           curHunks = diffRes.hunks;
+          // Remap selection keys from optimistic hunks to backend-refreshed hunks
+          remapSelectedLineKeysBySignature(filepath, prevHunks, curHunks);
           
           // 获取最新的文件内容
           const contentRes = await POST('/api/file_content', {path: filepath});
@@ -3485,21 +3667,7 @@ async function revertLineInstantly(filepath, hunkIdx, lineIdx, status) {
           // 重新渲染diff，使用最新的hunk数据（包含正确的header）
           if (curFile !== null && files[curFile]) {
             const f = files[curFile];
-            // 重新收集changeLocations
-            const changeLocations = [];
-            curHunks.forEach((hunk, hunkIndex) => {
-              hunk.lines.forEach((line, lineIndex) => {
-                if (line.type === 'added' || line.type === 'removed' || line.type === 'modified') {
-                  changeLocations.push({
-                    hunkIndex,
-                    lineIndex,
-                    lineNumber: line.new || line.old,
-                    type: line.type,
-                    text: line.text
-                  });
-                }
-              });
-            });
+            const changeLocations = buildChangeLocationsFromHunks(curHunks);
             renderDiffWithFullContext(f, curHunks, false, changeLocations);
             // 前端已主动把 diff 刷新到最新，跳过下一次 WS 推送触发的自动 loadDiff
             skipNextAutoDiffRefresh = true;
@@ -3529,24 +3697,12 @@ async function revertLineInstantly(filepath, hunkIdx, lineIdx, status) {
       // 网络错误也要回滚
       curHunks = originalHunks;
       files = originalFiles;
+      commitLinesSelectedByPath.set(filepath, new Set(originalSelectedKeys));
+      commitLinesInitByPath.set(filepath, true);
       
       if (curFile !== null && files[curFile]) {
         const f = files[curFile];
-        // 重新收集changeLocations
-        const changeLocations = [];
-        curHunks.forEach((hunk, hunkIndex) => {
-          hunk.lines.forEach((line, lineIndex) => {
-            if (line.type === 'added' || line.type === 'removed' || line.type === 'modified') {
-              changeLocations.push({
-                hunkIndex,
-                lineIndex,
-                lineNumber: line.new || line.old,
-                type: line.type,
-                text: line.text
-              });
-            }
-          });
-        });
+        const changeLocations = buildChangeLocationsFromHunks(curHunks);
         renderDiffWithFullContext(f, curHunks, false, changeLocations);
       }
       
@@ -3602,9 +3758,15 @@ async function revertMultiLinesInstantly(filepath, hunkIdx, startLineIdx, endLin
   });
   
   // 如果hunk没有行了，删除整个hunk
+  let hunkWasRemoved = false;
   if (curHunks[hunkIdx].lines.length === 0) {
     curHunks.splice(hunkIdx, 1);
+    hunkWasRemoved = true;
   }
+
+  // Keep commit line checkbox selection stable after index shifts
+  const removedCount = Math.max(0, (linesToRevert || []).length);
+  remapSelectedLineKeysAfterRemoval(filepath, hunkIdx, startLineIdx, removedCount, hunkWasRemoved);
   
   // 3. 立即更新文件统计数据
   if (curFile !== null && files[curFile]) {
@@ -3628,21 +3790,7 @@ async function revertMultiLinesInstantly(filepath, hunkIdx, startLineIdx, endLin
   // 4. 立即重新渲染diff（使用新数据，新索引）
   if (curFile !== null && files[curFile]) {
     const f = files[curFile];
-    // 重新收集changeLocations
-    const changeLocations = [];
-    curHunks.forEach((hunk, hunkIndex) => {
-      hunk.lines.forEach((line, lineIndex) => {
-        if (line.type === 'added' || line.type === 'removed' || line.type === 'modified') {
-          changeLocations.push({
-            hunkIndex,
-            lineIndex,
-            lineNumber: line.new || line.old,
-            type: line.type,
-            text: line.text
-          });
-        }
-      });
-    });
+    const changeLocations = buildChangeLocationsFromHunks(curHunks);
     renderDiffWithFullContext(f, curHunks, false, changeLocations);
   }
   
@@ -3672,21 +3820,7 @@ async function revertMultiLinesInstantly(filepath, hunkIdx, startLineIdx, endLin
         // 重新渲染
         if (curFile !== null && files[curFile]) {
           const f = files[curFile];
-          // 重新收集changeLocations
-          const changeLocations = [];
-          curHunks.forEach((hunk, hunkIndex) => {
-            hunk.lines.forEach((line, lineIndex) => {
-              if (line.type === 'added' || line.type === 'removed' || line.type === 'modified') {
-                changeLocations.push({
-                  hunkIndex,
-                  lineIndex,
-                  lineNumber: line.new || line.old,
-                  type: line.type,
-                  text: line.text
-                });
-              }
-            });
-          });
+          const changeLocations = buildChangeLocationsFromHunks(curHunks);
           renderDiffWithFullContext(f, curHunks, false, changeLocations);
         }
         
@@ -3710,21 +3844,7 @@ async function revertMultiLinesInstantly(filepath, hunkIdx, startLineIdx, endLin
           // 重新渲染diff，使用最新的hunk数据（包含正确的header）
           if (curFile !== null && files[curFile]) {
             const f = files[curFile];
-            // 重新收集changeLocations
-            const changeLocations = [];
-            curHunks.forEach((hunk, hunkIndex) => {
-              hunk.lines.forEach((line, lineIndex) => {
-                if (line.type === 'added' || line.type === 'removed' || line.type === 'modified') {
-                  changeLocations.push({
-                    hunkIndex,
-                    lineIndex,
-                    lineNumber: line.new || line.old,
-                    type: line.type,
-                    text: line.text
-                  });
-                }
-              });
-            });
+            const changeLocations = buildChangeLocationsFromHunks(curHunks);
             renderDiffWithFullContext(f, curHunks, false, changeLocations);
             // 前端已主动把 diff 刷新到最新，跳过下一次 WS 推送触发的自动 loadDiff
             skipNextAutoDiffRefresh = true;
@@ -3757,21 +3877,7 @@ async function revertMultiLinesInstantly(filepath, hunkIdx, startLineIdx, endLin
       
       if (curFile !== null && files[curFile]) {
         const f = files[curFile];
-        // 重新收集changeLocations
-        const changeLocations = [];
-        curHunks.forEach((hunk, hunkIndex) => {
-          hunk.lines.forEach((line, lineIndex) => {
-            if (line.type === 'added' || line.type === 'removed' || line.type === 'modified') {
-              changeLocations.push({
-                hunkIndex,
-                lineIndex,
-                lineNumber: line.new || line.old,
-                type: line.type,
-                text: line.text
-              });
-            }
-          });
-        });
+        const changeLocations = buildChangeLocationsFromHunks(curHunks);
         renderDiffWithFullContext(f, curHunks, false, changeLocations);
       }
       
@@ -3823,21 +3929,7 @@ async function revertHunkInstantly(filepath, hunkIdx, status) {
   // 5. 立即重新渲染diff
   if (curFile !== null && files[curFile]) {
     const f = files[curFile];
-    // 重新收集changeLocations
-    const changeLocations = [];
-    curHunks.forEach((hunk, hunkIndex) => {
-      hunk.lines.forEach((line, lineIndex) => {
-        if (line.type === 'added' || line.type === 'removed' || line.type === 'modified') {
-          changeLocations.push({
-            hunkIndex,
-            lineIndex,
-            lineNumber: line.new || line.old,
-            type: line.type,
-            text: line.text
-          });
-        }
-      });
-    });
+    const changeLocations = buildChangeLocationsFromHunks(curHunks);
     renderDiffWithFullContext(f, curHunks, false, changeLocations);
   }
   
@@ -3861,21 +3953,7 @@ async function revertHunkInstantly(filepath, hunkIdx, status) {
         
         if (curFile !== null && files[curFile]) {
           const f = files[curFile];
-          // 重新收集changeLocations
-          const changeLocations = [];
-          curHunks.forEach((hunk, hunkIndex) => {
-            hunk.lines.forEach((line, lineIndex) => {
-              if (line.type === 'added' || line.type === 'removed' || line.type === 'modified') {
-                changeLocations.push({
-                  hunkIndex,
-                  lineIndex,
-                  lineNumber: line.new || line.old,
-                  type: line.type,
-                  text: line.text
-                });
-              }
-            });
-          });
+          const changeLocations = buildChangeLocationsFromHunks(curHunks);
           renderDiffWithFullContext(f, curHunks, false, changeLocations);
         }
         
@@ -3897,21 +3975,7 @@ async function revertHunkInstantly(filepath, hunkIdx, status) {
           // 重新渲染diff，使用最新的hunk数据（包含正确的header）
           if (curFile !== null && files[curFile]) {
             const f = files[curFile];
-            // 重新收集changeLocations
-            const changeLocations = [];
-            curHunks.forEach((hunk, hunkIndex) => {
-              hunk.lines.forEach((line, lineIndex) => {
-                if (line.type === 'added' || line.type === 'removed' || line.type === 'modified') {
-                  changeLocations.push({
-                    hunkIndex,
-                    lineIndex,
-                    lineNumber: line.new || line.old,
-                    type: line.type,
-                    text: line.text
-                  });
-                }
-              });
-            });
+            const changeLocations = buildChangeLocationsFromHunks(curHunks);
             renderDiffWithFullContext(f, curHunks, false, changeLocations);
             // 前端已主动把 diff 刷新到最新，跳过下一次 WS 推送触发的自动 loadDiff
             skipNextAutoDiffRefresh = true;
@@ -3942,21 +4006,7 @@ async function revertHunkInstantly(filepath, hunkIdx, status) {
       
       if (curFile !== null && files[curFile]) {
         const f = files[curFile];
-        // 重新收集changeLocations
-        const changeLocations = [];
-        curHunks.forEach((hunk, hunkIndex) => {
-          hunk.lines.forEach((line, lineIndex) => {
-            if (line.type === 'added' || line.type === 'removed' || line.type === 'modified') {
-              changeLocations.push({
-                hunkIndex,
-                lineIndex,
-                lineNumber: line.new || line.old,
-                type: line.type,
-                text: line.text
-              });
-            }
-          });
-        });
+        const changeLocations = buildChangeLocationsFromHunks(curHunks);
         renderDiffWithFullContext(f, curHunks, false, changeLocations);
       }
       
@@ -4218,8 +4268,25 @@ function updateCommitActionButtons(pushed) {
   if (pb) pb.style.display = (pushed === false) ? '' : 'none';
 }
 
+async function refreshCommitActionButtonsForHash(fullHash) {
+  const h = (fullHash || '').trim();
+  if (!h) { updateCommitActionButtons(null); return; }
+  try {
+    const st = await GET(`/api/commit_push_status?hash=${encodeURIComponent(h)}`);
+    if (st && !st.error) updateCommitActionButtons(!!st.pushed);
+    else updateCommitActionButtons(null);
+  } catch (_) {
+    updateCommitActionButtons(null);
+  }
+}
+
 async function openCommitAfterLocalCommit(commitHash) {
-  const ok = confirm(`提交已完成：\n\n${commitHash}\n\n是否跳转到历史中查看该提交，并可手动 Push？`);
+  const ok = await showConfirm({
+    title: '提交已完成',
+    message: `提交哈希：\n\n${commitHash}\n\n是否跳转到历史中查看该提交，并可手动 Push？`,
+    okText: '跳转到历史',
+    cancelText: '稍后',
+  });
   if (!ok) return;
   activateRightTab('log');
   await refresh();
@@ -4227,30 +4294,63 @@ async function openCommitAfterLocalCommit(commitHash) {
 }
 
 async function pushFromHistory() {
-  const ok = confirm('确认推送当前分支到远端？');
+  const ok = await showConfirm({
+    title: '确认推送',
+    message: '确认推送当前分支到远端？',
+    okText: 'Push',
+    cancelText: '取消',
+  });
   if (!ok) return;
-  toast('推送中...','warn');
-  const res = await POST('/api/push',{});
-  if (res.ok) toast('✓ Push 完成','ok');
-  else toast(`Push 失败: ${res.msg||res.error}`,'err');
-  await refresh();
+  const pb = document.getElementById('pushCommitBtn');
+  setButtonBusy(pb, true);
+  try {
+    toast('推送中...','warn');
+    const res = await POST('/api/push',{});
+    if (res.ok) toast('✓ Push 完成','ok');
+    else toast(`Push 失败: ${res.msg||res.error}`,'err');
+    await refresh();
+    if (curCommit && (curCommit.full_hash || curCommit.hash)) {
+      await refreshCommitActionButtonsForHash(curCommit.full_hash || curCommit.hash);
+    }
+  } finally {
+    setButtonBusy(pb, false);
+  }
 }
 
 async function revertCommitFromHistory() {
   const fullHash = (curCommit && (curCommit.full_hash || curCommit.hash)) ? (curCommit.full_hash || curCommit.hash) : '';
   if (!fullHash) return;
-  const ok = confirm(`确认撤回该提交（git revert）？\n\n${fullHash}\n\n此操作会生成一个新的回滚提交。`);
+  const ok = await showConfirm({
+    title: '确认撤回（Revert）',
+    message: `确认撤回该提交（git revert）？\n\n${fullHash}\n\n此操作会生成一个新的回滚提交。`,
+    okText: 'Revert',
+    cancelText: '取消',
+    danger: true,
+  });
   if (!ok) return;
-  toast('撤回中...','warn');
-  const res = await POST('/api/revert_commit', {hash: fullHash});
-  if (res && res.ok) {
-    toast('✓ Revert 完成','ok');
-    await refresh();
-    // revert 会产生新提交，刷新历史列表
-    activateRightTab('log');
-  } else {
-    toast(`Revert 失败: ${(res && (res.msg||res.error)) ? (res.msg||res.error) : '未知错误'}`,'err');
-    await refresh();
+  const rb = document.getElementById('revertCommitBtn');
+  setButtonBusy(rb, true);
+  try {
+    toast('撤回中...','warn');
+    const res = await POST('/api/revert_commit', {hash: fullHash});
+    if (res && res.ok) {
+      toast('✓ Revert 完成','ok');
+      await refresh();
+      // revert 会产生新提交：自动打开新提交，并让 Push/Revert 状态基于新提交重新计算
+      const newHash = (res.full_hash || res.hash || '').trim();
+      activateRightTab('log');
+      if (newHash) {
+        await openCommit(newHash);
+      } else {
+        await refreshCommitActionButtonsForHash(fullHash);
+      }
+    } else {
+      toast(`Revert 失败: ${(res && (res.msg||res.error)) ? (res.msg||res.error) : '未知错误'}`,'err');
+      await refresh();
+      await refreshCommitActionButtonsForHash(fullHash);
+    }
+  } finally {
+    setButtonBusy(rb, false);
   }
 }
 
@@ -4304,25 +4404,36 @@ async function openCommit(fullHash) {
         ${f.added   > 0 ? `<span class="a">+${f.added}</span>`   : ''}
         ${f.removed > 0 ? `<span class="r">-${f.removed}</span>` : ''}
       </span>
-      <button class="btn" style="margin-left:auto;padding:2px 8px" title="将工作区该文件覆盖为此提交的完整内容" onclick="event.stopPropagation();restoreFromCommit('${(c.full_hash||fullHash).replace(/'/g,"\\'")}', '${f.path.replace(/'/g,"\\'")}')">整文件恢复</button>
+      <button class="btn" style="margin-left:auto;padding:2px 8px" title="将工作区该文件覆盖为此提交的完整内容" onclick="event.stopPropagation();restoreFromCommit('${(c.full_hash||fullHash).replace(/'/g,"\\'")}', '${f.path.replace(/'/g,"\\'")}', this)">整文件恢复</button>
     </div>`;
   }).join('');
 }
 
-async function restoreFromCommit(commitHash, filepath) {
+async function restoreFromCommit(commitHash, filepath, btnEl=null) {
   if (!commitHash || !filepath) return;
-  const ok = confirm(`将工作区文件恢复为该提交版本：\n\n${filepath}\n\n此操作会覆盖当前工作区内容，是否继续？`);
+  const ok = await showConfirm({
+    title: '确认整文件恢复',
+    message: `将工作区文件恢复为该提交版本：\n\n${filepath}\n\n此操作会覆盖当前工作区内容，是否继续？`,
+    okText: '恢复',
+    cancelText: '取消',
+    danger: true,
+  });
   if (!ok) return;
-  const res = await POST('/api/restore_file', {hash: commitHash, path: filepath});
-  if (res.ok) {
-    toast('✓ 已从历史版本恢复文件','ok');
-    await refresh();
-    // 恢复后优先展示工作区 diff（如果该文件在变更列表里）
-    const idx = files.findIndex(x => x.path === filepath);
-    if (idx >= 0) await selectFile(idx);
-    else clearDiff();
-  } else {
-    toast(`恢复失败: ${res.msg||res.error}`,'err');
+  setButtonBusy(btnEl, true);
+  try {
+    const res = await POST('/api/restore_file', {hash: commitHash, path: filepath});
+    if (res.ok) {
+      toast('✓ 已从历史版本恢复文件','ok');
+      await refresh();
+      // 恢复后优先展示工作区 diff（如果该文件在变更列表里）
+      const idx = files.findIndex(x => x.path === filepath);
+      if (idx >= 0) await selectFile(idx);
+      else clearDiff();
+    } else {
+      toast(`恢复失败: ${res.msg||res.error}`,'err');
+    }
+  } finally {
+    setButtonBusy(btnEl, false);
   }
 }
 
@@ -4405,6 +4516,26 @@ function showConfirm({title='确认', message='', okText='确定', cancelText='�
 
     m.classList.add('show');
   });
+}
+
+function setButtonBusy(btn, busy, busyText=null) {
+  if (!btn) return;
+  const b = btn;
+  if (busy) {
+    if (b.dataset.busy === '1') return;
+    b.dataset.busy = '1';
+    b.dataset.oldHtml = b.innerHTML;
+    b.disabled = true;
+    b.style.opacity = '.6';
+    b.style.pointerEvents = 'none';
+    if (busyText !== null) b.innerHTML = busyText;
+  } else {
+    b.dataset.busy = '0';
+    if (typeof b.dataset.oldHtml === 'string') b.innerHTML = b.dataset.oldHtml;
+    b.disabled = false;
+    b.style.opacity = '';
+    b.style.pointerEvents = '';
+  }
 }
 
 function renderBranchMenu() {
@@ -4637,9 +4768,32 @@ function toggleRightPanel() {
   updatePanelToggleButtons();
 }
 
+function initChangeNavigationWheelScroll() {
+  if (window.__changeNavWheelInited) return;
+  window.__changeNavWheelInited = true;
+
+  document.addEventListener('wheel', (e) => {
+    const nav = e.target && e.target.closest ? e.target.closest('.change-navigation') : null;
+    if (!nav) return;
+
+    // Prefer native horizontal scroll if trackpad provides deltaX
+    const dx = Math.abs(e.deltaX || 0);
+    const dy = Math.abs(e.deltaY || 0);
+
+    // If user is scrolling vertically (most mouse wheels), map it to horizontal.
+    // If already horizontal (trackpad), keep it horizontal.
+    const delta = (dx > dy) ? (e.deltaX || 0) : (e.deltaY || 0);
+    if (!delta) return;
+
+    nav.scrollLeft += delta;
+    e.preventDefault();
+  }, { passive: false });
+}
+
 makeResizer('r1','.sidebar','right');
 makeResizer('r2','#rightPanel','left');
 updatePanelToggleButtons();
+initChangeNavigationWheelScroll();
 
 (async () => {
   try {
