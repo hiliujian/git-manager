@@ -1250,6 +1250,14 @@ async function handleFilesUpdate(newFiles) {
   
   // 保存当前查看的文件路径
   const currentFilePath = curFile !== null && files[curFile] ? files[curFile].path : null;
+
+  // Preserve checked file selection by path (file list order may change)
+  const checkedPaths = new Set();
+  try {
+    (files || []).forEach((f, i) => {
+      if (checkedSet && checkedSet.has(i) && f && f.path) checkedPaths.add(f.path);
+    });
+  } catch (e) {}
   
   // Apply accurate per-file stats overrides when available
   newFiles.forEach(file => {
@@ -1268,12 +1276,12 @@ async function handleFilesUpdate(newFiles) {
   
   files = newFiles;
   
-  // 保持当前的选中状态
+  // 保持当前的选中状态（不再在空集合时兜底全选）
   const next = new Set();
-  files.forEach((_, i) => {
-    if (checkedSet.has(i)) next.add(i);
+  files.forEach((f, i) => {
+    if (f && f.path && checkedPaths.has(f.path)) next.add(i);
   });
-  checkedSet = next.size ? next : new Set(files.map((_, i) => i));
+  checkedSet = next;
   
   renderFileList();
   updateStats();
@@ -1536,18 +1544,20 @@ async function refresh() {
   lastBranchesRes = bRes;
   if (bRes.current) document.getElementById('branchName').textContent = bRes.current;
 
-  // 重建 checkedSet（保留已有，追加新文件）
-  if (!checkedSet || checkedSet.size === 0) {
-    checkedSet = new Set(files.map((_, i) => i));
-  } else {
-    const next = new Set();
-    // 默认：保留原来的勾选；如果文件列表变化导致索引错位，会有风险，但至少不会每次刷新强制全选
-    files.forEach((_, i) => {
-      if (checkedSet.has(i)) next.add(i);
+  // 重建 checkedSet（按 path 保留勾选，不再默认全选）
+  const checkedPaths = new Set();
+  try {
+    (files || []).forEach((f, i) => {
+      // NOTE: Here 'files' is already updated, so we rely on the previous checkedSet only.
+      // If checkedSet refers to older indices, it will be reconciled on the next WS update.
+      if (checkedSet && checkedSet.has(i) && f && f.path) checkedPaths.add(f.path);
     });
-    // 如果一个都不在了（例如文件数量变化），则全选兜底
-    checkedSet = next.size ? next : new Set(files.map((_, i) => i));
-  }
+  } catch (e) {}
+  const nextChecked = new Set();
+  (files || []).forEach((f, i) => {
+    if (f && f.path && checkedPaths.has(f.path)) nextChecked.add(i);
+  });
+  checkedSet = nextChecked;
 
   renderFileList();
   renderLogList();
@@ -1629,16 +1639,19 @@ async function refreshFilesOnly(forceDiffReload=false) {
   // 即使 files 列表统计没变化，撤回/保存等操作也可能改变 diff 内容（比如 +1-1 变更）。
   // 因此在 forceDiffReload 时不要短路。
   if (same && !forceDiffReload) return;
-  files = newFiles;
-  if (!checkedSet || checkedSet.size === 0) {
-    checkedSet = new Set(files.map((_, i) => i));
-  } else {
-    const next = new Set();
-    files.forEach((_, i) => {
-      if (checkedSet.has(i)) next.add(i);
+  // Preserve checked file selection by path (file list order may change)
+  const checkedPaths = new Set();
+  try {
+    (files || []).forEach((f, i) => {
+      if (checkedSet && checkedSet.has(i) && f && f.path) checkedPaths.add(f.path);
     });
-    checkedSet = next.size ? next : new Set(files.map((_, i) => i));
-  }
+  } catch (e) {}
+  files = newFiles;
+  const nextChecked = new Set();
+  (files || []).forEach((f, i) => {
+    if (f && f.path && checkedPaths.has(f.path)) nextChecked.add(i);
+  });
+  checkedSet = nextChecked;
   renderFileList();
   updateStats();
   if (curFile !== null) {
@@ -1825,6 +1838,13 @@ function selAll(v) {
       commitLinesDesiredByPath.set(f.path, !!v);
     }
   });
+
+  // If current diff is visible, immediately re-render so line checkboxes reflect the new state.
+  if (curFile !== null && files[curFile] && Array.isArray(curHunks) && curHunks.length) {
+    const f = files[curFile];
+    const changeLocations = buildChangeLocationsFromHunks(curHunks);
+    renderDiffWithFullContext(f, curHunks, false, changeLocations);
+  }
   updateStats(); renderFileList();
 }
 function updateStats() {
@@ -2222,9 +2242,8 @@ function ensureDefaultHunkSelection(filepath, hunksLen) {
   // 只在首次进入时初始化：优先应用文件级期望，否则默认全选；之后允许全取消
   if (!commitHunksInitByPath.get(filepath)) {
     const desired = commitHunksDesiredByPath.get(filepath);
-    if (desired === false) {
-      set.clear();
-    } else {
+    set.clear();
+    if (desired === true) {
       if (hunksLen > 0) {
         for (let i = 0; i < hunksLen; i++) set.add(i);
       }
@@ -2279,7 +2298,7 @@ function ensureDefaultLineSelection(filepath, hunks) {
     (hunk.lines || []).forEach((l, li) => {
       if (l.type === 'added' || l.type === 'removed' || l.type === 'modified') {
         total++;
-        if (desired !== false) set.add(getLineKey(hi, li));
+        if (desired === true) set.add(getLineKey(hi, li));
       }
     });
   });
