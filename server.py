@@ -398,6 +398,16 @@ def get_unmerged_files():
     uniq = sorted({p.replace("\\", "/") for p in items if p})
     return uniq, raw
 
+def has_any_staged_changes():
+    if not REPO_PATH:
+        return False, "未打开仓库"
+    out, err, code = run_git(["diff", "--cached", "--name-only", "-z"], timeout=60)
+    if code != 0:
+        return False, (err or "检查暂存区失败")
+    raw = out or ""
+    files = [p for p in raw.split("\x00") if p]
+    return (len(files) > 0), None
+
 def _safe_repo_abspath(rel_path: str):
     """Resolve a repo-relative path to an absolute path, preventing path traversal."""
     if not REPO_PATH:

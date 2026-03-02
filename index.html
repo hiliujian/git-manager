@@ -1817,27 +1817,25 @@ async function loadDiff(i) {
 
   // Load the full file content
   console.log('loadDiff: loading file content for:', f.path, 'status:', f.status);
-  try {
-    const contentRes = await POST('/api/file_content', {path: f.path});
-    console.log('loadDiff: content response:', contentRes);
-    
-    if (contentRes.ok && contentRes.content !== null && contentRes.content !== undefined) {
-      curFileContent = contentRes.content;
-      console.log('loadDiff: file content loaded, length:', curFileContent.length);
-    } else {
-      console.warn('loadDiff: failed to load file content:', contentRes);
-      // For deleted files, we can't load content, use hunks instead
-      if (f.status === 'D') {
-        curFileContent = null;
-        console.log('loadDiff: file is deleted, using hunks only');
+  if (f.status === 'D') {
+    curFileContent = null;
+  } else {
+    try {
+      const contentRes = await POST('/api/file_content', {path: f.path});
+      console.log('loadDiff: content response:', contentRes);
+      
+      if (contentRes.ok && contentRes.content !== null && contentRes.content !== undefined) {
+        curFileContent = contentRes.content;
+        console.log('loadDiff: file content loaded, length:', curFileContent.length);
       } else {
+        console.warn('loadDiff: failed to load file content:', contentRes);
         curFileContent = '';
         console.log('loadDiff: setting empty content as fallback');
       }
+    } catch (error) {
+      console.error('loadDiff: error loading file content:', error);
+      curFileContent = '';
     }
-  } catch (error) {
-    console.error('loadDiff: error loading file content:', error);
-    curFileContent = '';
   }
   
   // Collect change locations for quick navigation
@@ -2249,7 +2247,31 @@ function renderDiffWithFullContext(file, hunks, readonly, changeLocations = []) 
   console.log('renderDiffWithFullContext called with file:', file.path, 'hunks:', hunks.length);
   const view = document.getElementById('diffView');
 
+  const status = file?.status;
+
   const selectedLinesSet = ensureDefaultLineSelection(file.path, hunks);
+
+  function renderGapRow(fromNum, toNum) {
+    const from = Number(fromNum);
+    const to = Number(toNum);
+    const missing = (Number.isFinite(from) && Number.isFinite(to)) ? Math.max(0, to - from - 1) : '';
+    const msg = missing ? `中间已折叠 ${missing} 行（上下文 ${changeViewCtx}）` : `中间内容已折叠（上下文 ${changeViewCtx}）`;
+    return `<div class="dl context" style="opacity:.8">
+      <span class="ls"></span>
+      <span class="ln"></span>
+      <span class="lc" style="color:var(--text3)">... ${msg} <a href="#" onclick="expandChangeViewContext(5);return false;" style="color:var(--accent)">展开更多</a></span>
+    </div>`;
+  }
+
+  function renderEdgeGapRow(position, missing) {
+    const side = position === 'top' ? '上方' : '下方';
+    const msg = missing ? `${side}已折叠 ${missing} 行（上下文 ${changeViewCtx}）` : `${side}内容已折叠（上下文 ${changeViewCtx}）`;
+    return `<div class="dl context" style="opacity:.8">
+      <span class="ls"></span>
+      <span class="ln"></span>
+      <span class="lc" style="color:var(--text3)">... ${msg} <a href="#" onclick="expandChangeViewContext(5);return false;" style="color:var(--accent)">展开更多</a></span>
+    </div>`;
+  }
   
   // If no file content and no hunks, show empty state
   if ((!curFileContent || curFileContent === '') && (!hunks || hunks.length === 0)) {
@@ -2275,9 +2297,11 @@ function renderDiffWithFullContext(file, hunks, readonly, changeLocations = []) 
     console.log('Reconstructed content length:', workingContent.length);
   }
 
-  // Base content (HEAD) for split left column; fallback to workingContent if missing
+  // Base content (HEAD) for split left column.
+  // IMPORTANT: For deleted (D) files we must keep HEAD content; don't fall back to workingContent,
+  // otherwise the single-column "original-only" view may degrade to diff-reconstruction and show placeholders.
   let baseWorkingContent = baseFileContent;
-  if (baseWorkingContent === null || baseWorkingContent === undefined || baseWorkingContent === '') {
+  if (status !== 'D' && (baseWorkingContent === null || baseWorkingContent === undefined || baseWorkingContent === '')) {
     baseWorkingContent = workingContent;
   }
   
@@ -2371,7 +2395,6 @@ function renderDiffWithFullContext(file, hunks, readonly, changeLocations = []) 
     </div>`;
   }
   
-  const status = file?.status;
   const forceSingle = (status === 'U' || status === 'D');
   const effectiveMode = forceSingle ? 'single' : diffMode;
 
@@ -2466,7 +2489,7 @@ function renderDiffWithFullContext(file, hunks, readonly, changeLocations = []) 
 
     // Split view needs strict row alignment. Build left/right columns together.
     function buildSplitAlignedHtml(leftLines, rightLines, file, readonly) {
-      const fpEsc = file.path.replace(/'/g,"\\'");
+      const fpEsc = escJsString(file.path);
       let leftHtml = '';
       let rightHtml = '';
       let i = 0;
@@ -2700,10 +2723,8 @@ function renderDiffWithFullContext(file, hunks, readonly, changeLocations = []) 
       newPtr++;
     }
 
-    const fpEsc = file.path.replace(/'/g,"\\'");
+    const fpEsc = escJsString(file.path);
     const sideLines = (status === 'D') ? leftLines : rightLines;
-    const hdrText = (status === 'D') ? '原始版本（单列）' : '当前版本（单列）';
-    const hdrColor = (status === 'D') ? 'var(--danger)' : 'var(--accent2)';
 
     const renderRow = (line) => {
       if (!line || line.type === 'empty') {
@@ -2728,7 +2749,7 @@ function renderDiffWithFullContext(file, hunks, readonly, changeLocations = []) 
 
       let content = esc(line.text);
 
-      if (line.type === 'removed' && !content) {
+      if (status !== 'D' && line.type === 'removed' && !content) {
         content = `<span style="color:var(--text3)">[已删除]</span>`;
       }
 
@@ -2740,7 +2761,9 @@ function renderDiffWithFullContext(file, hunks, readonly, changeLocations = []) 
       </div>`;
     };
 
-    const fileTotalLines = (curFileContent || '').split('\n').length;
+    const fileTotalLines = (status === 'D') ? String(baseWorkingContent || '').split('\n').length : (curFileContent || '').split('\n').length;
+
+    let rows = '';
 
     // Render per hunk with its own header (no commit text/checkbox here; selection is on lines)
     let lastShownNum = null;
@@ -2785,7 +2808,7 @@ function renderDiffWithFullContext(file, hunks, readonly, changeLocations = []) 
             hunkIndex,
             originalLineIndex: li,
             num: (l.new ?? l.old ?? ''),
-            text: (l.type === 'context') ? (l.text ?? '') : (l.type === 'removed' ? '' : (l.text ?? '')),
+            text: (l.type === 'context') ? (l.text ?? '') : (l.type === 'removed' ? ((status === 'D') ? (l.text ?? '') : '') : (l.text ?? '')),
             tip: (l.type === 'modified') ? (l.old_text ?? '') : (l.type === 'removed' ? (l.text ?? '') : '')
           };
 
@@ -2794,7 +2817,7 @@ function renderDiffWithFullContext(file, hunks, readonly, changeLocations = []) 
           if (Number.isFinite(curNum) && lastShownNum !== null && Number.isFinite(lastShownNum) && curNum > lastShownNum + 1) {
             rows += renderGapRow(lastShownNum, curNum);
           }
-          rows += renderLine(cur);
+          rows += renderRow(cur);
           if (Number.isFinite(curNum)) lastShownNum = curNum;
           li++;
           continue;
@@ -2829,7 +2852,7 @@ function renderDiffWithFullContext(file, hunks, readonly, changeLocations = []) 
             hunkIndex,
             originalLineIndex: k,
             num: (x.new ?? x.old ?? ''),
-            text: (x.type === 'context') ? (x.text ?? '') : (x.type === 'removed' ? '' : (x.text ?? '')),
+            text: (x.type === 'context') ? (x.text ?? '') : (x.type === 'removed' ? ((status === 'D') ? (x.text ?? '') : '') : (x.text ?? '')),
             tip: (x.type === 'modified') ? (x.old_text ?? '') : (x.type === 'removed' ? (x.text ?? '') : '')
           };
 
@@ -2838,7 +2861,7 @@ function renderDiffWithFullContext(file, hunks, readonly, changeLocations = []) 
           if (Number.isFinite(curNum) && lastShownNum !== null && Number.isFinite(lastShownNum) && curNum > lastShownNum + 1) {
             rows += renderGapRow(lastShownNum, curNum);
           }
-          rows += renderLine(cur);
+          rows += renderRow(cur);
           if (Number.isFinite(curNum)) lastShownNum = curNum;
         }
       }
@@ -2861,31 +2884,9 @@ function renderDiffWithFullContext(file, hunks, readonly, changeLocations = []) 
     applyIndeterminateCheckboxes(view);
   } else {
     // Unified single-column (current-only) view
-    const fpEsc = file.path.replace(/'/g,"\\'");
+    const fpEsc = escJsString(file.path);
     const selectedSet = ensureDefaultHunkSelection(file.path, (hunks || []).length);
     let rows = '';
-
-    const renderGapRow = (fromNum, toNum) => {
-      const from = Number(fromNum);
-      const to = Number(toNum);
-      const missing = (Number.isFinite(from) && Number.isFinite(to)) ? Math.max(0, to - from - 1) : '';
-      const msg = missing ? `中间已折叠 ${missing} 行（上下文 ${changeViewCtx}）` : `中间内容已折叠（上下文 ${changeViewCtx}）`;
-      return `<div class="dl context" style="opacity:.8">
-        <span class="ls"></span>
-        <span class="ln"></span>
-        <span class="lc" style="color:var(--text3)">... ${msg} <a href="#" onclick="expandChangeViewContext(5);return false;" style="color:var(--accent)">展开更多</a></span>
-      </div>`;
-    };
-
-    const renderEdgeGapRow = (position, missing) => {
-      const side = position === 'top' ? '上方' : '下方';
-      const msg = missing ? `${side}已折叠 ${missing} 行（上下文 ${changeViewCtx}）` : `${side}内容已折叠（上下文 ${changeViewCtx}）`;
-      return `<div class="dl context" style="opacity:.8">
-        <span class="ls"></span>
-        <span class="ln"></span>
-        <span class="lc" style="color:var(--text3)">... ${msg} <a href="#" onclick="expandChangeViewContext(5);return false;" style="color:var(--accent)">展开更多</a></span>
-      </div>`;
-    };
 
     const renderLine = (line) => {
       let s = ' ';
@@ -2907,7 +2908,7 @@ function renderDiffWithFullContext(file, hunks, readonly, changeLocations = []) 
 
       let content = esc(line.text);
 
-      if (line.type === 'removed' && !content) {
+      if (status !== 'D' && line.type === 'removed' && !content) {
         content = `<span style="color:var(--text3)">[已删除]</span>`;
       }
 
@@ -3316,7 +3317,7 @@ function renderVirtualDiff(file, hunks, readonly, startLine, endLine) {
         else if (l.type === 'modified') s = '~';
         
         const revertBtn = !readonly && (l.type === 'added' || l.type === 'removed' || l.type === 'modified') ? 
-          `<button class="line-revert" onclick="askRevertLine('${file.path.replace(/'/g,"\\'")}',${hunkIndex},${lineIndex},'${file.status}')">
+          `<button class="line-revert" onclick="askRevertLine('${escJsString(file.path)}',${hunkIndex},${lineIndex},'${file.status}')">
             <span style="font-size:9px;font-weight:bold;">&gt;&gt;</span>
           </button>` : '';
         
@@ -3448,7 +3449,7 @@ function buildUnified(file, hunks, readonly) {
             <span class="ls"></span>
             <span class="ln"></span>
             <span class="ln"></span>
-            <span class="lc"><span class="hint-tag">块撤回</span><span class="hint-text">已识别为连续变更块（${group.lines.length}行），可一键撤回</span><span class="hint-actions"><button class="hint-btn" onclick="askRevertMultiLines('${file.path.replace(/'/g,"\\'")}',${hi},${startLi},${endLi},'${file.status}')">撤回该块（${group.lines.length}）</button></span></span>
+            <span class="lc"><span class="hint-tag">块撤回</span><span class="hint-text">已识别为连续变更块（${group.lines.length}行），可一键撤回</span><span class="hint-actions"><button class="hint-btn" onclick="askRevertMultiLines('${escJsString(file.path)}',${hi},${startLi},${endLi},'${file.status}')">撤回该块（${group.lines.length}）</button></span></span>
           </div>` : '';
 
         const lineRows = group.lines.map(({line: l, index: li}) => {
@@ -3458,7 +3459,7 @@ function buildUnified(file, hunks, readonly) {
           else if (l.type === 'modified') s = '~';
 
           const revertBtn = (!readonly) ?
-            `<button class="line-revert" onclick="askRevertLine('${file.path.replace(/'/g,"\\'")}',${hi},${li},'${file.status}')" title="撤回第${l.new??l.old??''}行">
+            `<button class="line-revert" onclick="askRevertLine('${escJsString(file.path)}',${hi},${li},'${file.status}')" title="撤回第${l.new??l.old??''}行">
               <span style="font-size:9px;font-weight:bold;">&gt;&gt;</span>
             </button>` : '';
 
@@ -3579,7 +3580,7 @@ function buildSplit(file, hunks, readonly) {
           `<div class="dl revert-block-hint" data-line-id="${hi}-${startLi}" data-hunk="${hi}" data-line="${startLi}">
             <span class="ls"></span>
             <span class="ln"></span>
-            <span class="lc"><span class="hint-tag">块撤回</span><span class="hint-text">已识别为连续变更块（${group.lines.length}行），可一键撤回</span><span class="hint-actions"><button class="hint-btn" onclick="askRevertMultiLines('${file.path.replace(/'/g,"\\'")}',${hi},${startLi},${endLi},'${file.status}')">撤回该块（${group.lines.length}）</button></span></span>
+            <span class="lc"><span class="hint-tag">块撤回</span><span class="hint-text">已识别为连续变更块（${group.lines.length}行），可一键撤回</span><span class="hint-actions"><button class="hint-btn" onclick="askRevertMultiLines('${escJsString(file.path)}',${hi},${startLi},${endLi},'${file.status}')">撤回该块（${group.lines.length}）</button></span></span>
           </div>` : '';
 
         const lineRows = group.lines.map(({line: l, index: li}) => {
@@ -3589,7 +3590,7 @@ function buildSplit(file, hunks, readonly) {
           else if (l.type === 'empty') s = '';
 
           const revertBtn = (!readonly && l.type !== 'empty') ?
-            `<button class="line-revert" onclick="askRevertLine('${file.path.replace(/'/g,"\\'")}',${hi},${li},'${file.status}')" title="撤回第${l.num??''}行">
+            `<button class="line-revert" onclick="askRevertLine('${escJsString(file.path)}',${hi},${li},'${file.status}')" title="撤回第${l.num??''}行">
               <span style="font-size:9px;font-weight:bold;">&gt;&gt;</span>
             </button>` : '';
 
@@ -3707,7 +3708,7 @@ function buildSplit(file, hunks, readonly) {
           `<div class="dl revert-block-hint" data-line-id="${hi}-${startLi}" data-hunk="${hi}" data-line="${startLi}">
             <span class="ls"></span>
             <span class="ln"></span>
-            <span class="lc"><span class="hint-tag">块撤回</span><span class="hint-text">已识别为连续变更块（${group.lines.length}行），可一键撤回</span><span class="hint-actions"><button class="hint-btn" onclick="askRevertMultiLines('${file.path.replace(/'/g,"\\'")}',${hi},${startLi},${endLi},'${file.status}')">撤回该块（${group.lines.length}）</button></span></span>
+            <span class="lc"><span class="hint-tag">块撤回</span><span class="hint-text">已识别为连续变更块（${group.lines.length}行），可一键撤回</span><span class="hint-actions"><button class="hint-btn" onclick="askRevertMultiLines('${escJsString(file.path)}',${hi},${startLi},${endLi},'${file.status}')">撤回该块（${group.lines.length}）</button></span></span>
           </div>` : '';
 
         const lineRows = group.lines.map(({line: l, index: li}) => {
@@ -3718,7 +3719,7 @@ function buildSplit(file, hunks, readonly) {
           else if (l.type === 'empty') s = '';
 
           const revertBtn = (!readonly && l.type !== 'removed' && l.type !== 'empty') ?
-            `<button class="line-revert" onclick="askRevertLine('${file.path.replace(/'/g,"\\'")}',${hi},${li},'${file.status}')" title="撤回第${l.num??''}行">
+            `<button class="line-revert" onclick="askRevertLine('${escJsString(file.path)}',${hi},${li},'${file.status}')" title="撤回第${l.num??''}行">
               <span style="font-size:9px;font-weight:bold;">&gt;&gt;</span>
             </button>` : '';
 
@@ -3758,7 +3759,7 @@ function buildSplit(file, hunks, readonly) {
 }
 
 function revertBtn(file, hunkIdx) {
-  const fp  = file.path.replace(/'/g,"\\'");
+  const fp  = escJsString(file.path);
   const st  = file.status;
   return `<button class="hunk-revert"
     onclick="askRevertHunk('${fp}',${hunkIdx},'${st}')">
@@ -4662,7 +4663,7 @@ async function openCommit(fullHash) {
         ${f.added   > 0 ? `<span class="a">+${f.added}</span>`   : ''}
         ${f.removed > 0 ? `<span class="r">-${f.removed}</span>` : ''}
       </span>
-      <button class="btn" style="margin-left:auto;padding:2px 8px" title="将工作区该文件覆盖为此提交的完整内容" onclick="event.stopPropagation();restoreFromCommit('${(c.full_hash||fullHash).replace(/'/g,"\\'")}', '${f.path.replace(/'/g,"\\'")}', this)">整文件恢复</button>
+      <button class="btn" style="margin-left:auto;padding:2px 8px" title="将工作区该文件覆盖为此提交的完整内容" onclick="event.stopPropagation();restoreFromCommit('${(c.full_hash||fullHash).replace(/'/g,"\\'")}', '${escJsString(f.path)}', this)">整文件恢复</button>
     </div>`;
   }).join('');
 }
