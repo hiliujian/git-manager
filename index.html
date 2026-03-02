@@ -213,7 +213,7 @@ body{font-family:'Outfit',sans-serif;color:var(--text);font-size:13px;display:fl
 .resizer:hover,.resizer.drag{background:var(--accent);}
 
 /* ── DIFF AREA ── */
-.diff-area{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0;}
+.diff-area{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0;position:relative;}
 .diff-toolbar{display:flex;align-items:center;background:var(--bg2);
   border-bottom:1px solid var(--border);flex-shrink:0;padding-right:8px;}
 .dtab{padding:8px 13px;font-size:11px;font-weight:600;color:var(--text2);
@@ -229,7 +229,7 @@ body{font-family:'Outfit',sans-serif;color:var(--text);font-size:13px;display:fl
 .statsbar .a{color:var(--accent2);}
 .statsbar .r{color:var(--danger);}
 .statsbar .m{color:var(--accent);}
-.diff-view{flex:1;overflow:auto;background:var(--bg);}
+.diff-view{flex:1;overflow:auto;background:var(--bg2);padding:0 8px 10px;}
 .split-wrap{display:flex;overflow-x:auto;}
 
 .editable-line{
@@ -282,6 +282,14 @@ body{font-family:'Outfit',sans-serif;color:var(--text);font-size:13px;display:fl
 .change-removed{border-left:3px solid var(--danger);}
 
 .change-modified{border-left:3px solid var(--accent);}
+
+.findbar{position:absolute;top:86px;right:10px;z-index:9999;background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:8px 10px;display:none;gap:8px;align-items:center;box-shadow:0 8px 30px rgba(0,0,0,.35);cursor:grab;user-select:none}
+.findbar:active{cursor:grabbing}
+.findbar input{background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:6px 8px;outline:none;width:220px;font-size:12px;cursor:text;user-select:text}
+.findbar .btn{background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:6px 8px;font-size:12px;cursor:pointer}
+.findbar .btn:hover{background:var(--bg3)}
+.findbar .meta{font-size:11px;color:var(--text3);min-width:70px;text-align:right}
+.find-hit{background:rgba(255, 255, 0, 0.18)}
 
 /* Hunk block */
 .hunk{margin-bottom:2px;}
@@ -712,6 +720,207 @@ body{font-family:'Outfit',sans-serif;color:var(--text);font-size:13px;display:fl
 <script>
 const BASE = 'http://localhost:7842';
 let WS_URL = 'ws://localhost:7843';
+
+let findBarEl = null;
+let findQuery = '';
+let findMatches = [];
+let findPos = -1;
+
+let findDragActive = false;
+let findDragStartX = 0;
+let findDragStartY = 0;
+let findDragStartLeft = 0;
+let findDragStartTop = 0;
+
+function mountFindBar() {
+  if (!findBarEl) return;
+  const mount = document.querySelector('.diff-area') || document.getElementById('diffView') || document.body;
+  if (findBarEl.parentElement !== mount) mount.appendChild(findBarEl);
+}
+
+function ensureFindBar() {
+  if (findBarEl) {
+    mountFindBar();
+    return findBarEl;
+  }
+  const el = document.createElement('div');
+  el.className = 'findbar';
+  el.innerHTML = `
+    <input id="findInput" type="text" placeholder="查找..." />
+    <span id="findMeta" class="meta"></span>
+    <button class="btn" id="findPrev">上一个</button>
+    <button class="btn" id="findNext">下一个</button>
+    <button class="btn" id="findClose">关闭</button>
+  `;
+  const mount = document.querySelector('.diff-area') || document.getElementById('diffView') || document.body;
+  mount.appendChild(el);
+  findBarEl = el;
+
+  el.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    if (e.target && e.target.closest && e.target.closest('input,button')) return;
+    const mountEl = document.querySelector('.diff-area') || document.getElementById('diffView') || document.body;
+    if (!mountEl) return;
+
+    const mrect = mountEl.getBoundingClientRect();
+    const rect = el.getBoundingClientRect();
+    findDragActive = true;
+    findDragStartX = e.clientX;
+    findDragStartY = e.clientY;
+    findDragStartLeft = rect.left - mrect.left;
+    findDragStartTop = rect.top - mrect.top;
+
+    el.style.left = `${findDragStartLeft}px`;
+    el.style.top = `${findDragStartTop}px`;
+    el.style.right = 'auto';
+
+    e.preventDefault();
+  });
+
+  window.addEventListener('mousemove', (e) => {
+    if (!findDragActive || !findBarEl) return;
+    const mountEl = document.querySelector('.diff-area') || document.getElementById('diffView') || document.body;
+    if (!mountEl) return;
+    const mrect = mountEl.getBoundingClientRect();
+    const rect = findBarEl.getBoundingClientRect();
+
+    const dx = e.clientX - findDragStartX;
+    const dy = e.clientY - findDragStartY;
+
+    let left = findDragStartLeft + dx;
+    let top = findDragStartTop + dy;
+
+    const maxLeft = Math.max(0, mrect.width - rect.width);
+    const maxTop = Math.max(0, mrect.height - rect.height);
+    if (left < 0) left = 0;
+    if (top < 0) top = 0;
+    if (left > maxLeft) left = maxLeft;
+    if (top > maxTop) top = maxTop;
+
+    findBarEl.style.left = `${left}px`;
+    findBarEl.style.top = `${top}px`;
+    findBarEl.style.right = 'auto';
+
+    e.preventDefault();
+  }, { passive: false });
+
+  window.addEventListener('mouseup', () => {
+    if (!findDragActive) return;
+    findDragActive = false;
+  });
+
+  const input = el.querySelector('#findInput');
+  const prevBtn = el.querySelector('#findPrev');
+  const nextBtn = el.querySelector('#findNext');
+  const closeBtn = el.querySelector('#findClose');
+
+  input.addEventListener('input', () => {
+    findQuery = input.value || '';
+    rebuildFindMatches();
+    gotoFind(0);
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (e.shiftKey) gotoFind(findPos - 1);
+      else gotoFind(findPos + 1);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      closeFindBar();
+    }
+  });
+  prevBtn.addEventListener('click', () => gotoFind(findPos - 1));
+  nextBtn.addEventListener('click', () => gotoFind(findPos + 1));
+  closeBtn.addEventListener('click', closeFindBar);
+
+  return findBarEl;
+}
+
+function openFindBar() {
+  const el = ensureFindBar();
+  el.style.display = 'flex';
+  const input = el.querySelector('#findInput');
+  input.focus();
+  input.select();
+  if (findQuery) {
+    input.value = findQuery;
+    rebuildFindMatches();
+    if (findPos < 0) gotoFind(0);
+  } else {
+    rebuildFindMatches();
+  }
+}
+
+function closeFindBar() {
+  if (!findBarEl) return;
+  findBarEl.style.display = 'none';
+  clearFindHighlights();
+}
+
+function isFindBarOpen() {
+  return !!(findBarEl && findBarEl.style && findBarEl.style.display !== 'none');
+}
+
+function clearFindHighlights() {
+  const dv = document.getElementById('diffView');
+  if (!dv) return;
+  dv.querySelectorAll('.find-hit').forEach(el => el.classList.remove('find-hit'));
+}
+
+function rebuildFindMatches() {
+  clearFindHighlights();
+  findMatches = [];
+  findPos = -1;
+  const q = (findQuery || '').trim();
+  const dv = document.getElementById('diffView');
+  if (!dv || !q) {
+    updateFindMeta();
+    return;
+  }
+  const rows = Array.from(dv.querySelectorAll('.dl'));
+  rows.forEach(r => {
+    const t = (r.innerText || '').toLowerCase();
+    if (t.includes(q.toLowerCase())) findMatches.push(r);
+  });
+  updateFindMeta();
+}
+
+function updateFindMeta() {
+  if (!findBarEl) return;
+  const meta = findBarEl.querySelector('#findMeta');
+  const total = findMatches.length;
+  if (!findQuery || !findQuery.trim()) meta.textContent = '';
+  else meta.textContent = total ? `${Math.max(1, findPos + 1)}/${total}` : '0/0';
+}
+
+function gotoFind(nextIndex) {
+  if (!findMatches || findMatches.length === 0) {
+    findPos = -1;
+    updateFindMeta();
+    return;
+  }
+  let idx = nextIndex;
+  const n = findMatches.length;
+  if (idx < 0) idx = n - 1;
+  if (idx >= n) idx = 0;
+  clearFindHighlights();
+  findPos = idx;
+  const el = findMatches[findPos];
+  if (el) {
+    el.classList.add('find-hit');
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+  updateFindMeta();
+}
+
+document.addEventListener('keydown', (e) => {
+  const k = (e.key || '').toLowerCase();
+  if (e.ctrlKey && !e.shiftKey && !e.altKey && k === 'f') {
+    e.preventDefault();
+    if (isFindBarOpen()) closeFindBar();
+    else openFindBar();
+  }
+});
 
 let diffTooltipEl = null;
 function ensureDiffTooltipEl(){
@@ -1373,8 +1582,7 @@ function renderFileList() {
     const div  = document.createElement('div');
     div.className = 'fi' + (i === curFile ? ' active' : '');
     div.innerHTML = `
-      <input type="checkbox" class="fi-cb" data-idx="${i}" ${checkedSet.has(i)?'checked':''}
-        onclick="event.stopPropagation();toggleCheck(${i})">
+      <input type="checkbox" class="fi-cb" data-idx="${i}" ${checkedSet.has(i)?'checked':''}>
       <span class="fi-st ${f.status}">${f.status}</span>
       <span class="fi-name"><span class="fi-dir">${esc(dir)}</span>${esc(name)}</span>
       <span class="fi-delta">
@@ -1388,20 +1596,49 @@ function renderFileList() {
     // 文件级 checkbox 半选态：根据行级勾选状态计算（当 total 已知时）
     const cb = div.querySelector('input.fi-cb');
     if (cb && f && f.path) {
-      const total = commitLinesTotalByPath.get(f.path);
-      if (Number.isFinite(total) && total > 0) {
-        const set = getSelectedCommitLinesSet(f.path);
-        const isAll = set.size === total;
-        const isNone = set.size === 0;
-        const isPart = !isAll && !isNone;
-        cb.indeterminate = isPart;
-        if (isPart) cb.classList.add('indet');
-        else cb.classList.remove('indet');
-        cb.checked = !isNone;
-      } else {
-        cb.indeterminate = false;
-        cb.classList.remove('indet');
+      // IMPORTANT: For non-current files, the checkbox should be driven by checkedSet only.
+      // Otherwise line-level sets from previously opened files can override the UI and make it look like
+      // the checkbox can't be toggled unless you reopen that file.
+      cb.checked = checkedSet.has(i);
+      cb.indeterminate = false;
+      cb.classList.remove('indet');
+
+      const hunksKnown = (curFile === i) && Array.isArray(curHunks);
+      if (hunksKnown) {
+        const total = commitLinesTotalByPath.get(f.path);
+        if (Number.isFinite(total) && total > 0) {
+          const set = getSelectedCommitLinesSet(f.path);
+          const isAll = set.size === total;
+          const isNone = set.size === 0;
+          const isPart = !isAll && !isNone;
+          cb.indeterminate = isPart;
+          if (isPart) cb.classList.add('indet');
+          else cb.classList.remove('indet');
+          // When partial, visually treat as checked.
+          if (isPart) cb.checked = true;
+        }
       }
+
+      cb.addEventListener('click', (e) => {
+        e.stopPropagation();
+        // If currently indeterminate (partial), treat click as explicit toggle to none/all.
+        // Default browser behavior sets checked=true on first click; we override to a predictable toggle.
+        const hunksKnown = (curFile === i) && Array.isArray(curHunks);
+        if (cb.indeterminate && hunksKnown) {
+          const set = getSelectedCommitLinesSet(f.path);
+          const total = commitLinesTotalByPath.get(f.path);
+          const isPart = Number.isFinite(total) && total > 0 && set.size > 0 && set.size < total;
+          if (isPart) {
+            // Prefer turning off when partial (current file only)
+            checkedSet.delete(i);
+            setAllCommitLines(f.path, curHunks, false);
+            updateStats();
+            renderFileList();
+            return;
+          }
+        }
+        toggleCheck(i);
+      });
     }
   });
   
