@@ -830,32 +830,59 @@ def _parse_unified_patch_with_mapping(patch_text: str):
 
 
 def _build_partial_hunk_patch(file_header_lines, hunk, include_raw_idx_set):
+    raw_lines = hunk.get("raw_lines") or []
+    include = set(int(x) for x in (include_raw_idx_set or set()) if x is not None)
+    if not raw_lines or not include:
+        return None
+
     old_ln = int(hunk.get("old_start") or 0)
     new_ln = int(hunk.get("new_start") or 0)
-    start_old = None
-    start_new = None
-    old_len = 0
-    new_len = 0
-    out_lines = []
 
-    for i, ln in enumerate(hunk.get("raw_lines") or []):
-        is_ctx = ln.startswith(" ")
-        is_inc = is_ctx or (i in include_raw_idx_set)
+    hunks_out = []
+    cur_start_old = None
+    cur_start_new = None
+    cur_old_len = 0
+    cur_new_len = 0
+    cur_lines = []
 
-        if is_inc and start_old is None:
-            start_old = old_ln
-            start_new = new_ln
+    def flush_current():
+        nonlocal cur_start_old, cur_start_new, cur_old_len, cur_new_len, cur_lines
+        if cur_start_old is None or not cur_lines:
+            cur_start_old = None
+            cur_start_new = None
+            cur_old_len = 0
+            cur_new_len = 0
+            cur_lines = []
+            return
+        hdr = f"@@ -{cur_start_old},{cur_old_len} +{cur_start_new},{cur_new_len} @@\n"
+        hunks_out.append(hdr + "".join(cur_lines))
+        cur_start_old = None
+        cur_start_new = None
+        cur_old_len = 0
+        cur_new_len = 0
+        cur_lines = []
 
-        if is_inc:
-            out_lines.append(ln)
+    for i, ln in enumerate(raw_lines):
+        inc = (i in include)
+
+        # If we are in a running hunk but current line is excluded, close the hunk.
+        if (not inc) and cur_start_old is not None:
+            flush_current()
+
+        if inc:
+            if cur_start_old is None:
+                cur_start_old = old_ln
+                cur_start_new = new_ln
+            cur_lines.append(ln)
             if ln.startswith(" "):
-                old_len += 1
-                new_len += 1
+                cur_old_len += 1
+                cur_new_len += 1
             elif ln.startswith("-"):
-                old_len += 1
+                cur_old_len += 1
             elif ln.startswith("+"):
-                new_len += 1
+                cur_new_len += 1
 
+        # advance counters regardless of inclusion
         if ln.startswith(" "):
             old_ln += 1
             new_ln += 1
@@ -864,11 +891,13 @@ def _build_partial_hunk_patch(file_header_lines, hunk, include_raw_idx_set):
         elif ln.startswith("+"):
             new_ln += 1
 
-    if start_old is None:
+    if cur_start_old is not None:
+        flush_current()
+
+    if not hunks_out:
         return None
 
-    header = f"@@ -{start_old},{old_len} +{start_new},{new_len} @@\n"
-    patch = "".join(file_header_lines) + header + "".join(out_lines)
+    patch = "".join(file_header_lines) + "".join(hunks_out)
     if not patch.endswith("\n"):
         patch += "\n"
     return patch
@@ -1665,6 +1694,27 @@ class Handler(BaseHTTPRequestHandler):
                 ok, msg = save_file_content(fp, content)
                 self.send_json({"ok": ok, "msg": msg})
 
+            elif p == "/api/delete_file":
+                logger.info("处理 /api/delete_file 请求")
+                if not REPO_PATH:
+                    self.send_json({"error":"未打开仓库"}, 400)
+                    return
+                fp = (data.get("path") or "").strip()
+                full = _safe_repo_abspath(fp)
+                if not full:
+                    self.send_json({"ok": False, "msg": "非法路径"}, 400)
+                    return
+                try:
+                    if os.path.isdir(full):
+                        self.send_json({"ok": False, "msg": "目标是目录"}, 400)
+                        return
+                    if os.path.exists(full):
+                        os.remove(full)
+                    self.send_json({"ok": True, "msg": "删除成功"})
+                except Exception as e:
+                    logger.error(f"删除文件失败: {fp} - {e}", exc_info=True)
+                    self.send_json({"ok": False, "msg": str(e)}, 500)
+
             elif p == "/api/revert_file":
                 logger.info("处理 /api/revert_file 请求")
                 if not REPO_PATH:
@@ -1910,3 +1960,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    

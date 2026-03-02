@@ -324,6 +324,13 @@ body{font-family:'Outfit',sans-serif;color:var(--text);font-size:13px;display:fl
 .hunk-revert:hover{background:#38100f;border-color:#6b1f1e;box-shadow:0 0 6px #f2727244;}
 .hunk-revert svg{flex-shrink:0;}
 
+.undo-bar{position:fixed;right:14px;bottom:14px;z-index:10000;display:none;gap:10px;align-items:center;background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:10px 12px;box-shadow:0 10px 30px rgba(0,0,0,.35)}
+.undo-bar .t{font-size:12px;color:var(--text2)}
+.undo-bar .btn{background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:10px;padding:6px 10px;font-size:12px;cursor:pointer}
+.undo-bar .btn:hover{background:var(--bg3)}
+.undo-bar .x{opacity:.75}
+.undo-bar .x:hover{opacity:1}
+
 /* Line-level revert button like IDEA */
 .line-revert{
   width:20px;height:20px;display:inline-flex;align-items:center;justify-content:center;
@@ -734,6 +741,14 @@ body{font-family:'Outfit',sans-serif;color:var(--text);font-size:13px;display:fl
   </div>
 </div>
 
+<div id="toastBox"></div>
+
+<div class="undo-bar" id="undoBar">
+  <span class="t" id="undoText">已撤回，可撤销</span>
+  <button class="btn" id="undoBtn" onclick="undoLastRevert()">撤销 (Ctrl+Z)</button>
+  <button class="btn x" onclick="hideUndoBar()">关闭</button>
+</div>
+
 <script>
 const BASE = 'http://localhost:7842';
 let WS_URL = 'ws://localhost:7843';
@@ -937,6 +952,15 @@ document.addEventListener('keydown', (e) => {
     if (isFindBarOpen()) closeFindBar();
     else openFindBar();
   }
+
+  // Undo last revert
+  if (e.ctrlKey && !e.shiftKey && !e.altKey && k === 'z') {
+    // Avoid breaking input editing
+    const tag = (e.target && e.target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || (e.target && e.target.isContentEditable)) return;
+    e.preventDefault();
+    undoLastRevert();
+  }
 });
 
 let diffTooltipEl = null;
@@ -946,6 +970,104 @@ function ensureDiffTooltipEl(){
   diffTooltipEl.className = 'diff-tooltip';
   document.body.appendChild(diffTooltipEl);
   return diffTooltipEl;
+}
+
+// ── Undo Revert ───────────────────────────────────────────────────────────────
+let undoStack = [];
+let undoBarHideTimer = null;
+
+function ensureUndoBar(){
+  return document.getElementById('undoBar');
+}
+
+function showUndoBar(text){
+  const bar = ensureUndoBar();
+  if (!bar) return;
+  const t = document.getElementById('undoText');
+  if (t) t.textContent = text || '已撤回，可撤销';
+  bar.style.display = 'flex';
+  if (undoBarHideTimer) {
+    clearTimeout(undoBarHideTimer);
+    undoBarHideTimer = null;
+  }
+  // auto-hide after a while but keep action available for a short window
+  undoBarHideTimer = setTimeout(() => {
+    hideUndoBar();
+  }, 15000);
+}
+
+function hideUndoBar(){
+  const bar = ensureUndoBar();
+  if (!bar) return;
+  bar.style.display = 'none';
+  if (undoBarHideTimer) {
+    clearTimeout(undoBarHideTimer);
+    undoBarHideTimer = null;
+  }
+}
+
+async function snapshotWorkingFile(path){
+  try {
+    const res = await POST('/api/file_content', {path});
+    if (res && res.ok && res.content !== undefined && res.content !== null) {
+      return { path, exists: true, content: String(res.content) };
+    }
+    // Not readable or not exists
+    return { path, exists: false, content: '' };
+  } catch (e) {
+    console.warn('snapshotWorkingFile failed:', e);
+    return null;
+  }
+}
+
+function pushUndoAction(action){
+  if (!action) return;
+  undoStack.push(action);
+  if (undoStack.length > 20) undoStack.shift();
+  showUndoBar(action.label || '已撤回，可撤销');
+}
+
+async function restoreSnapshot(snap){
+  if (!snap || !snap.path) return {ok:false, msg:'缺少快照'};
+  if (snap.exists) {
+    const res = await POST('/api/save_file', {path: snap.path, content: snap.content});
+    return {ok: !!res?.ok, msg: res?.msg || res?.error || ''};
+  }
+  const res = await POST('/api/delete_file', {path: snap.path});
+  return {ok: !!res?.ok, msg: res?.msg || res?.error || ''};
+}
+
+async function undoLastRevert(){
+  const action = undoStack.pop();
+  if (!action) {
+    toast('没有可撤销的撤回', 'warn');
+    hideUndoBar();
+    return;
+  }
+
+  try {
+    disableAutoRefreshDiff(8000);
+    toast('撤销中...', 'warn');
+
+    const snaps = Array.isArray(action.snapshots) ? action.snapshots : [];
+    for (const s of snaps) {
+      const r = await restoreSnapshot(s);
+      if (!r.ok) {
+        toast(`撤销失败: ${r.msg || '未知错误'}`, 'err');
+        await refresh();
+        return;
+      }
+    }
+
+    toast('✓ 已撤销撤回', 'ok');
+    await refresh();
+  } catch (e) {
+    console.error('undoLastRevert failed:', e);
+    toast(`撤销失败: ${e.message}`, 'err');
+    await refresh();
+  } finally {
+    hideUndoBar();
+  }
 }
 
 function escJsString(s){
@@ -1997,33 +2119,98 @@ function remapSelectedLineKeysBySignature(filepath, oldHunks, newHunks) {
   const set = getSelectedCommitLinesSet(filepath);
   if (!set || set.size === 0) return;
 
-  const sigToKeys = new Map();
-  (newHunks || []).forEach((h, hi) => {
-    (h && h.lines ? h.lines : []).forEach((l, li) => {
-      if (!l) return;
-      if (l.type !== 'added' && l.type !== 'removed' && l.type !== 'modified') return;
-      const sig = _buildChangedLineSignature(l);
-      if (!sigToKeys.has(sig)) sigToKeys.set(sig, []);
-      sigToKeys.get(sig).push(getLineKey(hi, li));
+  // Build global "changed line" order indices so we can match duplicates stably.
+  const oldKeyToPos = new Map();
+  {
+    let pos = 0;
+    (oldHunks || []).forEach((h, hi) => {
+      (h && h.lines ? h.lines : []).forEach((l, li) => {
+        if (!l) return;
+        if (l.type !== 'added' && l.type !== 'removed' && l.type !== 'modified') return;
+        oldKeyToPos.set(getLineKey(hi, li), pos++);
+      });
     });
-  });
+  }
+
+  const sigToCandidates = new Map();
+  {
+    let pos = 0;
+    (newHunks || []).forEach((h, hi) => {
+      (h && h.lines ? h.lines : []).forEach((l, li) => {
+        if (!l) return;
+        if (l.type !== 'added' && l.type !== 'removed' && l.type !== 'modified') return;
+        const sig = _buildChangedLineSignature(l);
+        if (!sigToCandidates.has(sig)) sigToCandidates.set(sig, []);
+        sigToCandidates.get(sig).push({ key: getLineKey(hi, li), hi, li, pos: pos++ });
+      });
+    });
+  }
+
+  // Process selections top-to-bottom in old order, and match to a non-decreasing new order.
+  const items = Array.from(set)
+    .map(k => ({
+      key: k,
+      oldPos: oldKeyToPos.has(k) ? oldKeyToPos.get(k) : Number.POSITIVE_INFINITY,
+    }))
+    .sort((a, b) => a.oldPos - b.oldPos);
 
   const next = new Set();
-  set.forEach(k => {
+  const used = new Set();
+  let lastNewPos = -1;
+
+  for (const it of items) {
+    const k = it.key;
     const parts = String(k).split(':');
-    if (parts.length !== 2) return;
+    if (parts.length !== 2) continue;
     const hi = Number(parts[0]);
     const li = Number(parts[1]);
-    if (!Number.isFinite(hi) || !Number.isFinite(li)) return;
-    const l = (oldHunks || [])[hi]?.lines?.[li];
-    if (!l) return;
-    if (l.type !== 'added' && l.type !== 'removed' && l.type !== 'modified') return;
-    const sig = _buildChangedLineSignature(l);
-    const arr = sigToKeys.get(sig);
-    if (arr && arr.length) {
-      next.add(arr.shift());
+    if (!Number.isFinite(hi) || !Number.isFinite(li)) continue;
+
+    // Fast path: if the same index still points to a changed line, keep it.
+    const nl = (newHunks || [])[hi]?.lines?.[li];
+    if (nl && (nl.type === 'added' || nl.type === 'removed' || nl.type === 'modified')) {
+      const nk = getLineKey(hi, li);
+      if (!used.has(nk)) {
+        next.add(nk);
+        used.add(nk);
+        const np = oldKeyToPos.has(k) ? oldKeyToPos.get(k) : lastNewPos;
+        lastNewPos = Math.max(lastNewPos, np);
+      }
+      continue;
     }
-  });
+
+    const l = (oldHunks || [])[hi]?.lines?.[li];
+    if (!l) continue;
+    if (l.type !== 'added' && l.type !== 'removed' && l.type !== 'modified') continue;
+    const sig = _buildChangedLineSignature(l);
+    const arr = sigToCandidates.get(sig);
+    if (!arr || !arr.length) continue;
+
+    const targetOldPos = Number.isFinite(it.oldPos) ? it.oldPos : lastNewPos;
+
+    // Prefer candidates at/after lastNewPos to keep order, then choose closest to oldPos.
+    let best = null;
+    let bestIdx = -1;
+    let bestScore = Infinity;
+    for (let i = 0; i < arr.length; i++) {
+      const c = arr[i];
+      if (!c || !c.key || used.has(c.key)) continue;
+      const orderPenalty = (c.pos < lastNewPos) ? 1_000_000 : 0;
+      const score = orderPenalty + Math.abs((c.pos ?? 0) - targetOldPos);
+      if (score < bestScore) {
+        bestScore = score;
+        best = c;
+        bestIdx = i;
+      }
+    }
+    if (best && best.key) {
+      next.add(best.key);
+      used.add(best.key);
+      lastNewPos = Math.max(lastNewPos, best.pos ?? lastNewPos);
+      // Remove chosen candidate to avoid reuse; keep array for next matches.
+      if (bestIdx >= 0) arr.splice(bestIdx, 1);
+    }
+  }
 
   commitLinesSelectedByPath.set(filepath, next);
   commitLinesInitByPath.set(filepath, true);
@@ -3814,6 +4001,9 @@ function askRevertHunk(filepath, hunkIdx, status) {
 async function revertLineInstantly(filepath, hunkIdx, lineIdx, status) {
   // 禁用自动刷新diff，避免撤回后被WebSocket推送打断
   disableAutoRefreshDiff(8000);
+
+  // Snapshot before revert for Undo
+  const undoSnap = await snapshotWorkingFile(filepath);
   
   const hunk = curHunks[hunkIdx];
   const line = hunk?.lines[lineIdx];
@@ -3874,6 +4064,15 @@ async function revertLineInstantly(filepath, hunkIdx, lineIdx, status) {
   
   // 5. 立即显示成功反馈（乐观）
   toast('✓ 已撤回', 'ok');
+
+  // Undo (best-effort)
+  if (undoSnap) {
+    pushUndoAction({
+      type: 'revert_line',
+      label: `已撤回 ${filepath}，可撤销`,
+      snapshots: [undoSnap],
+    });
+  }
   
   // 6. 后台静默保存（不阻塞UI，不显示loading）
   setTimeout(async () => {
@@ -3909,8 +4108,9 @@ async function revertLineInstantly(filepath, hunkIdx, lineIdx, status) {
         
         toast('撤回失败，已恢复', 'err');
       } else {
-        // 成功后，从后端获取最新的diff数据和文件统计
-        const diffRes = await GET(`/api/diff?path=${encodeURIComponent(filepath)}&status=${status}`);
+        // 成功后，从后端获取最新的diff数据和文件统计（保持 ctx 一致，避免行索引映射错位）
+        const ctxParam = (diffMode === 'unified') ? `&ctx=${encodeURIComponent(changeViewCtx)}` : '';
+        const diffRes = await GET(`/api/diff?path=${encodeURIComponent(filepath)}&status=${status}${ctxParam}`);
         if (diffRes.hunks) {
           const prevHunks = curHunks;
           curHunks = diffRes.hunks;
@@ -3976,6 +4176,9 @@ async function revertLineInstantly(filepath, hunkIdx, lineIdx, status) {
 async function revertMultiLinesInstantly(filepath, hunkIdx, startLineIdx, endLineIdx, status) {
   // 禁用自动刷新diff，避免撤回后被WebSocket推送打断
   disableAutoRefreshDiff(8000);
+
+  // Snapshot before revert for Undo
+  const undoSnap = await snapshotWorkingFile(filepath);
   
   const hunk = curHunks[hunkIdx];
   if (!hunk) {
@@ -4055,6 +4258,15 @@ async function revertMultiLinesInstantly(filepath, hunkIdx, startLineIdx, endLin
   
   // 5. 立即显示成功反馈（乐观）
   toast(`✓ 已撤回 ${linesToRevert.length} 行代码`, 'ok');
+
+  // Undo (best-effort)
+  if (undoSnap) {
+    pushUndoAction({
+      type: 'revert_multi_lines',
+      label: `已撤回 ${filepath}（${linesToRevert.length} 行），可撤销`,
+      snapshots: [undoSnap],
+    });
+  }
   
   // 6. 后台静默保存（不阻塞UI，不显示loading）
   setTimeout(async () => {
@@ -4089,8 +4301,9 @@ async function revertMultiLinesInstantly(filepath, hunkIdx, startLineIdx, endLin
         
         toast('多行撤回失败，已恢复', 'err');
       } else {
-        // 成功后，从后端获取最新的diff数据和文件统计
-        const diffRes = await GET(`/api/diff?path=${encodeURIComponent(filepath)}&status=${status}`);
+        // 成功后，从后端获取最新的diff数据和文件统计（保持 ctx 一致，避免行索引映射错位）
+        const ctxParam = (diffMode === 'unified') ? `&ctx=${encodeURIComponent(changeViewCtx)}` : '';
+        const diffRes = await GET(`/api/diff?path=${encodeURIComponent(filepath)}&status=${status}${ctxParam}`);
         if (diffRes.hunks) {
           curHunks = diffRes.hunks;
           
@@ -4151,6 +4364,9 @@ async function revertMultiLinesInstantly(filepath, hunkIdx, startLineIdx, endLin
 async function revertHunkInstantly(filepath, hunkIdx, status) {
   // 禁用自动刷新diff，避免撤回后被WebSocket推送打断
   disableAutoRefreshDiff(8000);
+
+  // Snapshot before revert for Undo
+  const undoSnap = await snapshotWorkingFile(filepath);
   
   const hunk = curHunks[hunkIdx];
   
@@ -4194,6 +4410,15 @@ async function revertHunkInstantly(filepath, hunkIdx, status) {
   
   // 6. 立即反馈
   toast('✓ 已撤回代码块', 'ok');
+
+  // Undo (best-effort)
+  if (undoSnap) {
+    pushUndoAction({
+      type: 'revert_hunk',
+      label: `已撤回 ${filepath}（代码块），可撤销`,
+      snapshots: [undoSnap],
+    });
+  }
   
   // 7. 后台静默保存
   setTimeout(async () => {
@@ -4220,8 +4445,9 @@ async function revertHunkInstantly(filepath, hunkIdx, status) {
         updateStats();
         toast('撤回失败，已恢复', 'err');
       } else {
-        // 成功后，从后端获取最新的diff数据和文件统计
-        const diffRes = await GET(`/api/diff?path=${encodeURIComponent(filepath)}&status=${status}`);
+        // 成功后，从后端获取最新的diff数据和文件统计（保持 ctx 一致，避免行索引映射错位）
+        const ctxParam = (diffMode === 'unified') ? `&ctx=${encodeURIComponent(changeViewCtx)}` : '';
+        const diffRes = await GET(`/api/diff?path=${encodeURIComponent(filepath)}&status=${status}${ctxParam}`);
         if (diffRes.hunks) {
           curHunks = diffRes.hunks;
           
@@ -4343,10 +4569,18 @@ async function doRevertFile() {
   diffView.innerHTML = '<div class="empty-state"><div class="spin"></div><p>撤回中...</p></div>';
   
   const f = files[curFile];
+  const undoSnap = await snapshotWorkingFile(f.path);
   try {
     const res = await POST('/api/revert_file', {path:f.path, status:f.status});
     if (res.ok) {
       toast(`✓ 已撤回 ${f.path}`,'ok');
+      if (undoSnap) {
+        pushUndoAction({
+          type: 'revert_file',
+          label: `已撤回 ${f.path}，可撤销`,
+          snapshots: [undoSnap],
+        });
+      }
       curFile = null; clearDiff();
       await refresh();
     } else {
@@ -4376,11 +4610,35 @@ async function doRevertAll() {
   
   // Add loading state to file list
   fileList.innerHTML = '<div style="padding:20px;text-align:center;"><div class="spin"></div><p style="margin-top:10px;color:var(--text2);">撤回中...</p></div>';
+
+  // Snapshot before revert-all for Undo (best-effort, limited)
+  let undoSnaps = [];
+  try {
+    const list = await GET('/api/files');
+    const fs = (list && Array.isArray(list.files)) ? list.files : [];
+    const paths = fs.map(x => x?.path).filter(Boolean);
+    const limit = 50;
+    const take = paths.slice(0, limit);
+    undoSnaps = (await Promise.all(take.map(p => snapshotWorkingFile(p)))).filter(Boolean);
+    if (paths.length > limit) {
+      console.warn(`Undo snapshot limited to first ${limit} files (total ${paths.length})`);
+    }
+  } catch (e) {
+    console.warn('snapshot revert_all failed:', e);
+    undoSnaps = [];
+  }
   
   try {
     const res = await POST('/api/revert_all',{});
     if (res.ok) {
       toast('✓ 已撤回所有修改','ok');
+      if (undoSnaps && undoSnaps.length) {
+        pushUndoAction({
+          type: 'revert_all',
+          label: `已撤回所有修改，可撤销（${undoSnaps.length} 个文件）`,
+          snapshots: undoSnaps,
+        });
+      }
       curFile = null; clearDiff(); await refresh();
     } else {
       toast(`部分失败: ${(res.errors||[]).slice(0,2).join(', ')}`,'err');
