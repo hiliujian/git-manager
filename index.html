@@ -1326,6 +1326,9 @@ let curFile     = null;        // 当前查看文件 index
 let diffMode    = 'split';     // 'split' | 'unified'
 let curHunks    = [];          // 当前文件 hunks
 
+// One-shot flag: when user manually opens a file, auto-scroll to first change after rendering.
+let autoScrollToFirstChangeOnce = false;
+
 // 按块提交：每个文件已选择的 hunk index 集合（按 path 存）
 let commitHunksSelectedByPath = new Map();
 // 按块提交：文件的 hunk 选择初始化标记（避免全取消后又被默认全选覆盖）
@@ -1861,6 +1864,7 @@ function updateStats() {
 async function selectFile(i) {
   console.log('selectFile called with i:', i);
   curFile = i;
+  autoScrollToFirstChangeOnce = true;
   // clear log file selection
   curLogFile = null;
   renderFileList();
@@ -2024,6 +2028,19 @@ async function loadDiff(i) {
   document.getElementById('saveFileBtn').style.display = 'none';
   console.log('loadDiff: rendering full file view with diff context');
   renderDiffWithFullContext(f, curHunks, false, changeLocations);
+  // Auto jump to the first change when user manually opens the file.
+  if (autoScrollToFirstChangeOnce) {
+    autoScrollToFirstChangeOnce = false;
+    try {
+      const locs = buildChangeLocationsFromHunks(curHunks);
+      const first = (locs || [])[0];
+      const ln = (first && (first.anchorLineNumber ?? first.lineNumber ?? first.displayLineNumber));
+      if (ln !== null && ln !== undefined && Number.isFinite(Number(ln))) {
+        // Wait for DOM paint
+        setTimeout(() => scrollToLine(Number(ln)), 0);
+      }
+    } catch (e) {}
+  }
   console.log('loadDiff: completed');
 }
 
