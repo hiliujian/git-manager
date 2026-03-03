@@ -658,7 +658,248 @@ def parse_diff(text):
     hunks = []
     cur   = None
     ol = nl = 0
-    removed_buf = []
+    removed_block = []
+    added_block = []
+
+    def _norm_line(s):
+        if s is None:
+            return ""
+        return s[:-1] if s.endswith("\r") else s
+
+    def _lcs_pairs(a, b):
+        n = len(a)
+        m = len(b)
+        if n == 0 or m == 0:
+            return []
+        dp = [[0] * (m + 1) for _ in range(n + 1)]
+        for i in range(n - 1, -1, -1):
+            ai = a[i]
+            row = dp[i]
+            row_next = dp[i + 1]
+            for j in range(m - 1, -1, -1):
+                if ai == b[j]:
+                    row[j] = row_next[j + 1] + 1
+                else:
+                    v1 = row_next[j]
+                    v2 = row[j + 1]
+                    row[j] = v1 if v1 >= v2 else v2
+
+        pairs = []
+        i = j = 0
+        while i < n and j < m:
+            if a[i] == b[j]:
+                pairs.append((i, j))
+                i += 1
+                j += 1
+            else:
+                if dp[i + 1][j] >= dp[i][j + 1]:
+                    i += 1
+                else:
+                    j += 1
+        return pairs
+
+    def _line_similarity(s1, s2):
+        """计算两行文本的相似度 (0.0 - 1.0)"""
+        if s1 == s2:
+            return 1.0
+        if not s1 or not s2:
+            return 0.0
+        
+        # 简单的字符级相似度计算
+        s1_stripped = s1.strip()
+        s2_stripped = s2.strip()
+        
+        if not s1_stripped or not s2_stripped:
+            return 0.0
+        
+        # 计算编辑距离的简化版本
+        len1, len2 = len(s1_stripped), len(s2_stripped)
+        max_len = max(len1, len2)
+        
+        # 如果长度差异太大，相似度低
+        if max_len > 0:
+            len_ratio = min(len1, len2) / max_len
+            if len_ratio < 0.3:
+                return 0.0
+        
+        # 计算公共前缀和后缀
+        common_prefix = 0
+        for i in range(min(len1, len2)):
+            if s1_stripped[i] == s2_stripped[i]:
+                common_prefix += 1
+            else:
+                break
+        
+        common_suffix = 0
+        for i in range(1, min(len1, len2) + 1):
+            if s1_stripped[-i] == s2_stripped[-i]:
+                common_suffix += 1
+            else:
+                break
+        
+        # 避免重复计算
+        if common_prefix + common_suffix > min(len1, len2):
+            common_suffix = min(len1, len2) - common_prefix
+        
+        common_chars = common_prefix + common_suffix
+        similarity = common_chars / max_len if max_len > 0 else 0.0
+        
+        return similarity
+
+    def flush_change_block():
+        nonlocal removed_block, added_block, ol, nl, cur
+        if not cur:
+            removed_block = []
+            added_block = []
+            return
+        if not removed_block and not added_block:
+            return
+
+        pairs = _lcs_pairs(removed_block, added_block)
+        ri = ai = 0
+
+        def emit_unmatched(r_end, a_end):
+            nonlocal ri, ai, ol, nl
+            r_len = r_end - ri
+            a_len = a_end - ai
+            
+            # 纯新增场景
+            if r_len == 0:
+                for k in range(a_len):
+                    cur["lines"].append({"type": "added", "old": None, "new": nl, "text": added_block[ai + k]})
+                    nl += 1
+                ri = r_end
+                ai = a_end
+                return
+            
+            # 纯删除场景
+            if a_len == 0:
+                for k in range(r_len):
+                    cur["lines"].append({"type": "removed", "old": ol, "new": None, "text": removed_block[ri + k]})
+                    ol += 1
+                ri = r_end
+                ai = a_end
+                return
+            
+            # 同时存在删除和新增: 使用智能匹配
+            # 构建相似度矩阵，找出最佳匹配
+            removed_lines = removed_block[ri:r_end]
+            added_lines = added_block[ai:a_end]
+            
+            # 为每个删除行找到最相似的新增行
+            matches = []  # [(removed_idx, added_idx, similarity)]
+            
+            for r_idx, r_line in enumerate(removed_lines):
+                best_sim = 0.0
+                best_a_idx = -1
+                
+                for a_idx, a_line in enumerate(added_lines):
+                    sim = _line_similarity(r_line, a_line)
+                    if sim > best_sim:
+                        best_sim = sim
+                        best_a_idx = a_idx
+                
+                # 相似度阈值：> 0.4 认为是修改，否则是删除+新增
+                if best_sim > 0.4:
+                    matches.append((r_idx, best_a_idx, best_sim))
+            
+            # 过滤掉重复匹配（一个新增行只能匹配一个删除行）
+            used_added = set()
+            final_matches = []
+            
+            # 按相似度排序，优先选择相似度高的匹配
+            matches.sort(key=lambda x: x[2], reverse=True)
+            
+            for r_idx, a_idx, sim in matches:
+                if a_idx not in used_added:
+                    final_matches.append((r_idx, a_idx))
+                    used_added.add(a_idx)
+            
+            # 按位置排序
+            final_matches.sort()
+            
+            # 生成输出
+            used_removed = set()
+            r_idx = 0
+            a_idx = 0
+            match_idx = 0
+            
+            while r_idx < r_len or a_idx < a_len:
+                # 检查当前位置是否有匹配
+                has_match = False
+                if match_idx < len(final_matches):
+                    match_r, match_a = final_matches[match_idx]
+                    if match_r == r_idx and match_a == a_idx:
+                        # 输出修改
+                        cur["lines"].append({
+                            "type": "modified",
+                            "old": ol,
+                            "new": nl,
+                            "text": added_lines[a_idx],
+                            "old_text": removed_lines[r_idx]
+                        })
+                        ol += 1
+                        nl += 1
+                        r_idx += 1
+                        a_idx += 1
+                        used_removed.add(match_r)
+                        match_idx += 1
+                        has_match = True
+                    elif match_r == r_idx and match_a > a_idx:
+                        # 当前删除行有匹配，但新增行还没到位置，先输出新增
+                        cur["lines"].append({"type": "added", "old": None, "new": nl, "text": added_lines[a_idx]})
+                        nl += 1
+                        a_idx += 1
+                        has_match = True
+                    elif match_r > r_idx:
+                        # 当前删除行没有匹配
+                        if a_idx < a_len and a_idx not in used_added:
+                            # 优先输出删除
+                            cur["lines"].append({"type": "removed", "old": ol, "new": None, "text": removed_lines[r_idx]})
+                            ol += 1
+                            r_idx += 1
+                        elif a_idx < a_len:
+                            cur["lines"].append({"type": "added", "old": None, "new": nl, "text": added_lines[a_idx]})
+                            nl += 1
+                            a_idx += 1
+                        else:
+                            cur["lines"].append({"type": "removed", "old": ol, "new": None, "text": removed_lines[r_idx]})
+                            ol += 1
+                            r_idx += 1
+                        has_match = True
+                
+                if not has_match:
+                    # 没有匹配关系，按顺序输出
+                    if r_idx < r_len and r_idx not in used_removed:
+                        cur["lines"].append({"type": "removed", "old": ol, "new": None, "text": removed_lines[r_idx]})
+                        ol += 1
+                        r_idx += 1
+                    elif a_idx < a_len:
+                        cur["lines"].append({"type": "added", "old": None, "new": nl, "text": added_lines[a_idx]})
+                        nl += 1
+                        a_idx += 1
+                    else:
+                        break
+            
+            ri = r_end
+            ai = a_end
+
+        for rj, aj in pairs:
+            if rj > ri or aj > ai:
+                emit_unmatched(rj, aj)
+
+            cur["lines"].append({"type": "context", "old": ol, "new": nl, "text": removed_block[rj]})
+            ol += 1
+            nl += 1
+            ri = rj + 1
+            ai = aj + 1
+
+        if ri < len(removed_block) or ai < len(added_block):
+            emit_unmatched(len(removed_block), len(added_block))
+
+        removed_block = []
+        added_block = []
+
     
     for raw_line in (text or "").splitlines():
         # Skip file header lines
@@ -668,11 +909,7 @@ def parse_diff(text):
         m = re.match(r'^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)', raw_line)
         if m:
             if cur:
-                # Flush any pending removed lines before new hunk
-                while removed_buf:
-                    txt = removed_buf.pop(0)
-                    cur["lines"].append({"type":"removed", "old":ol, "new":None, "text":txt})
-                    ol += 1
+                flush_change_block()
                 hunks.append(cur)
             ol  = int(m.group(1))
             nl  = int(m.group(2))
@@ -690,42 +927,22 @@ def parse_diff(text):
             continue
 
         if raw_line.startswith("+"):
-            text = raw_line[1:]
-            if removed_buf:
-                old_txt = removed_buf.pop(0)
-                cur["lines"].append({
-                    "type": "modified",
-                    "old": ol,
-                    "new": nl,
-                    "text": text,
-                    "old_text": old_txt
-                })
-                ol += 1
-                nl += 1
-            else:
-                cur["lines"].append({"type":"added", "old":None, "new":nl, "text":text})
-                nl += 1
+            added_block.append(_norm_line(raw_line[1:]))
 
         elif raw_line.startswith("-"):
-            text = raw_line[1:]
-            removed_buf.append(text)
+            removed_block.append(_norm_line(raw_line[1:]))
 
         else:
             # Context line
-            while removed_buf:
-                txt = removed_buf.pop(0)
-                cur["lines"].append({"type":"removed", "old":ol, "new":None, "text":txt})
-                ol += 1
+            flush_change_block()
             text = raw_line[1:] if raw_line.startswith(" ") else raw_line
+            text = _norm_line(text)
             cur["lines"].append({"type":"context", "old":ol, "new":nl, "text":text})
             ol += 1
             nl += 1
 
     if cur:
-        while removed_buf:
-            txt = removed_buf.pop(0)
-            cur["lines"].append({"type":"removed", "old":ol, "new":None, "text":txt})
-            ol += 1
+        flush_change_block()
         hunks.append(cur)
     
     logger.debug(f"解析完成，共 {len(hunks)} 个 hunk")
@@ -1037,106 +1254,250 @@ def revert_hunk(filepath: str, hunk_idx: int, status: str, ctx_lines: int = 5):
     return _git_apply_reverse_patch(patch2)
 
 
-def revert_line(filepath: str, hunk_idx: int, line_idx: int, status: str, ctx_lines: int = 5):
-    raw_patch, err = _get_raw_file_diff_patch(filepath, status, ctx_lines=ctx_lines)
+def _find_line_index_by_signature(hunks, signature: dict):
+    if not hunks or not signature:
+        return None
+
+    def _norm(v):
+        if v is None:
+            return None
+        try:
+            return int(v)
+        except Exception:
+            return v
+
+    sig_type = (signature.get("type") or "").lower()
+    sig_new = _norm(signature.get("new"))
+    sig_old = _norm(signature.get("old"))
+    sig_text = signature.get("text")
+    sig_old_text = signature.get("old_text")
+
+    for hi, h in enumerate(hunks):
+        lines = (h or {}).get("lines") or []
+        for li, dl in enumerate(lines):
+            if not dl:
+                continue
+            t = (dl.get("type") or "").lower()
+            if sig_type and t != sig_type:
+                continue
+            if sig_new is not None and _norm(dl.get("new")) != sig_new:
+                continue
+            if sig_old is not None and _norm(dl.get("old")) != sig_old:
+                continue
+            if sig_text is not None and dl.get("text") != sig_text:
+                continue
+            if sig_old_text is not None and dl.get("old_text") != sig_old_text:
+                continue
+            return hi, li
+    return None
+
+
+def revert_line(filepath: str, hunk_idx: int, line_idx: int, status: str, ctx_lines: int = 5, signature: dict | None = None):
+    if not REPO_PATH:
+        return False, "未打开仓库"
+
+    filepath = (filepath or "").replace("\\", "/").lstrip("/")
+    if not filepath:
+        return False, "缺少 path"
+
+    st = (status or "").strip().upper() or "M"
+    if st == "U":
+        return False, "未跟踪文件不支持按行撤回"
+
+    try:
+        hunk_idx = int(hunk_idx)
+        line_idx = int(line_idx)
+    except Exception:
+        return False, "参数非法"
+
+    hunks, err = get_file_diff(filepath, st, ctx_lines)
     if err:
         return False, err
-    if raw_patch is None or (not raw_patch.strip()):
+    if not hunks:
         return False, "无可撤回变更"
+    if signature:
+        located = _find_line_index_by_signature(hunks, signature)
+        if located:
+            hunk_idx, line_idx = located
 
-    file_header, hunks = _parse_unified_patch_with_mapping(raw_patch)
     if hunk_idx < 0 or hunk_idx >= len(hunks):
         return False, "hunk_index 越界"
 
-    h = hunks[hunk_idx]
-    mapping = h.get("map") or {}
-    if line_idx not in mapping:
+    h = hunks[hunk_idx] or {}
+    lines = h.get("lines") or []
+    if line_idx < 0 or line_idx >= len(lines):
         return False, "line_index 越界"
+    dl = lines[line_idx] or {}
 
-    include = set(mapping.get(line_idx) or [])
-    include = _expand_include_with_near_context(h.get("raw_lines") or [], include, ctx=3)
-    patch = _build_partial_hunk_patch(file_header, h, include)
-    if not patch:
-        return False, "构建 patch 失败"
+    full = _safe_repo_abspath(filepath)
+    if not full:
+        return False, "非法路径"
 
-    ok, msg = _git_apply_reverse_patch(patch)
-    if ok:
-        return True, ""
-    # Retry with zero-context diff to reduce context mismatches
-    raw_patch2, err2 = _get_raw_file_diff_patch(filepath, status, ctx_lines=0)
-    if err2 or (not raw_patch2) or (not raw_patch2.strip()):
-        return False, msg
-    file_header2, hunks2 = _parse_unified_patch_with_mapping(raw_patch2)
-    if hunk_idx < 0 or hunk_idx >= len(hunks2):
-        return False, msg
-    h2 = hunks2[hunk_idx]
-    mapping2 = h2.get("map") or {}
-    if line_idx not in mapping2:
-        return False, msg
-    include2 = set(mapping2.get(line_idx) or [])
-    include2 = _expand_include_with_near_context(h2.get("raw_lines") or [], include2, ctx=3)
-    patch2 = _build_partial_hunk_patch(file_header2, h2, include2)
-    if not patch2:
-        return False, msg
-    return _git_apply_reverse_patch(patch2)
+    try:
+        with open(full, "r", encoding="utf-8", errors="replace", newline="") as f:
+            cur_lines = f.readlines()
+    except Exception as e:
+        return False, str(e)
+
+    eol = "\n"
+    for l in cur_lines:
+        if l.endswith("\r\n"):
+            eol = "\r\n"
+            break
+        if l.endswith("\n"):
+            eol = "\n"
+            break
+
+    def _ensure_eol(s: str) -> str:
+        if s is None:
+            s = ""
+        if s.endswith("\r\n") or s.endswith("\n"):
+            return s
+        return s + eol
+
+    t = (dl.get("type") or "").lower()
+    if t == "context":
+        return False, "无法撤回上下文行"
+
+    if t in ("added", "modified"):
+        new_no = dl.get("new")
+        if new_no is None:
+            return False, "缺少 new 行号"
+        try:
+            new_no = int(new_no)
+        except Exception:
+            return False, "new 行号非法"
+        idx0 = new_no - 1
+        if idx0 < 0 or idx0 >= len(cur_lines):
+            return False, "目标行号越界"
+
+        if t == "added":
+            cur_lines.pop(idx0)
+        else:
+            old_text = dl.get("old_text")
+            if old_text is None:
+                return False, "缺少 old_text"
+            ending = ""
+            if cur_lines[idx0].endswith("\r\n"):
+                ending = "\r\n"
+            elif cur_lines[idx0].endswith("\n"):
+                ending = "\n"
+            cur_lines[idx0] = (old_text + ending) if ending else _ensure_eol(old_text)
+
+    elif t == "removed":
+        ins_text = dl.get("text")
+        if ins_text is None:
+            return False, "缺少 text"
+        ins_line = _ensure_eol(ins_text)
+
+        insert_at = None
+        for j in range(line_idx + 1, len(lines)):
+            nxt = lines[j] or {}
+            n_new = nxt.get("new")
+            if n_new is not None:
+                try:
+                    insert_at = max(0, int(n_new) - 1)
+                    break
+                except Exception:
+                    pass
+        if insert_at is None:
+            for j in range(line_idx - 1, -1, -1):
+                prv = lines[j] or {}
+                p_new = prv.get("new")
+                if p_new is not None:
+                    try:
+                        insert_at = max(0, int(p_new))
+                        break
+                    except Exception:
+                        pass
+        if insert_at is None:
+            insert_at = len(cur_lines)
+        if insert_at > len(cur_lines):
+            insert_at = len(cur_lines)
+        cur_lines.insert(insert_at, ins_line)
+
+    else:
+        return False, "不支持的行类型"
+
+    try:
+        with open(full, "w", encoding="utf-8", errors="replace", newline="") as f:
+            f.writelines(cur_lines)
+    except Exception as e:
+        return False, str(e)
+
+    return True, ""
 
 
 def revert_multi_lines(filepath: str, hunk_idx: int, start_line_idx: int, end_line_idx: int, status: str, ctx_lines: int = 5):
-    raw_patch, err = _get_raw_file_diff_patch(filepath, status, ctx_lines=ctx_lines)
+    if not REPO_PATH:
+        return False, "未打开仓库"
+
+    filepath = (filepath or "").replace("\\", "/").lstrip("/")
+    if not filepath:
+        return False, "缺少 path"
+
+    st = (status or "").strip().upper() or "M"
+    if st == "U":
+        return False, "未跟踪文件不支持按行撤回"
+
+    try:
+        hunk_idx = int(hunk_idx)
+        start_line_idx = int(start_line_idx)
+        end_line_idx = int(end_line_idx)
+    except Exception:
+        return False, "参数非法"
+
+    if start_line_idx > end_line_idx:
+        start_line_idx, end_line_idx = end_line_idx, start_line_idx
+
+    hunks, err = get_file_diff(filepath, st, ctx_lines)
     if err:
         return False, err
-    if raw_patch is None or (not raw_patch.strip()):
+    if not hunks:
         return False, "无可撤回变更"
-
-    file_header, hunks = _parse_unified_patch_with_mapping(raw_patch)
     if hunk_idx < 0 or hunk_idx >= len(hunks):
         return False, "hunk_index 越界"
 
-    h = hunks[hunk_idx]
-    mapping = h.get("map") or {}
+    h = hunks[hunk_idx] or {}
+    lines = h.get("lines") or []
+    if not lines:
+        return False, "无可撤回变更"
 
-    s = int(start_line_idx)
-    e = int(end_line_idx)
-    if s > e:
-        s, e = e, s
+    start_line_idx = max(0, start_line_idx)
+    end_line_idx = min(len(lines) - 1, end_line_idx)
+    if start_line_idx > end_line_idx:
+        return False, "line_index 越界"
 
-    include = set()
-    for li in range(s, e + 1):
-        include.update(mapping.get(li) or [])
-    if not include:
-        return False, "未选择任何可撤回行"
+    targets = []
+    for li in range(start_line_idx, end_line_idx + 1):
+        dl = lines[li] or {}
+        t = (dl.get("type") or "").lower()
+        if not t or t == "context":
+            continue
+        sig = {
+            "type": dl.get("type"),
+            "new": dl.get("new"),
+            "old": dl.get("old"),
+            "text": dl.get("text"),
+            "old_text": dl.get("old_text"),
+        }
+        targets.append((li, sig))
 
-    include = _expand_include_with_near_context(h.get("raw_lines") or [], include, ctx=3)
+    if not targets:
+        return False, "无可撤回变更"
 
-    patch = _build_partial_hunk_patch(file_header, h, include)
-    if not patch:
-        return False, "构建 patch 失败"
-    ok, msg = _git_apply_reverse_patch(patch)
-    if ok:
-        return True, ""
-    # Retry with zero-context diff to reduce context mismatches
-    raw_patch2, err2 = _get_raw_file_diff_patch(filepath, status, ctx_lines=0)
-    if err2 or (not raw_patch2) or (not raw_patch2.strip()):
-        return False, msg
-    file_header2, hunks2 = _parse_unified_patch_with_mapping(raw_patch2)
-    if hunk_idx < 0 or hunk_idx >= len(hunks2):
-        return False, msg
-    h2 = hunks2[hunk_idx]
-    mapping2 = h2.get("map") or {}
-    include2 = set()
-    for li in range(s, e + 1):
-        include2.update(mapping2.get(li) or [])
-    if not include2:
-        return False, msg
-    include2 = _expand_include_with_near_context(h2.get("raw_lines") or [], include2, ctx=3)
-    patch2 = _build_partial_hunk_patch(file_header2, h2, include2)
-    if not patch2:
-        return False, msg
-    return _git_apply_reverse_patch(patch2)
+    first_type = (targets[0][1].get("type") or "").lower()
+    for _, sig in targets:
+        if (sig.get("type") or "").lower() != first_type:
+            return False, "多行撤回要求所有行类型相同"
 
-# ════════════════════════════════════════════════════════
-#  提交历史
-# ════════════════════════════════════════════════════════
+    for li, sig in sorted(targets, key=lambda x: int(x[0]), reverse=True):
+        ok, msg = revert_line(filepath, hunk_idx, li, st, ctx_lines, sig)
+        if not ok:
+            return False, msg
+
+    return True, ""
+
 
 def get_log():
     """获取提交历史"""
@@ -1170,11 +1531,8 @@ def get_commit_detail(commit_hash):
     """获取提交详情"""
     logger.debug(f"获取提交详情: {commit_hash}")
     fmt = "--pretty=format:%H%x00%an%x00%ae%x00%ad%x00%s%x00%b"
-    out, _, code = run_git(["show", "--no-patch", fmt, "--date=iso", commit_hash])
-    if code != 0:
-        logger.error(f"获取提交详情失败: {commit_hash}")
-        return {"error":"找不到此提交"}
 
+    out, _, code = run_git(["show", "--no-patch", fmt, "--date=iso", commit_hash])
     parts = out.strip().split("\x00")
     if len(parts) < 5:
         logger.error(f"解析提交详情失败: {commit_hash}")
@@ -1631,7 +1989,8 @@ class Handler(BaseHTTPRequestHandler):
                 l_idx = data.get("line_index", -1)
                 st  = data.get("status", "M")
                 ctx = data.get("ctx", 5)
-                ok, msg = revert_line(fp, int(h_idx), int(l_idx), st, ctx)
+                sig = data.get("signature")
+                ok, msg = revert_line(fp, int(h_idx), int(l_idx), st, ctx, sig)
                 self.send_json({"ok": ok, "msg": msg})
             
             elif p == "/api/revert_multi_lines":

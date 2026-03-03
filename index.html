@@ -2985,7 +2985,7 @@ function renderDiffWithFullContext(file, hunks, readonly, changeLocations = []) 
       }
 
       if (status !== 'D' && line.type === 'removed' && !content) {
-        content = `<span style="color:var(--text3)">[已删除]</span>`;
+        content = esc(line.tip || '');
       }
 
       return `<div class="dl ${line.type}">
@@ -3149,7 +3149,7 @@ function renderDiffWithFullContext(file, hunks, readonly, changeLocations = []) 
       }
 
       if (status !== 'D' && line.type === 'removed' && !content) {
-        content = `<span style="color:var(--text3)">[已删除]</span>`;
+        content = esc(line.tip || '');
       }
 
       return `<div class="dl ${line.type}">
@@ -4041,17 +4041,25 @@ function navFile(dir) {
   if (n >= 0 && n < files.length) selectFile(n);
 }
 
-// ── Revert ────────────────────────────────────────────────────────────────────
-function askRevertHunk(filepath, hunkIdx, status) {
-  pendingHunk = {filepath, hunkIdx, status};
-  const hunk  = curHunks[hunkIdx];
-  document.getElementById('revertHunkDesc').textContent =
-    `将撤回以下代码块中的变更，其余修改保持不变，操作不可撤销。\n\n${hunk?.header||''}`;
-  showModal('revertHunkModal');
-}
+ // ── Revert ────────────────────────────────────────────────────────────────────
+ function askRevertHunk(filepath, hunkIdx, status) {
+   pendingHunk = {filepath, hunkIdx, status};
+   const hunk  = curHunks[hunkIdx];
+   document.getElementById('revertHunkDesc').textContent =
+     `将撤回以下代码块中的变更，其余修改保持不变，操作不可撤销。\n\n${hunk?.header||''}`;
+   showModal('revertHunkModal');
+ }
 
-// 真正的实时撤回 - 立即删除，后台保存，实时更新统计
-async function revertLineInstantly(filepath, hunkIdx, lineIdx, status) {
+ let revertLineBusyByPath = new Map();
+
+ // 真正的实时撤回 - 立即删除，后台保存，实时更新统计
+ async function revertLineInstantly(filepath, hunkIdx, lineIdx, status) {
+  if (revertLineBusyByPath.get(filepath)) {
+    toast('正在撤回，请稍候…', 'warn');
+    return;
+  }
+  revertLineBusyByPath.set(filepath, true);
+
   // 禁用自动刷新diff，避免撤回后被WebSocket推送打断
   disableAutoRefreshDiff(8000);
 
@@ -4060,15 +4068,23 @@ async function revertLineInstantly(filepath, hunkIdx, lineIdx, status) {
   
   const hunk = curHunks[hunkIdx];
   const line = hunk?.lines[lineIdx];
+
+  if (!hunk) {
+    toast('无法找到该代码块', 'err');
+    revertLineBusyByPath.set(filepath, false);
+    return;
+  }
   
   if (!line) {
     toast('无法找到该行', 'err');
+    revertLineBusyByPath.set(filepath, false);
     return;
   }
   
   // 确保只处理支持的行类型
   if (line.type === 'context') {
     toast('无法撤回上下文行', 'err');
+    revertLineBusyByPath.set(filepath, false);
     return;
   }
   
@@ -4134,6 +4150,13 @@ async function revertLineInstantly(filepath, hunkIdx, lineIdx, status) {
         path: filepath, 
         hunk_index: hunkIdx, 
         line_index: lineIdx, 
+        signature: {
+          type: line.type,
+          new: line.new,
+          old: line.old,
+          text: line.text,
+          old_text: line.old_text,
+        },
         status,
         ctx: (diffMode === 'unified') ? changeViewCtx : 5
       });
@@ -4221,12 +4244,20 @@ async function revertLineInstantly(filepath, hunkIdx, lineIdx, status) {
       renderFileList();
       updateStats();
       toast('网络错误，已恢复', 'err');
+    } finally {
+      revertLineBusyByPath.set(filepath, false);
     }
   }, 0);
 }
 
-// 真正的实时多行撤回 - 立即删除多行，后台保存，实时更新统计
-async function revertMultiLinesInstantly(filepath, hunkIdx, startLineIdx, endLineIdx, status) {
+ // 真正的实时多行撤回 - 立即删除多行，后台保存，实时更新统计
+ async function revertMultiLinesInstantly(filepath, hunkIdx, startLineIdx, endLineIdx, status) {
+  if (revertLineBusyByPath.get(filepath)) {
+    toast('正在撤回，请稍候…', 'warn');
+    return;
+  }
+  revertLineBusyByPath.set(filepath, true);
+
   // 禁用自动刷新diff，避免撤回后被WebSocket推送打断
   disableAutoRefreshDiff(8000);
 
@@ -4236,6 +4267,7 @@ async function revertMultiLinesInstantly(filepath, hunkIdx, startLineIdx, endLin
   const hunk = curHunks[hunkIdx];
   if (!hunk) {
     toast('无法找到该代码块', 'err');
+    revertLineBusyByPath.set(filepath, false);
     return;
   }
   
@@ -4250,6 +4282,7 @@ async function revertMultiLinesInstantly(filepath, hunkIdx, startLineIdx, endLin
   
   if (linesToRevert.length === 0) {
     toast('无法找到要撤回的代码行', 'err');
+    revertLineBusyByPath.set(filepath, false);
     return;
   }
   
@@ -4258,15 +4291,16 @@ async function revertMultiLinesInstantly(filepath, hunkIdx, startLineIdx, endLin
   const allSameType = linesToRevert.every(item => item.line.type === firstType);
   if (!allSameType) {
     toast('多行撤回要求所有行类型相同', 'err');
+    revertLineBusyByPath.set(filepath, false);
     return;
   }
   
   // 1. 保存原始数据（用于失败回滚）
   const originalHunks = JSON.parse(JSON.stringify(curHunks));
   const originalFiles = JSON.parse(JSON.stringify(files));
+  const originalSelectedKeys = new Set(getSelectedCommitLinesSet(filepath));
   
   // 2. 立即更新数据结构（从后往前删除，避免索引变化）
-  // 先按索引降序排序，这样删除时不会影响前面的索引
   const sortedLines = [...linesToRevert].sort((a, b) => b.originalIndex - a.originalIndex);
   sortedLines.forEach(({originalIndex}) => {
     curHunks[hunkIdx].lines.splice(originalIndex, 1);
@@ -4340,6 +4374,8 @@ async function revertMultiLinesInstantly(filepath, hunkIdx, startLineIdx, endLin
         // 恢复数据
         curHunks = originalHunks;
         files = originalFiles;
+        commitLinesSelectedByPath.set(filepath, new Set(originalSelectedKeys));
+        commitLinesInitByPath.set(filepath, true);
         
         // 重新渲染
         if (curFile !== null && files[curFile]) {
@@ -4358,7 +4394,9 @@ async function revertMultiLinesInstantly(filepath, hunkIdx, startLineIdx, endLin
         const ctxParam = (diffMode === 'unified') ? `&ctx=${encodeURIComponent(changeViewCtx)}` : '';
         const diffRes = await GET(`/api/diff?path=${encodeURIComponent(filepath)}&status=${status}${ctxParam}`);
         if (diffRes.hunks) {
+          const prevHunks = curHunks;
           curHunks = diffRes.hunks;
+          remapSelectedLineKeysBySignature(filepath, prevHunks, curHunks);
           
           // 获取最新的文件内容
           const contentRes = await POST('/api/file_content', {path: filepath});
@@ -4371,7 +4409,6 @@ async function revertMultiLinesInstantly(filepath, hunkIdx, startLineIdx, endLin
             const f = files[curFile];
             const changeLocations = buildChangeLocationsFromHunks(curHunks);
             renderDiffWithFullContext(f, curHunks, false, changeLocations);
-            // 前端已主动把 diff 刷新到最新，跳过下一次 WS 推送触发的自动 loadDiff
             skipNextAutoDiffRefresh = true;
           }
         }
@@ -4399,6 +4436,8 @@ async function revertMultiLinesInstantly(filepath, hunkIdx, startLineIdx, endLin
       // 网络错误也要回滚
       curHunks = originalHunks;
       files = originalFiles;
+      commitLinesSelectedByPath.set(filepath, new Set(originalSelectedKeys));
+      commitLinesInitByPath.set(filepath, true);
       
       if (curFile !== null && files[curFile]) {
         const f = files[curFile];
@@ -4409,9 +4448,11 @@ async function revertMultiLinesInstantly(filepath, hunkIdx, startLineIdx, endLin
       renderFileList();
       updateStats();
       toast('网络错误，已恢复', 'err');
+    } finally {
+      revertLineBusyByPath.set(filepath, false);
     }
   }, 0);
-}
+ }
 
 // 真正的实时撤回代码块 - 立即删除，后台保存，实时更新统计
 async function revertHunkInstantly(filepath, hunkIdx, status) {
