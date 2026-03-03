@@ -356,6 +356,7 @@ body{font-family:'Outfit',sans-serif;color:var(--text);font-size:13px;display:fl
 .dl.removed{background:#240e0e;}
 .dl.removed .ln{background:#301313;}
 .dl.removed .ls{color:#f48771;}
+.ch-add{background:rgba(78,201,176,.28);color:#b9ffef;border-radius:3px;padding:0 1px;white-space:pre;}
 .dl.modified{background:#1e132e;}
 .dl.modified .ln{background:#2a1a40;}
 .dl.modified .ls{color:#c586c0;}
@@ -2685,8 +2686,8 @@ function renderDiffWithFullContext(file, hunks, readonly, changeLocations = []) 
         } else if (dl.type === 'modified') {
           const oldText = baseLines[oldPtr - 1] ?? dl.old_text ?? '';
           const newText = curLines[newPtr - 1] ?? dl.text ?? '';
-          leftLines.push({type:'modified', num:oldPtr, text:oldText, hunkIndex, originalLineIndex: lineIndex});
-          rightLines.push({type:'modified', num:newPtr, text:newText, hunkIndex, originalLineIndex: lineIndex});
+          leftLines.push({type:'modified', num:oldPtr, text:oldText, newText: newText, hunkIndex, originalLineIndex: lineIndex});
+          rightLines.push({type:'modified', num:newPtr, text:newText, oldText: oldText, hunkIndex, originalLineIndex: lineIndex});
           oldPtr++;
           newPtr++;
         }
@@ -2747,7 +2748,13 @@ function renderDiffWithFullContext(file, hunks, readonly, changeLocations = []) 
 
         // 右侧始终保留同宽 actions 槽位，保证行号列视觉对齐；左侧不占位
         const actions = (columnType === 'right') ? `<span class="dl-actions">${commitCb}${revertBtn}</span>` : '';
-        const cellText = (line.type === 'empty') ? '' : (line.type !== 'empty' ? esc(line.text) : '');
+        let cellText = (line.type === 'empty') ? '' : (line.type !== 'empty' ? esc(line.text) : '');
+        if (line.type === 'modified') {
+          const oldT = (columnType === 'left') ? (line.text ?? '') : (line.oldText ?? '');
+          const newT = (columnType === 'left') ? (line.newText ?? '') : (line.text ?? '');
+          const html = buildInlineModifiedHtml(oldT, newT);
+          cellText = (columnType === 'left') ? html.oldHtml : html.newHtml;
+        }
         return `<div class="dl ${line.type}">${actions}<span class="ls">${s}</span><span class="ln">${line.num||''}</span><span class="lc">${cellText}</span></div>`;
       };
 
@@ -2972,6 +2979,11 @@ function renderDiffWithFullContext(file, hunks, readonly, changeLocations = []) 
 
       let content = esc(line.text);
 
+      if (line.type === 'modified') {
+        const html = buildInlineModifiedHtml(line.tip ?? '', line.text ?? '');
+        content = html.newHtml;
+      }
+
       if (status !== 'D' && line.type === 'removed' && !content) {
         content = `<span style="color:var(--text3)">[已删除]</span>`;
       }
@@ -3130,6 +3142,11 @@ function renderDiffWithFullContext(file, hunks, readonly, changeLocations = []) 
         ` onmouseenter="showDiffTooltip('${escJsString(line.tip)}', event)" onmousemove="moveDiffTooltip(event)" onmouseleave="hideDiffTooltip()"` : '';
 
       let content = esc(line.text);
+
+      if (line.type === 'modified') {
+        const html = buildInlineModifiedHtml(line.tip ?? '', line.text ?? '');
+        content = html.newHtml;
+      }
 
       if (status !== 'D' && line.type === 'removed' && !content) {
         content = `<span style="color:var(--text3)">[已删除]</span>`;
@@ -5253,6 +5270,46 @@ function esc(s) {
   return String(s||'')
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
     .replace(/"/g,'&quot;');
+}
+
+function buildInlineModifiedHtml(oldText, newText) {
+  oldText = String(oldText ?? '');
+  newText = String(newText ?? '');
+  if (oldText === newText) {
+    const e = esc(oldText);
+    return { oldHtml: e, newHtml: e };
+  }
+
+  const a = oldText;
+  const b = newText;
+
+  let pre = 0;
+  const minLen = Math.min(a.length, b.length);
+  while (pre < minLen && a[pre] === b[pre]) pre++;
+
+  let suf = 0;
+  while (
+    suf < (minLen - pre) &&
+    a[a.length - 1 - suf] === b[b.length - 1 - suf]
+  ) suf++;
+
+  const aMid = a.slice(pre, a.length - suf);
+  const bMid = b.slice(pre, b.length - suf);
+  const aPre = a.slice(0, pre);
+  const bPre = b.slice(0, pre);
+  const aSuf = a.slice(a.length - suf);
+  const bSuf = b.slice(b.length - suf);
+
+  const oldMidHtml = aMid
+    ? `<span class="ch-add">${esc(aMid)}</span>`
+    : (bMid ? `<span class="ch-add"></span>` : '');
+  const newMidHtml = bMid
+    ? `<span class="ch-add">${esc(bMid)}</span>`
+    : (aMid ? `<span class="ch-add"></span>` : '');
+
+  const oldHtml = `${esc(aPre)}${oldMidHtml}${esc(aSuf)}`;
+  const newHtml = `${esc(bPre)}${newMidHtml}${esc(bSuf)}`;
+  return { oldHtml, newHtml };
 }
 
 // ── Resizers ──────────────────────────────────────────────────────────────────
