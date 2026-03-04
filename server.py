@@ -463,12 +463,96 @@ def save_file_content(filepath: str, content: str):
         parent = os.path.dirname(full)
         if parent and (not os.path.exists(parent)):
             os.makedirs(parent, exist_ok=True)
-        with open(full, "w", encoding="utf-8", newline="\n") as f:
-            f.write(content if content is not None else "")
+
+        rel_path = (filepath or "").replace("\\", "/").lstrip("/")
+
+        # Decide target EOL:
+        # Priority: 1) detect from original file (most reliable)
+        #           2) git attributes (eol)
+        #           3) core.autocrlf (working tree convention)
+        #           4) fallback: LF
+        target_eol = None
+
+        # Step 1: Detect from existing file (highest priority - preserves original)
+        try:
+            if os.path.exists(full) and (not os.path.isdir(full)):
+                with open(full, "rb") as rf:
+                    data = rf.read()
+                # Check if file has CRLF or LF
+                if b"\r\n" in data:
+                    target_eol = "\r\n"
+                    logger.debug(f"检测到文件 {filepath} 使用 CRLF 换行符")
+                elif b"\n" in data:
+                    target_eol = "\n"
+                    logger.debug(f"检测到文件 {filepath} 使用 LF 换行符")
+        except Exception as e:
+            logger.warning(f"检测文件换行符失败: {e}")
+
+        # Step 2: Check git attributes if we couldn't detect from file
+        if target_eol is None:
+            try:
+                out, _, code = run_git(["check-attr", "-z", "eol", "--", rel_path], timeout=30)
+                if code == 0 and out:
+                    parts = out.split("\x00")
+                    # format: path\0attr\0value\0
+                    if len(parts) >= 3:
+                        val = (parts[2] or "").strip().lower()
+                        if val == "crlf":
+                            target_eol = "\r\n"
+                            logger.debug(f"从 git 属性检测到 {filepath} 使用 CRLF")
+                        elif val == "lf":
+                            target_eol = "\n"
+                            logger.debug(f"从 git 属性检测到 {filepath} 使用 LF")
+            except Exception as e:
+                logger.warning(f"检查 git 属性失败: {e}")
+
+        # Step 3: Check core.autocrlf if still unknown
+        if target_eol is None:
+            try:
+                out2, _, code2 = run_git(["config", "--get", "core.autocrlf"], timeout=10)
+                if code2 == 0 and (out2 or "").strip().lower() == "true":
+                    target_eol = "\r\n"
+                    logger.debug(f"从 core.autocrlf 检测到使用 CRLF")
+            except Exception as e:
+                logger.warning(f"检查 core.autocrlf 失败: {e}")
+
+        # Step 4: Default to LF if still unknown
+        if target_eol is None:
+            target_eol = "\n"
+            logger.debug(f"使用默认换行符 LF")
+
+        txt = content if content is not None else ""
+        
+        # Check if content already has the correct line endings
+        has_crlf = "\r\n" in txt
+        has_lf_only = "\n" in txt and not has_crlf
+        
+        if target_eol == "\r\n" and has_crlf:
+            # Content already has CRLF and we want CRLF - no conversion needed
+            logger.debug(f"内容已是 CRLF 格式,无需转换")
+            pass
+        elif target_eol == "\n" and has_lf_only:
+            # Content already has LF only and we want LF - no conversion needed
+            logger.debug(f"内容已是 LF 格式,无需转换")
+            pass
+        else:
+            # Need to normalize and convert
+            logger.debug(f"转换换行符: 当前={'CRLF' if has_crlf else 'LF'} -> 目标={repr(target_eol)}")
+            txt = str(txt).replace("\r\n", "\n").replace("\r", "\n")
+            if target_eol != "\n":
+                txt = txt.replace("\n", target_eol)
+
+        # Write exact newlines without implicit translation
+        with open(full, "w", encoding="utf-8", newline="") as f:
+            f.write(txt)
+        
+        logger.info(f"文件保存成功: {filepath} (换行符: {repr(target_eol)})")
         return True, "保存成功"
     except Exception as e:
         logger.error(f"保存文件失败: {filepath} - {e}", exc_info=True)
         return False, str(e)
+
+
 
 # ════════════════════════════════════════════════════════
 #  工作区变更文件
@@ -902,7 +986,8 @@ def parse_diff(text):
 
     
     for raw_line in (text or "").splitlines():
-        # Skip file header lines
+        if raw_line.startswith("\\ No newline at end of file"):
+            continue
         if raw_line.startswith("+++") or raw_line.startswith("---"):
             continue
             
@@ -933,7 +1018,6 @@ def parse_diff(text):
             removed_block.append(_norm_line(raw_line[1:]))
 
         else:
-            # Context line
             flush_change_block()
             text = raw_line[1:] if raw_line.startswith(" ") else raw_line
             text = _norm_line(text)
@@ -1254,44 +1338,6 @@ def revert_hunk(filepath: str, hunk_idx: int, status: str, ctx_lines: int = 5):
     return _git_apply_reverse_patch(patch2)
 
 
-def _find_line_index_by_signature(hunks, signature: dict):
-    if not hunks or not signature:
-        return None
-
-    def _norm(v):
-        if v is None:
-            return None
-        try:
-            return int(v)
-        except Exception:
-            return v
-
-    sig_type = (signature.get("type") or "").lower()
-    sig_new = _norm(signature.get("new"))
-    sig_old = _norm(signature.get("old"))
-    sig_text = signature.get("text")
-    sig_old_text = signature.get("old_text")
-
-    for hi, h in enumerate(hunks):
-        lines = (h or {}).get("lines") or []
-        for li, dl in enumerate(lines):
-            if not dl:
-                continue
-            t = (dl.get("type") or "").lower()
-            if sig_type and t != sig_type:
-                continue
-            if sig_new is not None and _norm(dl.get("new")) != sig_new:
-                continue
-            if sig_old is not None and _norm(dl.get("old")) != sig_old:
-                continue
-            if sig_text is not None and dl.get("text") != sig_text:
-                continue
-            if sig_old_text is not None and dl.get("old_text") != sig_old_text:
-                continue
-            return hi, li
-    return None
-
-
 def revert_line(filepath: str, hunk_idx: int, line_idx: int, status: str, ctx_lines: int = 5, signature: dict | None = None):
     if not REPO_PATH:
         return False, "未打开仓库"
@@ -1299,6 +1345,10 @@ def revert_line(filepath: str, hunk_idx: int, line_idx: int, status: str, ctx_li
     filepath = (filepath or "").replace("\\", "/").lstrip("/")
     if not filepath:
         return False, "缺少 path"
+
+    full = _safe_repo_abspath(filepath)
+    if not full:
+        return False, "非法路径"
 
     st = (status or "").strip().upper() or "M"
     if st == "U":
@@ -1315,16 +1365,51 @@ def revert_line(filepath: str, hunk_idx: int, line_idx: int, status: str, ctx_li
         return False, err
     if not hunks:
         return False, "无可撤回变更"
-    if signature:
-        located = _find_line_index_by_signature(hunks, signature)
-        if located:
-            hunk_idx, line_idx = located
-
     if hunk_idx < 0 or hunk_idx >= len(hunks):
         return False, "hunk_index 越界"
 
     h = hunks[hunk_idx] or {}
     lines = h.get("lines") or []
+
+    def _to_int(x):
+        try:
+            return int(x)
+        except Exception:
+            return None
+
+    def _sig_match(dl0: dict, sig0: dict) -> bool:
+        if not dl0 or not sig0:
+            return False
+        t0 = (dl0.get("type") or "").lower()
+        ts = (sig0.get("type") or "").lower()
+        if t0 != ts:
+            return False
+        if (dl0.get("text") or "") != (sig0.get("text") or ""):
+            return False
+        if (dl0.get("old_text") or "") != (sig0.get("old_text") or ""):
+            return False
+        n0 = _to_int(dl0.get("new"))
+        ns = _to_int(sig0.get("new"))
+        o0 = _to_int(dl0.get("old"))
+        os = _to_int(sig0.get("old"))
+        if ns is not None and n0 != ns:
+            return False
+        if os is not None and o0 != os:
+            return False
+        return True
+
+    if signature:
+        found_idx = None
+        for i, dli in enumerate(lines):
+            try:
+                if _sig_match(dli or {}, signature):
+                    found_idx = i
+                    break
+            except Exception:
+                pass
+        if found_idx is not None:
+            line_idx = found_idx
+
     if line_idx < 0 or line_idx >= len(lines):
         return False, "line_index 越界"
     dl = lines[line_idx] or {}
@@ -1481,17 +1566,22 @@ def revert_multi_lines(filepath: str, hunk_idx: int, start_line_idx: int, end_li
             "text": dl.get("text"),
             "old_text": dl.get("old_text"),
         }
-        targets.append((li, sig))
+        pos = dl.get("new") if t in ("added", "modified") else dl.get("old")
+        try:
+            pos = int(pos) if pos is not None else None
+        except Exception:
+            pos = None
+        targets.append((li, pos, sig))
 
     if not targets:
         return False, "无可撤回变更"
 
-    first_type = (targets[0][1].get("type") or "").lower()
-    for _, sig in targets:
+    first_type = (targets[0][2].get("type") or "").lower()
+    for _, __, sig in targets:
         if (sig.get("type") or "").lower() != first_type:
             return False, "多行撤回要求所有行类型相同"
 
-    for li, sig in sorted(targets, key=lambda x: int(x[0]), reverse=True):
+    for li, pos, sig in sorted(targets, key=lambda x: (x[1] is None, x[1] if x[1] is not None else x[0]), reverse=True):
         ok, msg = revert_line(filepath, hunk_idx, li, st, ctx_lines, sig)
         if not ok:
             return False, msg
