@@ -1977,6 +1977,9 @@ class Handler(BaseHTTPRequestHandler):
                     if len(full_hash) > 7:
                         detail["full_hash"] = full_hash
                         detail["hash"] = full_hash[:7]
+                head_out, _, head_code = run_git(["rev-parse", "HEAD"])
+                head_full = (head_out or "").strip() if head_code == 0 else ""
+                detail["is_head"] = bool(head_full and (detail.get("full_hash") == head_full or detail.get("hash") == head_full))
             self.send_json(detail)
 
         elif p == "/api/commit_file_diff":
@@ -2225,6 +2228,47 @@ class Handler(BaseHTTPRequestHandler):
                     "msg": msg,
                     "full_hash": full_hash,
                     "hash": full_hash[:7] if full_hash else "",
+                })
+
+            elif p == "/api/soft_reset_commit":
+                logger.info("处理 /api/soft_reset_commit 请求")
+                if not REPO_PATH:
+                    self.send_json({"error":"未打开仓库"}, 400)
+                    return
+                commit = (data.get("hash") or "").strip()
+                if not commit:
+                    self.send_json({"error":"缺少 hash"}, 400)
+                    return
+
+                head_out, head_err, head_code = run_git(["rev-parse", "HEAD"])
+                if head_code != 0:
+                    self.send_json({"error": head_err or "无法获取 HEAD"}, 400)
+                    return
+                head_full = (head_out or "").strip()
+
+                if commit != head_full and commit != head_full[:7]:
+                    self.send_json({"error": "仅允许撤销当前分支最新一次提交（HEAD）"}, 400)
+                    return
+
+                pushed, _, perr = is_commit_pushed(head_full)
+                if perr:
+                    self.send_json({"error": perr}, 400)
+                    return
+                if pushed:
+                    self.send_json({"error": "该提交已推送到远端，无法使用软回退撤销；请使用 Revert"}, 400)
+                    return
+
+                _, err, code = run_git(["reset", "--soft", f"{head_full}^"], timeout=120)
+                if code != 0:
+                    self.send_json({"error": err or "软回退失败"}, 400)
+                    return
+
+                new_head_out, _, new_head_code = run_git(["rev-parse", "HEAD"])
+                new_head_full = (new_head_out or "").strip() if new_head_code == 0 else ""
+                self.send_json({
+                    "ok": True,
+                    "full_hash": new_head_full,
+                    "hash": new_head_full[:7] if new_head_full else "",
                 })
 
             elif p == "/api/commit":

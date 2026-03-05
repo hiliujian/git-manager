@@ -951,7 +951,8 @@
         <div class="log-detail-meta" style="margin-top:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           <button class="btn red" id="revertCommitBtn" style="padding:2px 10px;display:none" title="撤回该提交（git revert），会生成一个新的回滚提交" onclick="revertCommitFromHistory()">Revert</button>
           <button class="btn blue" id="pushCommitBtn" style="padding:2px 10px;display:none" title="推送当前分支" onclick="pushFromHistory()">Push</button>
-          <span style="color:var(--text3);font-size:11px">撤回该提交（git revert），会生成一个新的回滚提交</span>
+          <button class="btn" id="softResetCommitBtn" style="padding:2px 8px;display:none" title="撤销最近一次提交（git reset --soft），保留修改" onclick="softResetCommitFromHistory()">↩</button>
+          <span id="commitActionHint" style="color:var(--text3);font-size:11px">撤回该提交（git revert），会生成一个新的回滚提交</span>
         </div>
         <div class="log-detail-meta" id="ldMeta"></div>
       </div>
@@ -7523,26 +7524,45 @@
     if (el) switchTab(name, el);
   }
 
-  function updateCommitActionButtons(pushed) {
+  function updateCommitActionButtons(pushed, isHead) {
     const rb = document.getElementById('revertCommitBtn');
     const pb = document.getElementById('pushCommitBtn');
+    const sb = document.getElementById('softResetCommitBtn');
+    const hint = document.getElementById('commitActionHint');
 
     // pushed === true  => show Revert, hide Push
     // pushed === false => show Push,  hide Revert
     // pushed === null  => hide both (loading/unknown)
     if (rb) rb.style.display = (pushed === true) ? '' : 'none';
     if (pb) pb.style.display = (pushed === false) ? '' : 'none';
+
+    // Soft reset 仅用于：未 push + HEAD
+    if (sb) sb.style.display = (pushed === false && isHead === true) ? '' : 'none';
+
+    if (hint) {
+      if (pushed === true) {
+        hint.textContent = '撤回该提交（git revert），会生成一个新的回滚提交';
+      } else if (pushed === false) {
+        hint.textContent = (isHead === true)
+          ? '该提交尚未推送到远端：可 Push 同步；或用 ↺ 撤销提交（保留修改）后继续完善'
+          : '该提交尚未推送到远端，如需同步到远端请先 Push';
+      } else {
+        hint.textContent = '';
+      }
+    }
   }
 
   async function refreshCommitActionButtonsForHash(fullHash) {
     const h = (fullHash || '').trim();
-    if (!h) { updateCommitActionButtons(null); return; }
+    if (!h) { updateCommitActionButtons(null, null); return; }
     try {
       const st = await GET(`/api/commit_push_status?hash=${encodeURIComponent(h)}`);
-      if (st && !st.error) updateCommitActionButtons(!!st.pushed);
-      else updateCommitActionButtons(null);
+      const isHead = (curCommit && typeof curCommit.is_head !== 'undefined') ? !!curCommit.is_head : null;
+      if (st && !st.error) updateCommitActionButtons(!!st.pushed, isHead);
+      else updateCommitActionButtons(null, isHead);
     } catch (_) {
-      updateCommitActionButtons(null);
+      const isHead = (curCommit && typeof curCommit.is_head !== 'undefined') ? !!curCommit.is_head : null;
+      updateCommitActionButtons(null, isHead);
     }
   }
 
@@ -7580,6 +7600,37 @@
       }
     } finally {
       setButtonBusy(pb, false);
+    }
+  }
+
+  async function softResetCommitFromHistory() {
+    const fullHash = (curCommit && (curCommit.full_hash || curCommit.hash)) ? (curCommit.full_hash || curCommit.hash) : '';
+    if (!fullHash) return;
+    const ok = await showConfirm({
+      title: '确认撤销提交（保留修改）',
+      message: `确认撤销最近一次提交（git reset --soft）？\n\n${fullHash}\n\n撤销后：提交记录会回退，但代码修改会被保留，方便继续完善后再提交。`,
+      okText: '撤销提交',
+      cancelText: '取消',
+      danger: true,
+    });
+    if (!ok) return;
+
+    const sb = document.getElementById('softResetCommitBtn');
+    setButtonBusy(sb, true);
+    try {
+      toast('撤销中...','warn');
+      const res = await POST('/api/soft_reset_commit', {hash: fullHash});
+      if (res && res.ok) {
+        toast('✓ 已撤销提交（修改已保留）','ok');
+        await refresh();
+        backToLog();
+      } else {
+        toast(`撤销失败: ${(res && (res.msg||res.error)) ? (res.msg||res.error) : '未知错误'}`,'err');
+        await refresh();
+        await refreshCommitActionButtonsForHash(fullHash);
+      }
+    } finally {
+      setButtonBusy(sb, false);
     }
   }
 
@@ -7626,7 +7677,7 @@
     document.getElementById('ldHash').textContent = '';
     document.getElementById('ldMsg').textContent  = '加载中...';
     document.getElementById('ldMeta').textContent = '';
-    updateCommitActionButtons(null);
+    updateCommitActionButtons(null, null);
     document.getElementById('ldFileList').innerHTML =
             '<div style="padding:16px;color:var(--text3)"><div class="spin"></div></div>';
 
@@ -7642,10 +7693,10 @@
     // 已推送：显示 Revert，隐藏 Push；未推送：显示 Push，隐藏 Revert
     try {
       const st = await GET(`/api/commit_push_status?hash=${encodeURIComponent(c.full_hash || fullHash)}`);
-      if (st && !st.error) updateCommitActionButtons(!!st.pushed);
-      else updateCommitActionButtons(null);
+      if (st && !st.error) updateCommitActionButtons(!!st.pushed, !!c.is_head);
+      else updateCommitActionButtons(null, !!c.is_head);
     } catch (_) {
-      updateCommitActionButtons(null);
+      updateCommitActionButtons(null, !!c.is_head);
     }
 
     // 使用hash字段（已经是短hash），不需要再slice
