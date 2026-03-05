@@ -208,6 +208,37 @@
       background: rgba(241, 243, 245, 0.9);
       border-color: rgba(206, 212, 218, 0.5);
     }
+
+    /* Light theme checkbox overrides */
+    [data-theme="light"] .fi-cb:checked::after,
+    [data-theme="light"] .commit-cb:checked::after {
+      color: #ffffff;
+    }
+    [data-theme="light"] .fi-cb.indet::after,
+    [data-theme="light"] .commit-cb.indet::after {
+      color: #ffffff;
+    }
+
+    /* Light theme autosave switch overrides */
+    [data-theme="light"] .autosave-slider:before {
+      background: rgba(73, 80, 87, 0.9);
+      border: 1px solid rgba(134, 142, 150, 0.6);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    }
+    [data-theme="light"] .autosave-switch input:checked + .autosave-slider {
+      background: #d0ebff;
+      border-color: #74c0fc;
+      box-shadow: none;
+    }
+    [data-theme="light"] .autosave-switch input:checked + .autosave-slider:before {
+      background: #1971c2;
+      border-color: #1864ab;
+      box-shadow: 0 0 0 2px rgba(25, 113, 194, 0.12), 0 2px 10px rgba(0, 0, 0, 0.15);
+    }
+    [data-theme="light"] .autosave-switch input:focus-visible + .autosave-slider {
+      outline: 2px solid rgba(25, 113, 194, 0.25);
+      outline-offset: 2px;
+    }
     [data-theme="light"] .branch-menu .bm-item.active {
       background: rgba(233, 236, 239, 0.95);
       border: 1px solid rgba(25, 113, 194, 0.5);
@@ -7592,7 +7623,12 @@
     try {
       toast('推送中...','warn');
       const res = await POST('/api/push',{});
-      if (res.ok) toast('✓ Push 完成','ok');
+      if (res.ok) {
+        toast('✓ Push 完成','ok');
+        // Push 成功后清空当前选中的文件,避免自动显示 diff
+        curFile = null;
+        clearDiff();
+      }
       else toast(`Push 失败: ${res.msg||res.error}`,'err');
       await refresh();
       if (curCommit && (curCommit.full_hash || curCommit.hash)) {
