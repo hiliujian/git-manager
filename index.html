@@ -96,6 +96,123 @@
       border-top-color: var(--accent);
     }
 
+    /* Light theme button overrides */
+    [data-theme="light"] .btn.blue {
+      background: #d0ebff;
+      border-color: #74c0fc;
+      color: #1971c2;
+    }
+    [data-theme="light"] .btn.blue:hover {
+      background: #a5d8ff;
+      border-color: #4dabf7;
+    }
+    [data-theme="light"] .btn.green {
+      background: #d3f9d8;
+      border-color: #8ce99a;
+      color: #0ca678;
+    }
+    [data-theme="light"] .btn.green:hover {
+      background: #b2f2bb;
+      border-color: #51cf66;
+    }
+    [data-theme="light"] .btn.red {
+      background: #ffe3e3;
+      border-color: #ffa8a8;
+      color: #c92a2a;
+    }
+    [data-theme="light"] .btn.red:hover {
+      background: #ffc9c9;
+      border-color: #ff8787;
+    }
+
+    /* Light theme file status badge overrides */
+    [data-theme="light"] .fi-st.M {
+      background: #d0ebff;
+      color: #1971c2;
+    }
+    [data-theme="light"] .fi-st.A {
+      background: #d3f9d8;
+      color: #0ca678;
+    }
+    [data-theme="light"] .fi-st.D {
+      background: #ffe3e3;
+      color: #c92a2a;
+    }
+    [data-theme="light"] .fi-st.R {
+      background: #e5dbff;
+      color: #7950f2;
+    }
+    [data-theme="light"] .fi-st.U {
+      background: #fff3bf;
+      color: #e67700;
+    }
+
+    /* Light theme log file status badge overrides */
+    [data-theme="light"] .lf-st.M {
+      background: #d0ebff;
+      color: #1971c2;
+    }
+    [data-theme="light"] .lf-st.A {
+      background: #d3f9d8;
+      color: #0ca678;
+    }
+    [data-theme="light"] .lf-st.D {
+      background: #ffe3e3;
+      color: #c92a2a;
+    }
+
+    /* Light theme revert buttons overrides */
+    [data-theme="light"] .hunk-revert:hover {
+      background: #ffe3e3;
+      border-color: #ffa8a8;
+      box-shadow: 0 0 6px rgba(201, 42, 42, 0.25);
+    }
+    [data-theme="light"] .line-revert:hover {
+      background: #ffe3e3;
+      border-color: #ffa8a8;
+      box-shadow: 0 0 4px rgba(201, 42, 42, 0.25);
+    }
+
+    /* Light theme hint button overrides */
+    [data-theme="light"] .hint-btn {
+      background: rgba(201, 42, 42, 0.08);
+      border-color: rgba(201, 42, 42, 0.3);
+    }
+    [data-theme="light"] .hint-btn:hover {
+      background: rgba(201, 42, 42, 0.15);
+      border-color: #ffa8a8;
+      box-shadow: 0 0 8px rgba(201, 42, 42, 0.2);
+    }
+
+    /* Light theme overlay overrides */
+    [data-theme="light"] .overlay {
+      background: rgba(0, 0, 0, 0.4);
+    }
+
+    /* Light theme branch menu overrides */
+    [data-theme="light"] .branch-menu {
+      background: rgba(255, 255, 255, 0.95);
+      border: 1px solid rgba(206, 212, 218, 0.9);
+      box-shadow: 0 22px 60px rgba(0, 0, 0, 0.15);
+    }
+    [data-theme="light"] .branch-menu .bm-search input {
+      background: rgba(241, 243, 245, 0.9);
+      border: 1px solid rgba(206, 212, 218, 0.7);
+      color: var(--text);
+    }
+    [data-theme="light"] .branch-menu .bm-search input:focus {
+      border-color: #4dabf7;
+      box-shadow: 0 0 0 2px rgba(25, 113, 194, 0.15);
+    }
+    [data-theme="light"] .branch-menu .bm-item:hover {
+      background: rgba(241, 243, 245, 0.9);
+      border-color: rgba(206, 212, 218, 0.5);
+    }
+    [data-theme="light"] .branch-menu .bm-item.active {
+      background: rgba(233, 236, 239, 0.95);
+      border: 1px solid rgba(25, 113, 194, 0.5);
+    }
+
     *{margin:0;padding:0;box-sizing:border-box;}
     html,body{height:100%;overflow:hidden;background:var(--bg);}
     body{font-family:'Outfit',sans-serif;color:var(--text);font-size:13px;display:flex;flex-direction:column;}
@@ -531,6 +648,10 @@
       flex-shrink:0;line-height:20px;user-select:none;-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;}
     .ls{width:16px;min-width:16px;text-align:center;font-weight:700;flex-shrink:0;line-height:20px;user-select:none;-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;}
     .lc{padding:0 8px;white-space:pre;flex:1;min-width:0;overflow:visible;line-height:20px;user-select:text;}
+    
+    /* 不可编辑的行使用默认指针而非文本光标 */
+    .lc[contenteditable="false"]{cursor:default;}
+    .dl.removed .lc{cursor:default;}
 
     /* ── RIGHT PANEL ── */
     .right-panel{width:260px;min-width:180px;max-width:400px;background:var(--bg2);
@@ -3871,7 +3992,6 @@
 
   // ── Diff ──────────────────────────────────────────────────────────────────────
   async function selectFile(i) {
-    console.log('selectFile called with i:', i);
     curFile = i;
     autoScrollToFirstChangeOnce = true;
     // clear log file selection
@@ -3879,19 +3999,15 @@
     renderFileList();
     // 清空之前的hunks，确保重新加载
     curHunks = [];
-    console.log('selectFile: calling loadDiff with i:', i);
     await loadDiff(i);
-    console.log('selectFile: loadDiff completed');
   }
 
   async function loadDiff(i) {
-    console.log('loadDiff called with i:', i);
     const f = files[i];
     if (!f) {
-      console.log('loadDiff: file not found for index', i);
+      console.warn('loadDiff: file not found for index', i);
       return;
     }
-    console.log('loadDiff: loading file', f.path);
 
     const computeStatsFromHunks = (hunks) => {
       let a = 0, r = 0, m = 0;
