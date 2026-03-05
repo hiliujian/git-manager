@@ -6,6 +6,7 @@
   <style>
     @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600&family=Outfit:wght@300;400;500;600;700&display=swap');
 
+    /* Dark Theme (Default) */
     :root {
       --bg:        #13141a;
       --bg2:       #1a1c24;
@@ -28,6 +29,73 @@
       --rmvd-ln:   #320c0c;
       --hunk-bg:   #181b28;
     }
+
+    /* Light Theme */
+    [data-theme="light"] {
+      --bg:        #ffffff;
+      --bg2:       #f8f9fa;
+      --bg3:       #f1f3f5;
+      --bg4:       #e9ecef;
+      --bg5:       #dee2e6;
+      --border:    #dee2e6;
+      --border2:   #ced4da;
+      --accent:    #1971c2;
+      --accent2:   #0ca678;
+      --danger:    #c92a2a;
+      --warn:      #e67700;
+      --purple:    #7950f2;
+      --text:      #212529;
+      --text2:     #495057;
+      --text3:     #868e96;
+      --added-bg:  #d3f9d8;
+      --added-ln:  #b2f2bb;
+      --rmvd-bg:   #ffe3e3;
+      --rmvd-ln:   #ffc9c9;
+      --hunk-bg:   #e7f5ff;
+    }
+
+    /* Light theme specific overrides */
+    [data-theme="light"] .dl.added {
+      background: #d3f9d8;
+    }
+    [data-theme="light"] .dl.added .ln {
+      background: #b2f2bb;
+    }
+    [data-theme="light"] .dl.added .ls {
+      color: #0ca678;
+    }
+    [data-theme="light"] .dl.removed {
+      background: #ffe3e3;
+    }
+    [data-theme="light"] .dl.removed .ln {
+      background: #ffc9c9;
+    }
+    [data-theme="light"] .dl.removed .ls {
+      color: #c92a2a;
+    }
+    [data-theme="light"] .dl.modified {
+      background: #e7f5ff;
+    }
+    [data-theme="light"] .dl.modified .ln {
+      background: #d0ebff;
+    }
+    [data-theme="light"] .dl.modified .ls {
+      color: #1971c2;
+    }
+    [data-theme="light"] .ch-add {
+      background: rgba(12, 166, 120, 0.2);
+      color: #087f5b;
+    }
+    [data-theme="light"] .revert-block-hint {
+      background: linear-gradient(90deg, rgba(25, 113, 194, 0.08), rgba(201, 42, 42, 0.08), rgba(25, 113, 194, 0.08));
+      border-top: 1px solid rgba(0, 0, 0, 0.08);
+      border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+    }
+    [data-theme="light"] .spin {
+      border: 2px solid var(--bg3);
+      border-top-color: var(--accent);
+    }
+
     *{margin:0;padding:0;box-sizing:border-box;}
     html,body{height:100%;overflow:hidden;background:var(--bg);}
     body{font-family:'Outfit',sans-serif;color:var(--text);font-size:13px;display:flex;flex-direction:column;}
@@ -594,6 +662,19 @@
       <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/>
       </svg>换仓库
+    </button>
+    <button class="icon-btn" id="themeToggle" title="切换主题" onclick="toggleTheme()">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="5"/>
+        <line x1="12" y1="1" x2="12" y2="3"/>
+        <line x1="12" y1="21" x2="12" y2="23"/>
+        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
+        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+        <line x1="1" y1="12" x2="3" y2="12"/>
+        <line x1="21" y1="12" x2="23" y2="12"/>
+        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
+        <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+      </svg>
     </button>
   </div>
 </div>
@@ -7930,6 +8011,67 @@
   makeResizer('r2','#rightPanel','left');
   updatePanelToggleButtons();
   initChangeNavigationWheelScroll();
+
+  // ── Theme Toggle ──────────────────────────────────────────────────────────────
+  function initTheme() {
+    try {
+      // 从localStorage读取主题偏好，默认为dark
+      const savedTheme = localStorage.getItem('gm_theme') || 'dark';
+      applyTheme(savedTheme);
+    } catch (e) {
+      applyTheme('dark');
+    }
+  }
+
+  function applyTheme(theme) {
+    try {
+      if (theme === 'light') {
+        document.documentElement.setAttribute('data-theme', 'light');
+      } else {
+        document.documentElement.removeAttribute('data-theme');
+      }
+      updateThemeIcon(theme);
+    } catch (e) {}
+  }
+
+  function updateThemeIcon(theme) {
+    const btn = document.getElementById('themeToggle');
+    if (!btn) return;
+    
+    if (theme === 'light') {
+      // 显示月亮图标（暗色模式）
+      btn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+      </svg>`;
+      btn.title = '切换到暗色模式';
+    } else {
+      // 显示太阳图标（浅色模式）
+      btn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="5"/>
+        <line x1="12" y1="1" x2="12" y2="3"/>
+        <line x1="12" y1="21" x2="12" y2="23"/>
+        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
+        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+        <line x1="1" y1="12" x2="3" y2="12"/>
+        <line x1="21" y1="12" x2="23" y2="12"/>
+        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
+        <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+      </svg>`;
+      btn.title = '切换到浅色模式';
+    }
+  }
+
+  function toggleTheme() {
+    try {
+      const currentTheme = document.documentElement.getAttribute('data-theme');
+      const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+      applyTheme(newTheme);
+      localStorage.setItem('gm_theme', newTheme);
+    } catch (e) {}
+  }
+
+  // 初始化主题
+  initTheme();
 
   (async () => {
     try {
