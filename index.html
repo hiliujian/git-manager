@@ -23,10 +23,6 @@
       --text:      #dde0ec;
       --text2:     #8891b0;
       --text3:     #4e5472;
-      --added-bg:  #0c2318;
-      --added-ln:  #0f2d1e;
-      --rmvd-bg:   #280f0f;
-      --rmvd-ln:   #320c0c;
       --hunk-bg:   #181b28;
     }
 
@@ -47,10 +43,6 @@
       --text:      #212529;
       --text2:     #495057;
       --text3:     #868e96;
-      --added-bg:  #d3f9d8;
-      --added-ln:  #b2f2bb;
-      --rmvd-bg:   #ffe3e3;
-      --rmvd-ln:   #ffc9c9;
       --hunk-bg:   #e7f5ff;
     }
 
@@ -551,12 +543,12 @@
     }
 
     /* Hunk block */
-    .hunk{margin-bottom:2px;}
+    .hunk{margin-bottom:2px;cursor:default;}
     .hunk-hdr{display:flex;align-items:center;background:var(--hunk-bg);
       border-top:1px solid #252a42;border-bottom:1px solid #252a42;padding:3px 0;
       position:sticky;top:0;z-index:2;}
     .hunk-info{font-family:'JetBrains Mono',monospace;font-size:11px;color:#5a6499;
-      padding:0 10px;flex:1;font-style:italic;}
+      padding:0 10px;flex:1;font-style:italic;cursor:default;}
     .hunk-btns{display:flex;gap:4px;padding:0 8px;flex-shrink:0;}
 
     /* IDEA-style revert arrow button */
@@ -590,16 +582,16 @@
     .dl-actions .commit-cb{margin:0;}
 
     /* 确保UI元素不可被选中，只有代码内容可选 */
-    .ls{user-select:none;-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;}
-    .ln{user-select:none;-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;}
-    .dl-actions{user-select:none;-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;}
+    .ls{user-select:none;-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;cursor:default;}
+    .ln{user-select:none;-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;cursor:default;}
+    .dl-actions{user-select:none;-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;cursor:default;}
     .dl-actions *{user-select:none;-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;}
     .line-revert{user-select:none;-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;}
     .hunk-revert{user-select:none;-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;}
-    .hunk-hdr{user-select:none;-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;}
+    .hunk-hdr{user-select:none;-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;cursor:default;}
     .hunk-info{user-select:none;-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;}
-    .hunk-btns{user-select:none;-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;}
-    .sp-hdr{user-select:none;-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;}
+    .hunk-btns{user-select:none;-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;cursor:default;}
+    .sp-hdr{user-select:none;-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;cursor:default;}
     
     /* 使用::selection伪元素彻底阻止UI元素显示选中高亮 */
     .ls::selection, .ls *::selection{background:transparent;color:inherit;}
@@ -617,7 +609,7 @@
     .hunk-btns::selection, .hunk-btns *::selection{background:transparent;color:inherit;}
 
     /* Diff line */
-    .dl{display:flex;font-family:'JetBrains Mono',monospace;font-size:12px;line-height:20px;min-height:20px;white-space:nowrap;}
+    .dl{display:flex;font-family:'JetBrains Mono',monospace;font-size:12px;line-height:20px;min-height:20px;white-space:nowrap;cursor:default;}
     .dl:hover{filter:brightness(1.18);}
     .dl.added{background:#0e240e;}
     .dl.added .ln{background:#133013;}
@@ -638,11 +630,12 @@
       border-top:1px solid rgba(255,255,255,0.06);
       border-bottom:1px solid rgba(255,255,255,0.06);
       color:var(--text2);
+      cursor:default;
     }
     .revert-block-hint .ls{color:var(--text3);}
     .revert-block-hint .ln{background:transparent;border-right:1px solid var(--border);}
-    .revert-block-hint .lc{display:flex;align-items:center;gap:8px;}
-    .revert-block-hint .hint-text{font-size:11px;opacity:0.9;user-select:none;-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;}
+    .revert-block-hint .lc{display:flex;align-items:center;gap:8px;cursor:default;}
+    .revert-block-hint .hint-text{font-size:11px;opacity:0.9;user-select:none;-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;cursor:default;}
     .revert-block-hint .hint-tag{
       font-size:10px;
       padding:0;
@@ -651,8 +644,9 @@
       color:var(--accent);
       background:transparent;
       user-select:none;-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;
+      cursor:default;
     }
-    .revert-block-hint .hint-actions{margin-left:auto;display:flex;align-items:center;gap:6px;pointer-events:auto;user-select:none;-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;}
+    .revert-block-hint .hint-actions{margin-left:auto;display:flex;align-items:center;gap:6px;pointer-events:auto;user-select:none;-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;cursor:default;}
     .revert-block-hint .hint-btn{
       height:18px;
       padding:0 8px;
@@ -678,10 +672,11 @@
       font-size:10px;border-right:1px solid var(--border);background:var(--bg2);
       flex-shrink:0;line-height:20px;user-select:none;-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;}
     .ls{width:16px;min-width:16px;text-align:center;font-weight:700;flex-shrink:0;line-height:20px;user-select:none;-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;}
-    .lc{padding:0 8px;white-space:pre;flex:1;min-width:0;overflow:visible;line-height:20px;user-select:text;}
+    .lc{padding:0 8px;white-space:pre;flex:1;min-width:0;overflow:visible;line-height:20px;user-select:text;cursor:default;}
     
-    /* 不可编辑的行使用默认指针而非文本光标 */
-    .lc[contenteditable="false"]{cursor:default;}
+    /* 只有可编辑的代码行才显示文本输入光标 */
+    .lc.editable-line{cursor:text !important;}
+    .lc[contenteditable="true"]{cursor:text !important;}
     .dl.removed .lc{cursor:default;}
 
     /* ── RIGHT PANEL ── */
