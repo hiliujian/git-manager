@@ -178,7 +178,7 @@
 
     /* Light theme overlay overrides */
     [data-theme="light"] .overlay {
-      background: rgba(0, 0, 0, 0.4);
+      background: rgba(255, 255, 255, 0.6);
     }
 
     /* Light theme branch menu overrides */
@@ -466,6 +466,11 @@
     .autosave-switch input:focus-visible + .autosave-slider{outline:2px solid rgba(110,180,247,.22);outline-offset:2px;}
     .diff-view{flex:1;overflow:auto;background:var(--bg2);padding:0 8px 10px;}
     .diff-view[contenteditable="true"]:focus{outline:none;}
+    .diff-view[contenteditable="true"]{caret-color:transparent;}
+    .diff-view[contenteditable="true"] .editable-line{caret-color:auto;}
+    .diff-view[contenteditable="true"] input,
+    .diff-view[contenteditable="true"] textarea{caret-color:auto;}
+    .diff-view[contenteditable="true"] a{cursor:pointer;}
 
     .editable-line{
       background: transparent;
@@ -747,7 +752,7 @@
     .lf-delta .r{color:var(--danger);}
 
     /* ── MODAL ── */
-    .overlay{display:none;position:fixed;inset:0;background:#00000099;z-index:500;
+    .overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:500;
       align-items:center;justify-content:center;}
     .overlay.show{display:flex;}
     .modal{background:var(--bg2);border:1px solid var(--border);border-radius:9px;
@@ -1742,21 +1747,21 @@
       window.__gmDiffUiUnselectableInited = true;
       
       // 复制事件过滤 - 确保复制时只包含代码内容
-      document.addEventListener('copy', (e) => {
+      const __gmCopyFromSelectionClean = (e) => {
         try {
           const host = document.getElementById('diffView');
-          if (!host) return;
+          if (!host) return false;
           
           const sel = window.getSelection();
-          if (!sel || sel.rangeCount === 0) return;
-          if (sel.isCollapsed) return;
+          if (!sel || sel.rangeCount === 0) return false;
+          if (sel.isCollapsed) return false;
           
           const range = sel.getRangeAt(0);
-          if (!range) return;
+          if (!range) return false;
           
           const container = range.commonAncestorContainer;
           const containerEl = container.nodeType === Node.ELEMENT_NODE ? container : container.parentElement;
-          if (!containerEl || !host.contains(containerEl)) return;
+          if (!containerEl || !host.contains(containerEl)) return false;
           
           // 提取选区内容
           const fragment = range.cloneContents();
@@ -1797,11 +1802,11 @@
               
               if (isInLc) {
                 // 允许纯文本复制（用户在代码内容中选择）
-                return; // 让浏览器默认处理
+                return false; // 让浏览器默认处理
               } else {
                 // 不在代码区域，阻止复制
                 e.preventDefault();
-                return;
+                return false;
               }
             }
           }
@@ -1812,39 +1817,47 @@
             // 设置剪贴板内容
             e.preventDefault();
             e.clipboardData.setData('text/plain', cleanText);
+            return true;
           }
         } catch (e2) {
           console.error('Copy event error:', e2);
+          return false;
         }
+      };
+
+      document.addEventListener('copy', (e) => {
+        try {
+          if (typeof __gmCopyFromLcCells === 'function') {
+            const ok = __gmCopyFromLcCells(e);
+            if (ok) return;
+          }
+          if (typeof __gmCopyFromSelectionClean === 'function') {
+            const ok2 = __gmCopyFromSelectionClean(e);
+            if (ok2) return;
+          }
+          const host = document.getElementById('diffView');
+          if (!host) return;
+          const t = e.target;
+          if (!t) return;
+          let line = null;
+          try {
+            if (t.closest) line = t.closest('.editable-line');
+          } catch (e) {}
+          if (!line) {
+            try {
+              const sel = window.getSelection ? window.getSelection() : null;
+              const node = sel && sel.rangeCount ? (sel.anchorNode || sel.getRangeAt(0).startContainer) : null;
+              const el = node ? ((node.nodeType === Node.ELEMENT_NODE) ? node : (node.parentElement || null)) : null;
+              if (el && el.closest) line = el.closest('.editable-line');
+            } catch (e) {}
+          }
+          if (!line || !host.contains(line)) return;
+          try { line.dataset.dirty = '1'; } catch (e) {}
+          window.__dirtyEdits = true;
+          scheduleAutoSave();
+        } catch (e2) {}
       }, true);
     }
-
-    // contenteditable 宿主模式下，浏览器会直接改 DOM，这里补齐脏标记与自动保存触发。
-    document.addEventListener('input', (e) => {
-      try {
-        if (!__isCeHost()) return;
-        const host = document.getElementById('diffView');
-        if (!host) return;
-        const t = e.target;
-        if (!t) return;
-        let line = null;
-        try {
-          if (t.closest) line = t.closest('.editable-line');
-        } catch (e) {}
-        if (!line) {
-          try {
-            const sel = window.getSelection ? window.getSelection() : null;
-            const node = sel && sel.rangeCount ? (sel.anchorNode || sel.getRangeAt(0).startContainer) : null;
-            const el = node ? ((node.nodeType === Node.ELEMENT_NODE) ? node : (node.parentElement || null)) : null;
-            if (el && el.closest) line = el.closest('.editable-line');
-          } catch (e) {}
-        }
-        if (!line || !host.contains(line)) return;
-        try { line.dataset.dirty = '1'; } catch (e) {}
-        window.__dirtyEdits = true;
-        scheduleAutoSave();
-      } catch (e2) {}
-    }, true);
 
     // ce-host: ensure focus + stable editing semantics (prevent browser from inserting <div>/<br>).
     if (!window.__gmCeHostEditingInited) {
@@ -2022,6 +2035,27 @@
           const t = e.target;
           if (!t || !t.closest) return;
           
+          // 左侧“原始版本”面板是只读区域：允许正常选择/复制，不要把焦点重定向到可编辑行
+          // 否则会导致点击后滚动跳回顶部、无法选中文本等异常。
+          const sp = t.closest('.sp');
+          if (sp && sp.getAttribute && sp.getAttribute('contenteditable') === 'false') {
+            return;
+          }
+
+          // 提示/标题等 UI 区域不是编辑内容：点击时不要在 contenteditable 宿主里放置插入符
+          // 但按钮/checkbox/链接等交互控件必须仍可点击。
+          const uiBlock = t.closest('.revert-block-hint, .hunk-hdr, .change-navigation');
+          if (uiBlock && host.contains(uiBlock)) {
+            const interactive = t.closest('button, input, a, .hint-actions, .dl-actions');
+            if (!interactive) {
+              e.preventDefault();
+              try { e.stopImmediatePropagation(); } catch (e2) {}
+              try { e.stopPropagation(); } catch (e2) {}
+              try { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); } catch (e2) {}
+              return;
+            }
+          }
+          
           // 检查是否点击了可编辑行
           const line = t.closest('.editable-line');
           if (line && host.contains(line)) {
@@ -2144,6 +2178,53 @@
 
           const sel = window.getSelection ? window.getSelection() : null;
           if (!sel || sel.rangeCount === 0) return;
+
+          // 修复：在存在选区时，Backspace/Delete 应删除选中内容（多行/跨行）。
+          // 注意：ce-host 下浏览器默认删除会直接改 DOM，且可能误伤 UI 列；这里复用现有的
+          // __handleMultiLineSelectionReplace('') 做“受控删除”。
+          if (isDestructive && !sel.isCollapsed) {
+            try {
+              const ok = __handleMultiLineSelectionReplace('');
+              if (ok) {
+                e.preventDefault();
+                try { e.stopImmediatePropagation(); } catch (e2) {}
+                try { e.stopPropagation(); } catch (e2) {}
+                return;
+              }
+            } catch (e2) {}
+          }
+
+          // 防止 UI 元素（行号/标识/按钮/提示块等）被 Backspace/Delete 误删：
+          // 只要选区触及 UI 列或 UI 容器，就阻止浏览器的默认 DOM 变更。
+          if (isDestructive) {
+            try {
+              const r0 = sel.getRangeAt(0);
+              const isInEditableLine = (n) => {
+                const el0 = n ? ((n.nodeType === Node.ELEMENT_NODE) ? n : (n.parentElement || null)) : null;
+                const line0 = (el0 && el0.closest) ? el0.closest('.editable-line') : null;
+                return !!(line0 && host.contains(line0));
+              };
+              const uiSelector = '.ln, .ls, .dl-actions, .sp-hdr, .revert-block-hint, .hunk-hdr, .hunk-info, .hunk-btns, .change-navigation, .change-nav-item, .line-revert, .hunk-revert';
+              const startEl = r0.startContainer ? ((r0.startContainer.nodeType === Node.ELEMENT_NODE) ? r0.startContainer : (r0.startContainer.parentElement || null)) : null;
+              const endEl = r0.endContainer ? ((r0.endContainer.nodeType === Node.ELEMENT_NODE) ? r0.endContainer : (r0.endContainer.parentElement || null)) : null;
+              const touchesUI = (!!(startEl && startEl.closest && startEl.closest(uiSelector))) || (!!(endEl && endEl.closest && endEl.closest(uiSelector)));
+
+              let selectionCoversUI = false;
+              try {
+                // cloneContents 仅对当前选区内容检查，不扫描整个 DOM
+                const frag = r0.cloneContents();
+                if (frag && frag.querySelector && frag.querySelector(uiSelector)) selectionCoversUI = true;
+              } catch (e2) {}
+
+              // 如果光标/选区不在可编辑行内，或者触及 UI 列，则禁止破坏性按键的默认行为
+              if (touchesUI || selectionCoversUI || (!isInEditableLine(r0.startContainer) || !isInEditableLine(r0.endContainer))) {
+                e.preventDefault();
+                try { e.stopImmediatePropagation(); } catch (e2) {}
+                try { e.stopPropagation(); } catch (e2) {}
+                return;
+              }
+            } catch (e2) {}
+          }
 
           // Fix: Backspace at line start must never delete UI columns (.ln/.ls/.dl-actions).
           // Take over at keydown stage to prevent any default DOM mutation.
@@ -2981,39 +3062,39 @@
       t.dispatchEvent(new Event('input', { bubbles: true }));
     }, true);
 
-    document.addEventListener('copy', (e) => {
+    function __gmCopyFromLcCells(e) {
       try {
         const sel = window.getSelection ? window.getSelection() : null;
-        if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return;
+        if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return false;
         const r = sel.getRangeAt(0);
 
         const host = document.getElementById('diffView');
-        if (!host) return;
+        if (!host) return false;
         if (!host.contains(r.commonAncestorContainer)) {
           const ca = (r.commonAncestorContainer && r.commonAncestorContainer.nodeType === Node.ELEMENT_NODE)
             ? r.commonAncestorContainer
             : (r.commonAncestorContainer && r.commonAncestorContainer.parentElement);
-          if (!ca || !host.contains(ca)) return;
+          if (!ca || !host.contains(ca)) return false;
         }
 
         // In unified change view, many lines are readonly and are not .editable-line.
         // Use .lc (code cell) as the authoritative copy unit so UI columns won't be copied.
         const allCells = Array.from(host.querySelectorAll('.dl .lc'));
-        if (!allCells.length) return;
+        if (!allCells.length) return false;
         const covered = [];
         for (const el of allCells) {
           try {
             if (r.intersectsNode(el)) covered.push(el);
           } catch (e) {}
         }
-        if (!covered.length) return;
+        if (!covered.length) return false;
 
         const first = covered[0];
         const last = covered[covered.length - 1];
         const lines = allCells;
         const sIdx = lines.indexOf(first);
         const eIdx = lines.indexOf(last);
-        if (sIdx < 0 || eIdx < 0) return;
+        if (sIdx < 0 || eIdx < 0) return false;
         const from = Math.min(sIdx, eIdx);
         const to = Math.max(sIdx, eIdx);
 
@@ -3052,10 +3133,13 @@
         if (e && e.clipboardData && e.clipboardData.setData) {
           e.preventDefault();
           e.clipboardData.setData('text/plain', out);
-          return;
+          return true;
         }
-      } catch (e2) {}
-    }, true);
+        return false;
+      } catch (e2) {
+        return false;
+      }
+    }
 
     document.addEventListener('click', (e) => {
       const target = e.target;
@@ -3739,6 +3823,66 @@
 
     const btn = document.getElementById('pullBtn');
     setButtonBusy(btn, true);
+
+    // 先检查是否有本地未提交的修改
+    const filesRes = await GET('/api/files');
+    const hasLocalChanges = filesRes && filesRes.files && filesRes.files.length > 0;
+
+    if (hasLocalChanges) {
+      // 有本地修改,先询问用户如何处理
+      setButtonBusy(btn, false);
+      
+      const affectedList = (filesRes.files || [])
+        .slice(0, 10)
+        .map(f => f.path)
+        .join('\n');
+      const more = (filesRes.files || []).length > 10 
+        ? `\n... 等 ${filesRes.files.length} 个文件` 
+        : '';
+      
+      const choice = await showLocalChangesConflictDialog(affectedList + more);
+      
+      if (choice === 'commit') {
+        // 提交并更新
+        await commitAndPull();
+      } else if (choice === 'stash') {
+        // 暂存并更新
+        await stashAndPull();
+      } else if (choice === 'direct') {
+        // 直接更新（git pull）
+        setButtonBusy(btn, true);
+        toast('直接更新中...','warn');
+        const res = await POST('/api/pull', {});
+        setButtonBusy(btn, false);
+        if (res && res.ok) {
+          toast('✓ 更新完成','ok');
+          await refresh();
+          return;
+        }
+        if (res && res.has_conflicts) {
+          const list = (res.conflict_files || []).slice(0, 12).join('\n');
+          const more = (res.conflict_files || []).length > 12 ? `\n... 等 ${(res.conflict_files || []).length} 个文件` : '';
+          await showConfirm({
+            title: '更新发生冲突',
+            message:
+                    `检测到合并冲突，请先在本地解决冲突：\n\n${list}${more}\n\n处理建议：\n1) 打开冲突文件，手动解决标记（<<<<<<</=======/>>>>>>>)\n2) 解决后执行提交（commit）\n3) 如需推送，再执行 Push`,
+            okText: '知道了',
+            cancelText: '关闭',
+            danger: true,
+          });
+          await refresh();
+          return;
+        }
+        const msg = (res && (res.error || res.msg || res.message || res.output)) ? (res.error || res.msg || res.message || res.output) : '更新失败';
+        toast(msg,'err');
+        await refresh();
+        return;
+      }
+      // choice === 'cancel' 时不做任何操作
+      return;
+    }
+
+    // 没有本地修改,直接 pull
     toast('更新中...','warn');
 
     const res = await POST('/api/pull', {});
@@ -3748,6 +3892,21 @@
     if (res && res.ok) {
       toast('✓ 更新完成','ok');
       await refresh();
+      return;
+    }
+
+    // 这里作为兜底,处理意外情况下的本地修改冲突
+    if (res && res.local_changes_conflict) {
+      const affectedList = (res.affected_files || []).slice(0, 10).join('\n');
+      const more = (res.affected_files || []).length > 10 ? `\n... 等 ${(res.affected_files || []).length} 个文件` : '';
+      
+      const choice = await showLocalChangesConflictDialog(affectedList + more);
+      
+      if (choice === 'commit') {
+        await commitAndPull();
+      } else if (choice === 'stash') {
+        await stashAndPull();
+      }
       return;
     }
 
@@ -3766,9 +3925,270 @@
       return;
     }
 
-    const msg = (res && (res.error || res.msg)) ? (res.error || res.msg) : '更新失败';
+    const msg = (res && (res.error || res.msg || res.message || res.output)) ? (res.error || res.msg || res.message || res.output) : '更新失败';
     toast(msg,'err');
     await refresh();
+  }
+
+  async function showLocalChangesConflictDialog(affectedFiles) {
+    return new Promise((resolve) => {
+      const overlay = document.createElement('div');
+      overlay.className = 'overlay show';
+      overlay.style.zIndex = '10000';
+      
+      const dialog = document.createElement('div');
+      dialog.className = 'confirm-dlg';
+      dialog.style.maxWidth = '560px';
+      dialog.style.position = 'relative';
+      dialog.style.zIndex = '10001';
+      dialog.innerHTML = `
+        <div class="confirm-title" style="color: var(--warn);">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 8px;">
+            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+            <line x1="12" y1="9" x2="12" y2="13"/>
+            <line x1="12" y1="17" x2="12.01" y2="17"/>
+          </svg>
+          检测到本地未提交的修改
+        </div>
+        <div class="confirm-msg" style="margin-bottom: 20px; line-height: 1.6;">
+          <p style="margin-bottom: 12px;">远程仓库的更新会覆盖你本地的以下文件修改：</p>
+          <pre style="background: var(--bg3); padding: 10px; border-radius: 6px; font-size: 11px; max-height: 120px; overflow-y: auto; border: 1px solid var(--border);">${affectedFiles || '(无法获取文件列表)'}</pre>
+          <p style="margin-top: 16px; margin-bottom: 8px; font-weight: 500;">请选择处理方式：</p>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px;">
+          <button class="choice-btn commit-choice" style="padding: 12px; border: 1px solid var(--accent); background: var(--bg3); color: var(--text); border-radius: 6px; cursor: pointer; text-align: left; transition: all 0.2s;">
+            <div style="font-weight: 600; margin-bottom: 4px;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                <polyline points="20 6 9 17 4 12"/>
+              </svg>
+              提交本地修改后更新
+            </div>
+            <div style="font-size: 11px; color: var(--text2); margin-left: 22px;">将本地修改提交到版本库，然后从远程更新。如果远程也有修改，可能产生合并冲突需要手动解决。</div>
+          </button>
+          <button class="choice-btn stash-choice" style="padding: 12px; border: 1px solid var(--accent2); background: var(--bg3); color: var(--text); border-radius: 6px; cursor: pointer; text-align: left; transition: all 0.2s;">
+            <div style="font-weight: 600; margin-bottom: 4px;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+              </svg>
+              暂存修改后更新
+            </div>
+            <div style="font-size: 11px; color: var(--text2); margin-left: 22px;">临时保存你的本地修改（不提交），更新后自动恢复。适用于临时调整不想提交的情况。</div>
+          </button>
+          <button class="choice-btn direct-choice" style="padding: 12px; border: 1px solid var(--warn); background: var(--bg3); color: var(--text); border-radius: 6px; cursor: pointer; text-align: left; transition: all 0.2s;">
+            <div style="font-weight: 600; margin-bottom: 4px;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                <path d="M5 12h14"/>
+                <path d="M13 5l7 7-7 7"/>
+              </svg>
+              直接更新
+            </div>
+            <div style="font-size: 11px; color: var(--text2); margin-left: 22px;">不对本地修改做任何处理，直接执行更新（git pull）。如存在冲突，更新可能失败。</div>
+          </button>
+        </div>
+        <div class="confirm-btns">
+          <button class="btn cancel-choice" style="flex: 1;">取消</button>
+        </div>
+      `;
+      
+      overlay.appendChild(dialog);
+      document.body.appendChild(overlay);
+      
+      // 按钮悬停效果
+      dialog.querySelectorAll('.choice-btn').forEach(btn => {
+        btn.addEventListener('mouseenter', () => {
+          btn.style.background = 'var(--bg4)';
+          btn.style.transform = 'translateY(-1px)';
+          btn.style.boxShadow = '0 4px 12px rgba(0,0,0,0.15)';
+        });
+        btn.addEventListener('mouseleave', () => {
+          btn.style.background = 'var(--bg3)';
+          btn.style.transform = 'translateY(0)';
+          btn.style.boxShadow = 'none';
+        });
+      });
+      
+      const cleanup = () => {
+        overlay.remove();
+      };
+      
+      dialog.querySelector('.commit-choice').addEventListener('click', () => {
+        cleanup();
+        resolve('commit');
+      });
+      
+      dialog.querySelector('.stash-choice').addEventListener('click', () => {
+        cleanup();
+        resolve('stash');
+      });
+
+      dialog.querySelector('.direct-choice').addEventListener('click', () => {
+        cleanup();
+        resolve('direct');
+      });
+      
+      dialog.querySelector('.cancel-choice').addEventListener('click', () => {
+        cleanup();
+        resolve('cancel');
+      });
+      
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) {
+          cleanup();
+          resolve('cancel');
+        }
+      });
+    });
+  }
+
+  async function commitAndPull() {
+    // 先显示提交信息输入框
+    const message = await showCommitMessageDialog('提交本地修改');
+    if (!message) {
+      toast('已取消', 'warn');
+      return;
+    }
+    
+    const btn = document.getElementById('pullBtn');
+    setButtonBusy(btn, true);
+    toast('提交并更新中...', 'warn');
+    
+    const res = await POST('/api/commit_and_pull', { message });
+    
+    setButtonBusy(btn, false);
+    
+    if (res && res.ok) {
+      toast('✓ 提交并更新完成', 'ok');
+      await refresh();
+      return;
+    }
+    
+    if (res && res.has_conflicts) {
+      const list = (res.conflict_files || []).slice(0, 12).join('\n');
+      const more = (res.conflict_files || []).length > 12 ? `\n... 等 ${(res.conflict_files || []).length} 个文件` : '';
+      await showConfirm({
+        title: '更新发生冲突',
+        message: `提交成功，但更新时检测到合并冲突：\n\n${list}${more}\n\n请手动解决冲突后再提交。`,
+        okText: '知道了',
+        cancelText: '关闭',
+        danger: true,
+      });
+      await refresh();
+      return;
+    }
+    
+    const msg = (res && (res.error || res.pull_error || res.commit_output || res.message)) ? (res.error || res.pull_error || res.commit_output || res.message) : '操作失败';
+    toast(msg, 'err');
+    await refresh();
+  }
+
+  async function stashAndPull() {
+    const btn = document.getElementById('pullBtn');
+    setButtonBusy(btn, true);
+    toast('暂存修改并更新中...', 'warn');
+    
+    const res = await POST('/api/stash_and_pull', {});
+    
+    setButtonBusy(btn, false);
+    
+    if (res && res.ok) {
+      const msg = res.stashed ? '✓ 暂存修改、更新并恢复修改完成' : '✓ 更新完成（无需暂存）';
+      toast(msg, 'ok');
+      await refresh();
+      return;
+    }
+    
+    if (res && res.pop_conflict) {
+      await showConfirm({
+        title: '恢复修改时发生冲突',
+        message: '更新成功，但恢复你暂存的修改时发生冲突，请手动解决冲突。\n\n冲突详情：\n' + (res.pop_error || '未知错误'),
+        okText: '知道了',
+        cancelText: '关闭',
+        danger: true,
+      });
+      await refresh();
+      return;
+    }
+    
+    if (res && res.has_conflicts) {
+      const list = (res.conflict_files || []).slice(0, 12).join('\n');
+      const more = (res.conflict_files || []).length > 12 ? `\n... 等 ${(res.conflict_files || []).length} 个文件` : '';
+      await showConfirm({
+        title: '更新发生冲突',
+        message: `更新时检测到合并冲突：\n\n${list}${more}\n\n请手动解决冲突后再提交。`,
+        okText: '知道了',
+        cancelText: '关闭',
+        danger: true,
+      });
+      await refresh();
+      return;
+    }
+    
+    const msg = (res && (res.error || res.pull_error || res.pop_error || res.message || res.pull_output)) ? (res.error || res.pull_error || res.pop_error || res.message || res.pull_output) : '操作失败';
+    toast(msg, 'err');
+    await refresh();
+  }
+
+  async function showCommitMessageDialog(title) {
+    return new Promise((resolve) => {
+      const overlay = document.createElement('div');
+      overlay.className = 'overlay show';
+      overlay.style.zIndex = '10000';
+      
+      const dialog = document.createElement('div');
+      dialog.className = 'confirm-dlg';
+      dialog.style.maxWidth = '480px';
+      dialog.style.position = 'relative';
+      dialog.style.zIndex = '10001';
+      dialog.innerHTML = `
+        <div class="confirm-title">${title || '提交信息'}</div>
+        <div class="confirm-msg" style="margin-bottom: 16px;">
+          <textarea id="commitMsgInput" placeholder="请输入提交信息..." style="width: 100%; min-height: 80px; padding: 10px; background: var(--bg3); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-family: inherit; font-size: 13px; resize: vertical;"></textarea>
+        </div>
+        <div class="confirm-btns">
+          <button class="btn" id="commitCancelBtn" style="flex: 1;">取消</button>
+          <button class="btn blue" id="commitOkBtn" style="flex: 1;">确认</button>
+        </div>
+      `;
+      
+      overlay.appendChild(dialog);
+      document.body.appendChild(overlay);
+      
+      const input = dialog.querySelector('#commitMsgInput');
+      const okBtn = dialog.querySelector('#commitOkBtn');
+      const cancelBtn = dialog.querySelector('#commitCancelBtn');
+      
+      input.focus();
+      
+      const cleanup = () => {
+        overlay.remove();
+      };
+      
+      okBtn.addEventListener('click', () => {
+        const msg = input.value.trim();
+        cleanup();
+        resolve(msg);
+      });
+      
+      cancelBtn.addEventListener('click', () => {
+        cleanup();
+        resolve(null);
+      });
+      
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+          const msg = input.value.trim();
+          cleanup();
+          resolve(msg);
+        }
+      });
+      
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) {
+          cleanup();
+          resolve(null);
+        }
+      });
+    });
   }
 
   async function refreshFilesOnly(forceDiffReload=false) {
@@ -4955,7 +5375,7 @@
                   `<button class="hint-btn" onclick="askRevertMultiLines('${fpEsc}',${hunkIndex},${startIdx},${endIdx},'${file.status}')">块撤回（${count}）</button>`
                   : '';
           const actions = (columnType === 'right') ? `<span class="dl-actions">${commitCb}${btn}</span>` : '';
-          return `<div class="dl revert-block-hint">${actions}<span class="ls"></span><span class="ln"></span><span class="lc"><span class="hint-tag">块撤回</span><span class="hint-text">已识别为连续变更块（${count}行），可一键撤回</span></span></div>`;
+          return `<div class="dl revert-block-hint">${actions}<span class="ls"></span><span class="ln"></span><span class="lc" contenteditable="false"><span class="hint-tag" contenteditable="false">块撤回</span><span class="hint-text" contenteditable="false">已识别为连续变更块（${count}行），可一键撤回</span></span></div>`;
         };
 
         while (i < Math.max(leftLines.length, rightLines.length)) {
@@ -5186,7 +5606,7 @@
       let firstShownNum = null;
       (hunks || []).forEach((hunk, hunkIndex) => {
         const hdrText = hunk.header || '';
-        rows += `<div class="hunk-hdr"><span class="hunk-info">${esc(hdrText)}</span></div>`;
+        rows += `<div class="hunk-hdr" contenteditable="false"><span class="hunk-info" contenteditable="false">${esc(hdrText)}</span></div>`;
 
         const renderHintRow = (count, startIdx, endIdx) => {
           let total = 0;
@@ -5210,7 +5630,7 @@
           const commitCb = (!readonly) ? `<input class="commit-cb" type="checkbox" ${checkedAttr} ${indetAttr} onclick="event.stopPropagation()" onchange="toggleCommitBlock('${fpEsc}',${hunkIndex},${startIdx},${endIdx},this.checked)">` : '';
           const btn = (!readonly) ? `<button class="hint-btn" onclick="askRevertMultiLines('${fpEsc}',${hunkIndex},${startIdx},${endIdx},'${file.status}')">块撤回（${count}）</button>` : '';
           const actions = `<span class="dl-actions">${commitCb}${btn}</span>`;
-          return `<div class="dl revert-block-hint">${actions}<span class="ls"></span><span class="ln"></span><span class="lc"><span class="hint-tag">块撤回</span><span class="hint-text">已识别为连续变更块（${count}行），可一键撤回</span></span></div>`;
+          return `<div class="dl revert-block-hint">${actions}<span class="ls"></span><span class="ln"></span><span class="lc" contenteditable="false"><span class="hint-tag" contenteditable="false">块撤回</span><span class="hint-text" contenteditable="false">已识别为连续变更块（${count}行），可一键撤回</span></span></div>`;
         };
 
         const lines = (hunk.lines || []);
@@ -5352,7 +5772,7 @@
       let firstShownNum = null;
       (hunks || []).forEach((hunk, hunkIndex) => {
         const hdrText = hunk.header || '';
-        rows += `<div class="hunk-hdr"><span class="hunk-info">${esc(hdrText)}</span></div>`;
+        rows += `<div class="hunk-hdr" contenteditable="false"><span class="hunk-info" contenteditable="false">${esc(hdrText)}</span></div>`;
 
         const renderHintRow = (count, startIdx, endIdx) => {
           let total = 0;
@@ -5964,9 +6384,9 @@
 
       if (hunkLines.length > 0) {
         renderedLines.push(`<div class="hunk">
-        <div class="hunk-hdr">
-          <span class="hunk-info">${esc(hunk.header)}</span>
-          ${!readonly ? `<div class="hunk-btns">${revertBtn(file,hunkIndex)}</div>` : ''}
+        <div class="hunk-hdr" contenteditable="false">
+          <span class="hunk-info" contenteditable="false">${esc(hunk.header)}</span>
+          ${!readonly ? `<div class="hunk-btns" contenteditable="false">${revertBtn(file,hunkIndex)}</div>` : ''}
         </div>${hunkLines.join('')}
       </div>`);
       }
@@ -6078,7 +6498,7 @@
           const endLineNum = group.lines[group.lines.length - 1].lineNum;
 
           const hintRow = (!readonly && !isSingleLine) ?
-                  `<div class="dl revert-block-hint" data-hunk="${hi}" data-line="${startLi}">
+                  `<div class="dl revert-block-hint" data-hunk="${hi}" data-line="${startLi}" contenteditable="false">
             <span class="ls" contenteditable="false"></span>
             <span class="ln" contenteditable="false"></span>
             <span class="ln" contenteditable="false"></span>
@@ -6114,10 +6534,10 @@
         }
       }).join('');
 
-      return `<div class="hunk" data-hunk-id="${hi}">
-      <div class="hunk-hdr">
-        <span class="hunk-info">${esc(hunk.header)}</span>
-        ${!readonly ? `<div class="hunk-btns">${revertBtn(file,hi)}</div>` : ''}
+      return `<div class="hunk" data-hunk-id="${hi}" contenteditable="false">
+      <div class="hunk-hdr" contenteditable="false">
+        <span class="hunk-info" contenteditable="false">${esc(hunk.header)}</span>
+        ${!readonly ? `<div class="hunk-btns" contenteditable="false">${revertBtn(file,hi)}</div>` : ''}
       </div>${rows}
     </div>`;
     }).join('') + '</div>';
@@ -6374,8 +6794,8 @@
       }).join('');
 
       return `<div class="hunk" data-hunk-id="${hi}">
-      <div class="hunk-hdr" style="background:var(--hunk-bg)">
-        <span class="hunk-info">${esc(hunk.header)}</span>
+      <div class="hunk-hdr" style="background:var(--hunk-bg)" contenteditable="false">
+        <span class="hunk-info" contenteditable="false">${esc(hunk.header)}</span>
       </div>${rows}
     </div>`;
     }).join('');

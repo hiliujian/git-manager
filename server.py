@@ -412,9 +412,48 @@ def _safe_repo_abspath(rel_path: str):
     """Resolve a repo-relative path to an absolute path, preventing path traversal."""
     if not REPO_PATH:
         return None
-    rel_path = (rel_path or "").replace("\\", "/").lstrip("/")
-    abs_path = os.path.abspath(os.path.join(REPO_PATH, rel_path.replace("/", os.sep)))
     repo_root = os.path.abspath(REPO_PATH)
+    rel_path = (rel_path or "")
+    try:
+        rel_path = rel_path.replace("\x00", "")
+    except Exception:
+        pass
+    rel_path = str(rel_path).strip()
+    rel_path = rel_path.replace("\\", "/")
+    if rel_path.lower().startswith("file://"):
+        rel_path = rel_path[7:]
+
+    try:
+        if os.path.isabs(rel_path) or re.match(r"^[A-Za-z]:[\\/]", rel_path or ""):
+            abs_in = os.path.abspath(rel_path)
+            try:
+                if os.path.commonpath([repo_root, abs_in]) != repo_root:
+                    return None
+            except Exception:
+                return None
+            rel_path = os.path.relpath(abs_in, repo_root).replace("\\", "/")
+    except Exception:
+        pass
+
+    rel_path = rel_path.lstrip("/")
+    rel_path = rel_path.replace("\r", "").replace("\n", "")
+    if not rel_path:
+        return None
+
+    bad_chars = '<>:"|?*'
+    parts = [p for p in rel_path.split("/") if p not in ("", ".")]
+    for p in parts:
+        if p in ("..",):
+            return None
+        if any((c in p) for c in bad_chars):
+            return None
+        if any((ord(c) < 32) for c in p):
+            return None
+        if p.endswith(" ") or p.endswith("."):
+            return None
+
+    rel_path = "/".join(parts)
+    abs_path = os.path.abspath(os.path.join(repo_root, rel_path.replace("/", os.sep)))
     try:
         if os.path.commonpath([repo_root, abs_path]) != repo_root:
             return None
@@ -2380,6 +2419,33 @@ class Handler(BaseHTTPRequestHandler):
                 output = (out or "")
                 error = (err or "")
 
+                # 检测本地修改会被覆盖的情况
+                local_changes_conflict = False
+                affected_files = []
+                
+                # Git会在error中输出类似:
+                # "error: Your local changes to the following files would be overwritten by merge:"
+                # 或者中文版本可能是其他提示
+                if code != 0 and ("would be overwritten" in error.lower() or 
+                                 "will be overwritten" in error.lower() or
+                                 "本地修改" in error or
+                                 "覆盖" in error):
+                    local_changes_conflict = True
+                    # 尝试提取受影响的文件列表
+                    lines = error.split('\n')
+                    in_file_list = False
+                    for line in lines:
+                        line = line.strip()
+                        if 'would be overwritten' in line.lower() or 'will be overwritten' in line.lower():
+                            in_file_list = True
+                            continue
+                        if in_file_list:
+                            if line.startswith('Please') or line.startswith('Aborting') or not line:
+                                break
+                            # 去除可能的制表符或空格
+                            if line and not line.startswith('error:') and not line.startswith('hint:'):
+                                affected_files.append(line.strip())
+                
                 conflict_files, _ = get_unmerged_files()
                 has_conflicts = bool(conflict_files)
 
@@ -2390,6 +2456,105 @@ class Handler(BaseHTTPRequestHandler):
                     "error": error.strip(),
                     "has_conflicts": has_conflicts,
                     "conflict_files": conflict_files,
+                    "local_changes_conflict": local_changes_conflict,
+                    "affected_files": affected_files,
+                })
+
+            elif p == "/api/stash_and_pull":
+                logger.info("处理 /api/stash_and_pull 请求 (暂存修改并更新)")
+                if not REPO_PATH:
+                    self.send_json({"error":"未打开仓库"}, 400)
+                    return
+
+                # 1. git stash
+                stash_out, stash_err, stash_code = run_git(["stash", "push", "-m", "Auto stash before pull"], timeout=60)
+                if stash_code != 0:
+                    logger.error(f"暂存失败: {stash_err}")
+                    self.send_json({"error": f"暂存失败: {stash_err}"}, 400)
+                    return
+                
+                # 检查是否真的有内容被暂存（如果工作区干净，stash不会创建新条目）
+                stashed = "No local changes to save" not in (stash_out or "")
+                
+                # 2. git pull
+                pull_out, pull_err, pull_code = run_git(["pull", "--no-edit"], timeout=300)
+                
+                # 3. git stash pop (只有在实际暂存了内容时才恢复)
+                pop_conflict = False
+                pop_err = ""
+                if stashed:
+                    pop_out, pop_err_raw, pop_code = run_git(["stash", "pop"], timeout=60)
+                    pop_err = pop_err_raw or ""
+                    # 检测stash pop是否产生冲突
+                    if pop_code != 0 or "CONFLICT" in (pop_out or "") or "CONFLICT" in pop_err:
+                        pop_conflict = True
+                
+                # 检查合并冲突
+                conflict_files, _ = get_unmerged_files()
+                has_conflicts = bool(conflict_files) or pop_conflict
+                
+                ok = (pull_code == 0) and (not has_conflicts)
+                
+                response = {
+                    "ok": ok,
+                    "stashed": stashed,
+                    "pull_output": (pull_out or "").strip(),
+                    "pull_error": (pull_err or "").strip(),
+                    "has_conflicts": has_conflicts,
+                    "conflict_files": conflict_files,
+                }
+                
+                if pop_conflict:
+                    response["pop_conflict"] = True
+                    response["pop_error"] = pop_err.strip()
+                    response["message"] = "更新成功，但恢复暂存的修改时发生冲突，请手动解决冲突"
+                elif ok:
+                    response["message"] = "成功暂存修改、更新并恢复修改"
+                
+                self.send_json(response)
+
+            elif p == "/api/commit_and_pull":
+                logger.info("处理 /api/commit_and_pull 请求 (提交并更新)")
+                if not REPO_PATH:
+                    self.send_json({"error":"未打开仓库"}, 400)
+                    return
+
+                commit_msg = (data.get("message") or "").strip()
+                if not commit_msg:
+                    self.send_json({"error": "提交信息不能为空"}, 400)
+                    return
+
+                # 1. git add -A (暂存所有修改)
+                add_out, add_err, add_code = run_git(["add", "-A"], timeout=60)
+                if add_code != 0:
+                    logger.error(f"暂存文件失败: {add_err}")
+                    self.send_json({"error": f"暂存文件失败: {add_err}"}, 400)
+                    return
+
+                # 2. git commit
+                commit_out, commit_err, commit_code = run_git(["commit", "-m", commit_msg], timeout=60)
+                if commit_code != 0:
+                    logger.error(f"提交失败: {commit_err}")
+                    self.send_json({"error": f"提交失败: {commit_err}"}, 400)
+                    return
+
+                # 3. git pull
+                pull_out, pull_err, pull_code = run_git(["pull", "--no-edit"], timeout=300)
+                
+                # 检查合并冲突
+                conflict_files, _ = get_unmerged_files()
+                has_conflicts = bool(conflict_files)
+                
+                ok = (pull_code == 0) and (not has_conflicts)
+                
+                self.send_json({
+                    "ok": ok,
+                    "commit_output": (commit_out or "").strip(),
+                    "pull_output": (pull_out or "").strip(),
+                    "pull_error": (pull_err or "").strip(),
+                    "has_conflicts": has_conflicts,
+                    "conflict_files": conflict_files,
+                    "message": "成功提交并更新" if ok else "提交成功但更新时发生冲突"
                 })
 
             else:
