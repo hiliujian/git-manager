@@ -1673,6 +1673,14 @@
       document.addEventListener('keydown', (e) => {
         try {
           if (!e) return;
+
+          try {
+            const t0 = e.target;
+            const tn0 = t0 && t0.tagName ? String(t0.tagName).toUpperCase() : '';
+            if (tn0 === 'INPUT' || tn0 === 'TEXTAREA') return;
+            if (t0 && t0.getAttribute && String(t0.getAttribute('contenteditable') || '') === 'false') return;
+          } catch (e2) {}
+
           const host = document.getElementById('diffView');
           if (!host) return;
           const ae = document.activeElement;
@@ -2166,6 +2174,13 @@
         try {
           if (!__isCeHost()) return;
           if (!e) return;
+
+          const tgt = e.target;
+          try {
+            const tn = tgt && tgt.tagName ? String(tgt.tagName).toUpperCase() : '';
+            if (tn === 'INPUT' || tn === 'TEXTAREA') return;
+            if (tgt && tgt.getAttribute && String(tgt.getAttribute('contenteditable') || '') === 'false') return;
+          } catch (e2) {}
 
           const k = e.key;
           const isDestructive = (k === 'Backspace' || k === 'Delete');
@@ -2689,6 +2704,11 @@
         if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return false;
         const r = sel.getRangeAt(0);
 
+        const host = document.getElementById('diffView');
+        try {
+          if (host && typeof __gmPushEditorSnapshot === 'function') __gmPushEditorSnapshot(host);
+        } catch (e2) {}
+
         const allLines = Array.from(document.querySelectorAll('.editable-line'));
         if (!allLines.length) return false;
         const covered = [];
@@ -2734,6 +2754,9 @@
         first.textContent = newText;
         try { first.dataset.dirty = '1'; } catch (e) {}
         first.dispatchEvent(new Event('input', { bubbles: true }));
+
+        window.__dirtyEdits = true;
+        scheduleAutoSave();
 
         for (let i = to; i > from; i--) {
           const el = lines[i];
@@ -2827,6 +2850,14 @@
     const __handleEditableLineSelectionKeydown = (e) => {
       try {
         if (!e || e.__gmSelHandled) return false;
+
+        try {
+          const t0 = e.target;
+          const tn0 = t0 && t0.tagName ? String(t0.tagName).toUpperCase() : '';
+          if (tn0 === 'INPUT' || tn0 === 'TEXTAREA') return false;
+          if (t0 && t0.getAttribute && String(t0.getAttribute('contenteditable') || '') === 'false') return false;
+        } catch (e2) {}
+
         const sel = window.getSelection ? window.getSelection() : null;
         if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return false;
         // When using contenteditable host, do not prevent default deletion.
@@ -2856,13 +2887,20 @@
 
     // Capture on both document and window to avoid focus/target edge cases.
     const __editableLineKeydownListener = (e) => {
+      let t = e && e.target;
+      if (!t) return;
+
+      try {
+        const tn = t && t.tagName ? String(t.tagName).toUpperCase() : '';
+        if (tn === 'INPUT' || tn === 'TEXTAREA') return;
+        if (t && t.getAttribute && String(t.getAttribute('contenteditable') || '') === 'false') return;
+      } catch (e2) {}
+
       if (__handleEditableLineSelectionKeydown(e)) return;
 
       // When using contenteditable host, let browser handle editing.
       if (__isCeHost()) return;
 
-      let t = e.target;
-      if (!t) return;
       if (!t.classList || !t.classList.contains('editable-line')) {
         try {
           const sel = window.getSelection ? window.getSelection() : null;
@@ -3545,15 +3583,6 @@
         clearDiff();
       }
     }
-  }
-
-  // 发送心跳保持连接
-  function startWebSocketHeartbeat() {
-    setInterval(() => {
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'ping' }));
-      }
-    }, 30000); // 每30秒发送一次心跳
   }
 
   // ── State ────────────────────────────────────────────────────────────────────
@@ -4941,17 +4970,6 @@
     });
   }
 
-  function setAllCommitHunks(filepath, hunksLen, checked) {
-    const set = getSelectedCommitHunksSet(filepath);
-    set.clear();
-    if (checked && hunksLen > 0) {
-      for (let i = 0; i < hunksLen; i++) set.add(i);
-    }
-    commitHunksInitByPath.set(filepath, true);
-    commitHunksLenByPath.set(filepath, hunksLen || 0);
-    commitHunksDesiredByPath.set(filepath, !!checked);
-  }
-
   function syncCheckedSetForFile(filepath) {
     const idx = files.findIndex(f => f && f.path === filepath);
     if (idx < 0) return;
@@ -4966,45 +4984,6 @@
     syncCheckedSetForFile(filepath);
     updateStats();
     renderFileList();
-  }
-
-  function toggleCommitHunk(filepath, hunkIdx, checked) {
-    const set = getSelectedCommitHunksSet(filepath);
-    if (checked) set.add(hunkIdx); else set.delete(hunkIdx);
-
-    commitHunksInitByPath.set(filepath, true);
-    syncFileCheckFromHunks(filepath);
-
-    if (curFile !== null && files[curFile] && files[curFile].path === filepath) {
-      const f = files[curFile];
-      const changeLocations = [];
-      (curHunks || []).forEach((hunk, hunkIndex) => {
-        let lastNewLineNumber = null;
-        (hunk.lines || []).forEach((line, lineIndex) => {
-          if (line && line.new !== undefined && line.new !== null && Number.isFinite(Number(line.new))) {
-            lastNewLineNumber = Number(line.new);
-          }
-          if (line.type === 'added' || line.type === 'removed' || line.type === 'modified') {
-            const displayLn = (line.type === 'removed')
-                    ? ((line.old !== null && line.old !== undefined) ? line.old : (((line.new !== null && line.new !== undefined) ? line.new : lastNewLineNumber)))
-                    : (((line.new !== null && line.new !== undefined) ? line.new : line.old));
-            const anchorLn = (line.type === 'removed')
-                    ? ((lastNewLineNumber !== null && lastNewLineNumber !== undefined) ? lastNewLineNumber : (((line.new !== null && line.new !== undefined) ? line.new : line.old)))
-                    : displayLn;
-            changeLocations.push({
-              hunkIndex,
-              lineIndex,
-              lineNumber: anchorLn,
-              anchorLineNumber: anchorLn,
-              displayLineNumber: displayLn,
-              type: line.type,
-              text: line.text
-            });
-          }
-        });
-      });
-      renderDiffWithFullContext(f, curHunks, false, changeLocations);
-    }
   }
 
   function toggleCommitLine(filepath, hunkIdx, lineIdx, checked) {
@@ -8010,19 +7989,6 @@
       const isHead = (curCommit && typeof curCommit.is_head !== 'undefined') ? !!curCommit.is_head : null;
       updateCommitActionButtons(null, isHead);
     }
-  }
-
-  async function openCommitAfterLocalCommit(commitHash) {
-    const ok = await showConfirm({
-      title: '提交已完成',
-      message: `提交哈希：\n\n${commitHash}\n\n是否跳转到历史中查看该提交，并可手动 Push？`,
-      okText: '跳转到历史',
-      cancelText: '稍后',
-    });
-    if (!ok) return;
-    activateRightTab('log');
-    await refresh();
-    await openCommit(commitHash);
   }
 
   async function pushFromHistory() {
