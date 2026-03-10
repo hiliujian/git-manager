@@ -235,6 +235,91 @@
       background: rgba(233, 236, 239, 0.95);
       border: 1px solid rgba(25, 113, 194, 0.5);
     }
+    
+    /* Light theme drag-drop overrides */
+    [data-theme="light"] .drag-drop-overlay {
+      background: rgba(25, 113, 194, 0.08);
+      border-color: #1971c2;
+    }
+    [data-theme="light"] .drag-drop-overlay.active {
+      background: rgba(25, 113, 194, 0.12);
+    }
+    [data-theme="light"] .drag-drop-hint {
+      background: #ffffff;
+      border-color: #1971c2;
+      box-shadow: 0 30px 80px rgba(25, 113, 194, 0.2),
+                  0 0 0 1px rgba(25, 113, 194, 0.08) inset;
+    }
+    [data-theme="light"] .drag-drop-hint::before {
+      background: linear-gradient(45deg,
+        transparent 30%,
+        rgba(25, 113, 194, 0.04) 50%,
+        transparent 70%);
+    }
+    [data-theme="light"] .drag-drop-hint svg {
+      stroke: #1971c2;
+      filter: drop-shadow(0 4px 12px rgba(25, 113, 194, 0.2));
+    }
+    [data-theme="light"] .drag-drop-hint p {
+      color: #1971c2;
+      text-shadow: 0 2px 8px rgba(25, 113, 194, 0.15);
+    }
+    [data-theme="light"] .drag-toast {
+      background: #ffffff;
+      border-color: #1971c2;
+      color: #1971c2;
+      box-shadow: 0 12px 40px rgba(25, 113, 194, 0.25),
+                  0 0 0 1px rgba(25, 113, 194, 0.08) inset;
+    }
+    [data-theme="light"] .loading-toast {
+      background: #ffffff;
+      border-color: #ced4da;
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.15);
+    }
+    [data-theme="light"] .spin-small {
+      border-color: #e9ecef;
+      border-top-color: #1971c2;
+    }
+    [data-theme="light"] .diff-view.drag-active {
+      background: linear-gradient(135deg,
+        rgba(25, 113, 194, 0.02) 0%,
+        rgba(12, 166, 120, 0.02) 100%);
+    }
+    
+    /* Light theme recent files dropdown */
+    [data-theme="light"] .recent-files-dropdown {
+      background: #ffffff;
+      border-color: #ced4da;
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.15);
+    }
+    [data-theme="light"] .recent-file-item:hover {
+      background: #f8f9fa;
+      border-left-color: #1971c2;
+    }
+    [data-theme="light"] .recent-file-item.active {
+      background: #e7f5ff;
+      border-left-color: #0ca678;
+    }
+    [data-theme="light"] .recent-file-status.M {
+      background: #d0ebff;
+      color: #1971c2;
+    }
+    [data-theme="light"] .recent-file-status.A {
+      background: #d3f9d8;
+      color: #0ca678;
+    }
+    [data-theme="light"] .recent-file-status.D {
+      background: #ffe3e3;
+      color: #c92a2a;
+    }
+    [data-theme="light"] .recent-file-status.R {
+      background: #e5dbff;
+      color: #7950f2;
+    }
+    [data-theme="light"] .recent-file-status.U {
+      background: #fff3bf;
+      color: #e67700;
+    }
 
     *{margin:0;padding:0;box-sizing:border-box;}
     html,body{height:100%;overflow:hidden;background:var(--bg);}
@@ -429,9 +514,129 @@
     .dtab:hover{color:var(--text);background:var(--bg3);}
     .dtab.active{color:var(--accent);border-bottom-color:var(--accent);background:var(--bg);}
     .diff-filelabel{flex:1;padding:0 12px;font-family:'JetBrains Mono',monospace;font-size:11px;
-      color:var(--text2);display:flex;align-items:center;gap:8px;overflow:hidden;min-width:0;}
-    .diff-filelabel .fn{color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+      color:var(--text2);display:flex;align-items:center;gap:8px;overflow:visible;min-width:0;position:relative;}
+    .diff-filelabel .fn{color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;
+      padding:2px 6px;border-radius:4px;transition:background .15s;}
+    .diff-filelabel .fn:hover{background:var(--bg4);}
     .diff-filelabel .line-count{color:var(--text3);font-size:10px;white-space:nowrap;}
+    
+    /* 最近文件下拉菜单 */
+    .recent-files-dropdown{
+      position:absolute;
+      top:100%;
+      left:12px;
+      min-width:320px;
+      max-width:500px;
+      max-height:400px;
+      background:var(--bg2);
+      border:1px solid var(--border);
+      border-radius:8px;
+      box-shadow:0 12px 40px rgba(0,0,0,.4);
+      z-index:1000;
+      margin-top:4px;
+      overflow:hidden;
+      display:none;
+    }
+    .recent-files-dropdown.show{display:block;}
+    .recent-files-header{
+      padding:8px 12px;
+      border-bottom:1px solid var(--border);
+      font-size:10px;
+      color:var(--text3);
+      text-transform:uppercase;
+      letter-spacing:0.5px;
+      font-weight:600;
+    }
+    .recent-files-list{
+      max-height:350px;
+      overflow-y:auto;
+    }
+    .recent-file-item{
+      display:flex;
+      align-items:center;
+      gap:8px;
+      padding:8px 12px;
+      cursor:pointer;
+      border-left:2px solid transparent;
+      transition:all .15s;
+    }
+    .recent-file-item:hover{
+      background:var(--bg3);
+      border-left-color:var(--accent);
+    }
+    .recent-file-item.active{
+      background:var(--bg4);
+      border-left-color:var(--accent2);
+    }
+    .recent-file-remove{
+      width:18px;
+      height:18px;
+      border-radius:6px;
+      border:1px solid transparent;
+      background:transparent;
+      color:var(--text3);
+      cursor:pointer;
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      flex-shrink:0;
+      transition:all .12s;
+      font-family:'JetBrains Mono',monospace;
+      font-size:12px;
+      line-height:1;
+    }
+    .recent-file-remove:hover{
+      background:rgba(242,114,114,.15);
+      border-color:rgba(242,114,114,.35);
+      color:var(--danger);
+    }
+    .recent-file-status{
+      width:16px;
+      height:16px;
+      border-radius:3px;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      font-size:9px;
+      font-weight:700;
+      flex-shrink:0;
+    }
+    .recent-file-status.M{background:#163060;color:#6eb4f7;}
+    .recent-file-status.A{background:#0d2d1a;color:#5dd6a8;}
+    .recent-file-status.D{background:#2d0d0d;color:#f27272;}
+    .recent-file-status.R{background:#251960;color:#b48ef7;}
+    .recent-file-status.U{background:#3d2d0d;color:#f0b429;}
+    .recent-file-info{
+      flex:1;
+      min-width:0;
+      display:flex;
+      flex-direction:column;
+      gap:2px;
+    }
+    .recent-file-name{
+      font-family:'JetBrains Mono',monospace;
+      font-size:11px;
+      color:var(--text);
+      overflow:hidden;
+      text-overflow:ellipsis;
+      white-space:nowrap;
+    }
+    .recent-file-stats{
+      display:flex;
+      gap:8px;
+      font-size:10px;
+      font-family:'JetBrains Mono',monospace;
+    }
+    .recent-file-stats .lines{color:var(--text3);}
+    .recent-file-stats .added{color:var(--accent2);}
+    .recent-file-stats .removed{color:var(--danger);}
+    .recent-file-stats .modified{color:var(--accent);}
+    .recent-files-empty{
+      padding:20px;
+      text-align:center;
+      color:var(--text3);
+      font-size:11px;
+    }
     .statsbar{display:flex;align-items:center;gap:12px;padding:3px 12px;
       background:var(--bg3);border-bottom:1px solid var(--border);font-size:11px;flex-shrink:0;}
     .stat{display:flex;align-items:center;gap:4px;color:var(--text2);}
@@ -464,13 +669,215 @@
     }
     .autosave-switch input:checked + .autosave-slider:before{transform:translateX(16px) translateY(-50%);background: var(--accent);border-color:#25508a;box-shadow:0 0 0 2px rgba(110,180,247,.16), 0 2px 10px rgba(0,0,0,.35);}
     .autosave-switch input:focus-visible + .autosave-slider{outline:2px solid rgba(110,180,247,.22);outline-offset:2px;}
-    .diff-view{flex:1;overflow:auto;background:var(--bg2);padding:0 8px 10px;}
+    .diff-view{flex:1;overflow:auto;background:var(--bg2);padding:0 8px 10px;position:relative;}
     .diff-view[contenteditable="true"]:focus{outline:none;}
     .diff-view[contenteditable="true"]{caret-color:transparent;}
     .diff-view[contenteditable="true"] .editable-line{caret-color:auto;}
     .diff-view[contenteditable="true"] input,
     .diff-view[contenteditable="true"] textarea{caret-color:auto;}
     .diff-view[contenteditable="true"] a{cursor:pointer;}
+    
+    /* 拖拽导入提示 */
+    .drag-drop-overlay{
+      position:absolute;top:0;left:0;right:0;bottom:0;
+      background:rgba(110,180,247,.12);
+      border:3px dashed var(--accent);
+      border-radius:12px;
+      display:none;align-items:center;justify-content:center;
+      z-index:1000;pointer-events:none;
+      backdrop-filter:blur(6px);
+      opacity:0;
+      transition:opacity .2s ease;
+    }
+    .drag-drop-overlay.active{
+      display:flex;
+      opacity:1;
+      animation:overlayPulse 2s ease-in-out infinite;
+    }
+    
+    @keyframes overlayPulse{
+      0%, 100%{
+        background:rgba(110,180,247,.12);
+        border-color:var(--accent);
+      }
+      50%{
+        background:rgba(110,180,247,.18);
+        border-color:var(--accent2);
+      }
+    }
+    
+    .drag-drop-hint{
+      text-align:center;padding:50px 60px;
+      border-radius:16px;
+      background:var(--bg2);
+      border:2px solid var(--accent);
+      box-shadow:0 30px 80px rgba(110,180,247,.3),
+                 0 0 0 1px rgba(110,180,247,.1) inset;
+      animation:hintBounce .6s ease-out;
+      position:relative;
+      overflow:hidden;
+    }
+    
+    @keyframes hintBounce{
+      0%{transform:scale(0.8);opacity:0;}
+      50%{transform:scale(1.05);}
+      100%{transform:scale(1);opacity:1;}
+    }
+    
+    .drag-drop-hint::before{
+      content:'';
+      position:absolute;
+      top:-50%;left:-50%;
+      width:200%;height:200%;
+      background:linear-gradient(45deg, 
+        transparent 30%, 
+        rgba(110,180,247,.05) 50%, 
+        transparent 70%);
+      animation:shimmer 3s linear infinite;
+    }
+    
+    @keyframes shimmer{
+      0%{transform:translateX(-100%) translateY(-100%) rotate(45deg);}
+      100%{transform:translateX(100%) translateY(100%) rotate(45deg);}
+    }
+    
+    .drag-drop-hint-content{
+      position:relative;
+      z-index:1;
+    }
+    
+    .drag-drop-hint svg{
+      width:72px;height:72px;
+      stroke:var(--accent);
+      margin-bottom:20px;
+      opacity:1;
+      animation:iconFloat 2s ease-in-out infinite;
+      filter:drop-shadow(0 4px 12px rgba(110,180,247,.3));
+    }
+    
+    @keyframes iconFloat{
+      0%, 100%{transform:translateY(0);}
+      50%{transform:translateY(-8px);}
+    }
+    
+    .drag-drop-hint p{
+      font-size:18px;font-weight:700;
+      color:var(--accent);
+      margin-bottom:10px;
+      letter-spacing:0.5px;
+      text-shadow:0 2px 8px rgba(110,180,247,.2);
+    }
+    .drag-drop-hint small{
+      font-size:12px;
+      color:var(--text2);
+      display:block;
+      font-weight:500;
+      opacity:.9;
+    }
+    
+    /* 拖拽状态下的diffView高亮 */
+    .diff-view.drag-active{
+      background:linear-gradient(135deg, 
+        rgba(110,180,247,.03) 0%, 
+        rgba(93,214,168,.03) 100%);
+    }
+    
+    /* 普通编辑器模式样式 */
+    .plain-editor-container{
+      padding:8px 0;
+    }
+    .plain-editor-wrap{
+      display:flex;
+      width:100%;
+      min-height:100%;
+      border:1px solid var(--border);
+      border-radius:8px;
+      background:var(--bg2);
+      overflow:hidden;
+    }
+    .plain-editor-gutter{
+      width:56px;
+      min-width:56px;
+      padding:8px 0;
+      background:var(--bg3);
+      border-right:1px solid var(--border);
+      color:var(--text3);
+      font-family:'JetBrains Mono',monospace;
+      font-size:12px;
+      line-height:18px;
+      text-align:right;
+      user-select:none;
+      overflow:hidden;
+    }
+    .plain-editor-gutter .n{
+      padding:0 12px 0 0;
+      height:18px;
+      line-height:18px;
+      white-space:nowrap;
+    }
+    .plain-editor-textarea{
+      flex:1;
+      min-width:0;
+      padding:8px 10px;
+      border:0;
+      outline:none;
+      resize:none;
+      background:transparent;
+      color:var(--text);
+      font-family:'JetBrains Mono',monospace;
+      font-size:12px;
+      line-height:18px;
+      white-space:pre;
+      overflow:auto;
+      tab-size:2;
+    }
+    .plain-editor-textarea::selection{background:rgba(110,180,247,.25);}
+    .plain-editor-line{
+      display:flex;align-items:flex-start;
+      font-family:'JetBrains Mono',monospace;
+      font-size:12px;line-height:18px;
+      padding:0 4px;
+      min-height:18px;
+    }
+    .plain-editor-line:hover{
+      background:var(--bg3);
+    }
+    .plain-editor-line .ln{
+      width:50px;min-width:50px;
+      text-align:right;padding-right:12px;
+      color:var(--text3);font-size:11px;
+      user-select:none;
+    }
+    .plain-editor-line .lc{
+      flex:1;min-width:0;
+      white-space:pre;
+      overflow-x:visible;
+    }
+    
+    /* 编辑器关闭按钮 */
+    .editor-close-btn{
+      width:22px;height:22px;
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      border-radius:4px;
+      border:1px solid transparent;
+      background:transparent;
+      color:var(--text3);
+      cursor:pointer;
+      transition:all .15s;
+      margin-left:8px;
+      flex-shrink:0;
+    }
+    .editor-close-btn:hover{
+      background:var(--danger);
+      border-color:var(--danger);
+      color:#fff;
+      transform:rotate(90deg);
+    }
+    .editor-close-btn svg{
+      flex-shrink:0;
+    }
 
     .editable-line{
       background: transparent;
@@ -769,7 +1176,84 @@
     .toast.ok{border-left:3px solid var(--accent2);color:var(--accent2);}
     .toast.err{border-left:3px solid var(--danger);color:var(--danger);}
     .toast.info{border-left:3px solid var(--accent);color:var(--accent);}
+    .toast.warn{border-left:3px solid var(--warn);color:var(--warn);}
     @keyframes tup{from{transform:translateY(8px);opacity:0;}to{transform:translateY(0);opacity:1;}}
+    
+    /* 拖拽提示Toast */
+    .drag-toast{
+      position:fixed;top:70px;left:50%;
+      transform:translateX(-50%) translateY(-20px);
+      z-index:9998;
+      background:var(--bg2);
+      border:2px solid var(--accent);
+      padding:12px 20px;
+      border-radius:30px;
+      box-shadow:0 12px 40px rgba(110,180,247,.3),
+                 0 0 0 1px rgba(110,180,247,.1) inset;
+      font-size:13px;
+      font-weight:600;
+      color:var(--accent);
+      display:flex;
+      align-items:center;
+      gap:10px;
+      opacity:0;
+      transition:all .3s cubic-bezier(0.34, 1.56, 0.64, 1);
+      pointer-events:none;
+    }
+    
+    .drag-toast.show{
+      opacity:1;
+      transform:translateX(-50%) translateY(0);
+    }
+    
+    .drag-toast svg{
+      flex-shrink:0;
+      animation:rotate360 2s linear infinite;
+    }
+    
+    @keyframes rotate360{
+      from{transform:rotate(0deg);}
+      to{transform:rotate(360deg);}
+    }
+    
+    /* 加载Toast */
+    .loading-toast{
+      position:fixed;top:70px;left:50%;
+      transform:translateX(-50%) translateY(-20px);
+      z-index:9998;
+      background:var(--bg2);
+      border:1px solid var(--border2);
+      padding:12px 20px;
+      border-radius:30px;
+      box-shadow:0 12px 40px rgba(0,0,0,.3);
+      font-size:13px;
+      font-weight:500;
+      color:var(--text);
+      display:flex;
+      align-items:center;
+      gap:12px;
+      opacity:0;
+      transition:all .3s cubic-bezier(0.34, 1.56, 0.64, 1);
+      pointer-events:none;
+    }
+    
+    .loading-toast.show{
+      opacity:1;
+      transform:translateX(-50%) translateY(0);
+    }
+    
+    .spin-small{
+      width:16px;height:16px;
+      border:2px solid var(--bg3);
+      border-top-color:var(--accent);
+      border-radius:50%;
+      animation:spin-anim .8s linear infinite;
+      flex-shrink:0;
+    }
+    
+    @keyframes spin-anim{
+      to{transform:rotate(360deg);}
+    }
 
     /* ── SPINNER ── */
     .spin{display:inline-block;width:12px;height:12px;border:2px solid var(--border);
@@ -917,6 +1401,19 @@
       </div>
     </div>
     <div class="diff-view" id="diffView">
+      <div class="drag-drop-overlay" id="dragDropOverlay">
+        <div class="drag-drop-hint">
+          <div class="drag-drop-hint-content">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+              <polyline points="7 10 12 15 17 10"/>
+              <line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+            <p>拖放文件到这里</p>
+            <small>将自动以编辑器模式打开文件</small>
+          </div>
+        </div>
+      </div>
       <div class="empty-state">
         <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
           <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
@@ -1036,11 +1533,321 @@
 </div>
 
 <script>
+  // ══════════════════════════════════════════════════════════════════════════════
+  // 配置
+  // ══════════════════════════════════════════════════════════════════════════════
+  const DEBUG_MODE = false; // 设置为 true 启用详细日志
+  
   const BASE = 'http://localhost:7842';
   let WS_URL = 'ws://localhost:7843';
 
   function __nn(v, d){
     return (v !== null && v !== undefined) ? v : d;
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════════
+  // 最近文件历史管理
+  // ══════════════════════════════════════════════════════════════════════════════
+  let recentFiles = []; // 最近打开的文件列表 {index, path, status, ...}
+  const MAX_RECENT_FILES = 10; // 最多保留10个最近文件
+
+  const lastLineByPath = new Map();
+
+  function __gmLineFromTextareaSelection(ta) {
+    try {
+      if (!ta) return 1;
+      const v = String(ta.value || '');
+      const pos = Math.max(0, Math.min(Number(ta.selectionStart || 0), v.length));
+      return 1 + v.slice(0, pos).split('\n').length - 1;
+    } catch (e) {
+      return 1;
+    }
+  }
+
+  function __gmGotoLineInTextarea(ta, line) {
+    try {
+      if (!ta) return;
+      const v = String(ta.value || '');
+      const ln = Math.max(1, Number(line) || 1);
+      let idx = 0;
+      let cur = 1;
+      while (cur < ln) {
+        const next = v.indexOf('\n', idx);
+        if (next < 0) break;
+        idx = next + 1;
+        cur++;
+      }
+      ta.selectionStart = ta.selectionEnd = idx;
+      const lh = parseFloat(getComputedStyle(ta).lineHeight || '18') || 18;
+      ta.scrollTop = Math.max(0, (ln - 1) * lh - ta.clientHeight * 0.35);
+    } catch (e) {}
+  }
+
+  function __gmTryRecordLineFromEvent(e) {
+    try {
+      const t = e && e.target;
+      if (!t) return;
+
+      if (window.__plainEditorFilename) {
+        const ta = document.getElementById('plainEditorTextarea');
+        if (ta && (t === ta || (ta.contains && ta.contains(t)))) {
+          const ln = __gmLineFromTextareaSelection(ta);
+          if (Number.isFinite(Number(ln)) && Number(ln) > 0) lastLineByPath.set(String(window.__plainEditorFilename), Number(ln));
+          return;
+        }
+      }
+
+      if (curFile !== null && files && files[curFile] && files[curFile].path) {
+        const ln = __gmDetectLineFromDiffEventTarget(t);
+        if (ln !== null && ln !== undefined && Number.isFinite(Number(ln)) && Number(ln) > 0) {
+          lastLineByPath.set(String(files[curFile].path), Number(ln));
+          return;
+        }
+      }
+    } catch (e2) {}
+  }
+
+  function __gmInitLastLineTrackingOnce() {
+    try {
+      if (window.__gmLastLineTrackingInited) return;
+      window.__gmLastLineTrackingInited = true;
+      document.addEventListener('mousedown', __gmTryRecordLineFromEvent, true);
+      document.addEventListener('keyup', __gmTryRecordLineFromEvent, true);
+    } catch (e) {}
+  }
+
+  function __gmDetectLineFromDiffEventTarget(tgt) {
+    try {
+      const host = document.getElementById('diffView');
+      if (!host || !tgt || !host.contains(tgt)) return null;
+      const dl = tgt.closest ? tgt.closest('.dl') : null;
+      if (!dl) return null;
+      const lns = dl.querySelectorAll ? dl.querySelectorAll('.ln') : [];
+      for (let i = 0; i < lns.length; i++) {
+        const s = String(lns[i].textContent || '').trim();
+        const n = parseInt(s, 10);
+        if (Number.isFinite(n) && n > 0) return n;
+      }
+      return null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function __gmCaptureLastLineForPath(path) {
+    try {
+      const p = String(path || '');
+      if (!p) return;
+      const view = document.getElementById('diffView');
+      if (!view) return;
+
+      if (window.__plainEditorFilename && String(window.__plainEditorFilename) === p) {
+        const ta = document.getElementById('plainEditorTextarea');
+        const ln = __gmLineFromTextareaSelection(ta);
+        if (Number.isFinite(Number(ln)) && Number(ln) > 0) lastLineByPath.set(p, Number(ln));
+        return;
+      }
+
+      if (curFile !== null && files && files[curFile] && String(files[curFile].path || '') === p) {
+        const sel = window.getSelection ? window.getSelection() : null;
+        const node = sel ? (sel.focusNode || sel.anchorNode) : null;
+        const el = node ? ((node.nodeType === Node.ELEMENT_NODE) ? node : (node.parentElement || null)) : null;
+        const ln = __gmDetectLineFromDiffEventTarget(el);
+        if (ln !== null && ln !== undefined && Number.isFinite(Number(ln)) && Number(ln) > 0) {
+          lastLineByPath.set(p, Number(ln));
+        }
+      }
+    } catch (e) {}
+  }
+
+  function __gmRestoreLastLineForPath(path) {
+    try {
+      const p = String(path || '');
+      if (!p) return;
+      const ln = lastLineByPath.get(p);
+      if (!ln || !Number.isFinite(Number(ln))) return;
+
+      if (window.__plainEditorFilename && String(window.__plainEditorFilename) === p) {
+        const ta = document.getElementById('plainEditorTextarea');
+        if (ta) {
+          try { ta.focus({ preventScroll: true }); } catch (e) { try { ta.focus(); } catch (e2) {} }
+          __gmGotoLineInTextarea(ta, Number(ln));
+          try {
+            const gutter = document.getElementById('plainEditorGutter');
+            if (gutter) gutter.scrollTop = ta.scrollTop;
+          } catch (e3) {}
+        }
+        return;
+      }
+
+      if (curFile !== null && files && files[curFile] && String(files[curFile].path || '') === p) {
+        setTimeout(() => {
+          try { scrollToLine(Number(ln)); } catch (e) {}
+        }, 0);
+      }
+    } catch (e) {}
+  }
+
+  function addToRecentFiles(fileIndex) {
+    const file = files[fileIndex];
+    if (!file) return;
+
+    // 移除已存在的相同文件
+    recentFiles = recentFiles.filter(f => f.path !== file.path);
+
+    // 添加到开头
+    recentFiles.unshift({
+      index: fileIndex,
+      path: file.path,
+      status: file.status,
+      added: file.added || 0,
+      removed: file.removed || 0,
+      modified: file.modified || 0,
+      timestamp: Date.now()
+    });
+
+    // 限制数量
+    if (recentFiles.length > MAX_RECENT_FILES) {
+      recentFiles = recentFiles.slice(0, MAX_RECENT_FILES);
+    }
+  }
+
+  function showRecentFilesDropdown() {
+    let dropdown = document.getElementById('recentFilesDropdown');
+    
+    // 如果已经显示，则隐藏
+    if (dropdown && dropdown.classList.contains('show')) {
+      hideRecentFilesDropdown();
+      return;
+    }
+
+    // 如果不存在，创建下拉菜单
+    if (!dropdown) {
+      dropdown = document.createElement('div');
+      dropdown.id = 'recentFilesDropdown';
+      dropdown.className = 'recent-files-dropdown';
+      document.getElementById('diffLabel').appendChild(dropdown);
+    }
+
+    // 更新内容
+    updateRecentFilesDropdown();
+
+    // 显示
+    dropdown.classList.add('show');
+
+    // 点击外部关闭
+    setTimeout(() => {
+      document.addEventListener('click', closeRecentFilesOnClickOutside);
+    }, 0);
+  }
+
+  function hideRecentFilesDropdown() {
+    const dropdown = document.getElementById('recentFilesDropdown');
+    if (dropdown) {
+      dropdown.classList.remove('show');
+    }
+    document.removeEventListener('click', closeRecentFilesOnClickOutside);
+  }
+
+  function closeRecentFilesOnClickOutside(e) {
+    const dropdown = document.getElementById('recentFilesDropdown');
+    const diffLabel = document.getElementById('diffLabel');
+    
+    if (dropdown && !dropdown.contains(e.target) && !diffLabel.contains(e.target)) {
+      hideRecentFilesDropdown();
+    }
+  }
+
+  function updateRecentFilesDropdown() {
+    const dropdown = document.getElementById('recentFilesDropdown');
+    if (!dropdown) return;
+
+    if (recentFiles.length === 0) {
+      dropdown.innerHTML = `
+        <div class="recent-files-header">最近打开的文件</div>
+        <div class="recent-files-empty">暂无最近打开的文件</div>
+      `;
+      return;
+    }
+
+    let html = '<div class="recent-files-header">最近打开的文件 (点击切换)</div>';
+    html += '<div class="recent-files-list">';
+
+    recentFiles.forEach((file, idx) => {
+      const isExternal = !!file.external;
+      // 检查文件是否还在当前文件列表中
+      const currentIndex = files.findIndex(f => f.path === file.path);
+      const isActive = (!isExternal && currentIndex === curFile);
+      const exists = currentIndex >= 0;
+
+      const segs = String(file.path || '').replace(/\\/g, '/').split('/');
+      const name = segs[segs.length - 1] || String(file.path || '');
+
+      if (exists) {
+        const currentFile = files[currentIndex];
+        const totalLines = (currentFile.added || 0) + (currentFile.removed || 0) + (currentFile.modified || 0);
+
+        html += `
+          <div class="recent-file-item ${isActive ? 'active' : ''}" 
+               onclick="selectFileFromRecent(${currentIndex}); event.stopPropagation();">
+            <span class="recent-file-status ${currentFile.status}">${currentFile.status}</span>
+            <div class="recent-file-info">
+              <div class="recent-file-name" title="${esc(file.path)}">${esc(name)}</div>
+              <div class="recent-file-stats">
+                ${totalLines > 0 ? `<span class="lines">${totalLines}行</span>` : ''}
+                ${currentFile.added > 0 ? `<span class="added">+${currentFile.added}</span>` : ''}
+                ${currentFile.removed > 0 ? `<span class="removed">-${currentFile.removed}</span>` : ''}
+                ${currentFile.modified > 0 ? `<span class="modified">~${currentFile.modified}</span>` : ''}
+              </div>
+            </div>
+            <button class="recent-file-remove" title="从最近列表移除" onclick="removeRecentFileByPath('${esc(String(file.path||'')).replace(/'/g,'\\\'')}'); event.stopPropagation();">×</button>
+          </div>
+        `;
+        return;
+      }
+
+      if (isExternal) {
+        const status = String(file.status || 'E');
+        html += `
+          <div class="recent-file-item" 
+               onclick="openExternalRecentFile(${idx}); event.stopPropagation();">
+            <span class="recent-file-status ${status}">${esc(status)}</span>
+            <div class="recent-file-info">
+              <div class="recent-file-name" title="${esc(file.path)}">${esc(name)}</div>
+              <div class="recent-file-stats">
+                <span class="lines">外部文件</span>
+              </div>
+            </div>
+            <button class="recent-file-remove" title="从最近列表移除" onclick="removeRecentFileByPath('${esc(String(file.path||'')).replace(/'/g,'\\\'')}'); event.stopPropagation();">×</button>
+          </div>
+        `;
+      }
+    });
+
+    html += '</div>';
+    dropdown.innerHTML = html;
+  }
+
+  async function selectFileFromRecent(index) {
+    hideRecentFilesDropdown();
+    await selectFile(index);
+  }
+
+  function removeRecentFileByPath(path) {
+    try {
+      const p = String(path || '');
+      recentFiles = recentFiles.filter(f => String(f.path || '') !== p);
+      updateRecentFilesDropdown();
+    } catch (e) {}
+  }
+
+  function openExternalRecentFile(idx) {
+    try {
+      const item = recentFiles && recentFiles[idx];
+      if (!item || !item.external) return;
+      hideRecentFilesDropdown();
+      openFileInEditor(String(item.path || '外部文件'), String(item.content || ''));
+    } catch (e) {}
   }
 
   let findBarEl = null;
@@ -1273,6 +2080,19 @@
 
   document.addEventListener('keydown', (e) => {
     const k = (e.key || '').toLowerCase();
+    
+    // Ctrl+W: 关闭当前打开的文件 - 优先处理，使用capture阶段
+    if (e.ctrlKey && !e.shiftKey && !e.altKey && k === 'w') {
+      // 检查是否在编辑器模式
+      if (window.__plainEditorFilename) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        closeEditorFile();
+        return false;
+      }
+    }
+    
     if (e.ctrlKey && !e.shiftKey && !e.altKey && k === 'f') {
       e.preventDefault();
       if (isFindBarOpen()) closeFindBar();
@@ -1280,9 +2100,11 @@
     }
 
     if (e.ctrlKey && !e.shiftKey && !e.altKey && k === 's') {
-      if (curFile === null) return;
-      e.preventDefault();
-      saveFile();
+      // 支持普通编辑器模式和diff模式的保存
+      if (curFile !== null || window.__plainEditorFilename) {
+        e.preventDefault();
+        saveFile();
+      }
     }
 
     // Undo last revert
@@ -1444,6 +2266,9 @@
       if (!el) return;
       el.textContent = text || '';
     };
+    
+    // 将函数暴露到全局作用域以便编辑器模式使用
+    window.setEditStatus = setEditStatus;
 
     const scheduleAutoSave = () => {
       if (window.__autoSaveTimer) clearTimeout(window.__autoSaveTimer);
@@ -1453,7 +2278,7 @@
       }
       window.__autoSaveTimer = setTimeout(async () => {
         if (!window.__dirtyEdits) return;
-        if (curFile === null) return;
+        if (curFile === null && !window.__plainEditorFilename) return;
         if (window.__saveFileInFlight) return;
         setEditStatus('检测到修改：自动保存中...');
         await saveFile();
@@ -1462,6 +2287,9 @@
       }, 5000);
       setEditStatus('已修改：5秒后自动保存（Ctrl+S 立即保存）');
     };
+    
+    // 将函数暴露到全局作用域以便编辑器模式使用
+    window.scheduleAutoSave = scheduleAutoSave;
 
     if (!window.__gmEditUndoStack) window.__gmEditUndoStack = [];
     if (!window.__gmEditRedoStack) window.__gmEditRedoStack = [];
@@ -4468,14 +5296,37 @@
 
   // ── Diff ──────────────────────────────────────────────────────────────────────
   async function selectFile(i) {
+    try { __gmInitLastLineTrackingOnce(); } catch (e) {}
+    try {
+      if (curFile !== null && files && files[curFile] && files[curFile].path) {
+        __gmCaptureLastLineForPath(files[curFile].path);
+      }
+      if (window.__plainEditorFilename) {
+        __gmCaptureLastLineForPath(window.__plainEditorFilename);
+      }
+    } catch (e) {}
     curFile = i;
-    autoScrollToFirstChangeOnce = true;
+    try {
+      const f0 = files && files[i];
+      const p0 = f0 && f0.path ? String(f0.path) : '';
+      autoScrollToFirstChangeOnce = !(p0 && lastLineByPath.has(p0));
+    } catch (e) {
+      autoScrollToFirstChangeOnce = true;
+    }
     // clear log file selection
     curLogFile = null;
+    
+    // 添加到最近文件列表
+    addToRecentFiles(i);
+    
     renderFileList();
     // 清空之前的hunks，确保重新加载
     curHunks = [];
     await loadDiff(i);
+    try {
+      const f = files[i];
+      if (f && f.path) __gmRestoreLastLineForPath(f.path);
+    } catch (e) {}
   }
 
   async function loadDiff(i) {
@@ -4505,7 +5356,7 @@
       const lineCountLabel = totalLines > 0 ? `<span class="line-count">${totalLines}行</span>` : '';
       document.getElementById('diffLabel').innerHTML =
               `<span class="fi-st ${fileObj.status}" style="font-size:9px">${fileObj.status}</span>
-       <span class="fn">${esc(fileObj.path)}</span>
+       <span class="fn" onclick="showRecentFilesDropdown(); event.stopPropagation();" title="点击查看最近打开的文件">${esc(fileObj.path)}</span>
        ${lineCountLabel}
        ${fileObj.added > 0 ? `<span style="color:var(--accent2);font-size:10px">+${fileObj.added}</span>` : ''}
        ${fileObj.removed > 0 ? `<span style="color:var(--danger);font-size:10px">-${fileObj.removed}</span>` : ''}
@@ -5036,7 +5887,7 @@
   }
 
   function renderDiffWithFullContext(file, hunks, readonly, changeLocations = []) {
-    console.log('renderDiffWithFullContext called with file:', file.path, 'hunks:', hunks.length);
+    if (DEBUG_MODE) console.log('renderDiffWithFullContext called with file:', file.path, 'hunks:', hunks.length);
     const view = document.getElementById('diffView');
 
     const status = (file && file.status);
@@ -5067,7 +5918,7 @@
 
     // If no file content and no hunks, show empty state
     if ((!curFileContent || curFileContent === '') && (!hunks || hunks.length === 0)) {
-      console.log('renderDiffWithFullContext: no content and no hunks, showing empty state');
+      if (DEBUG_MODE) console.log('renderDiffWithFullContext: no content and no hunks, showing empty state');
       view.innerHTML = '<div class="empty-state"><p style="color:var(--text2)">无差异内容</p></div>';
       return;
     }
@@ -5086,7 +5937,7 @@
         });
       });
       workingContent = lines.join('\n');
-      console.log('Reconstructed content length:', workingContent.length);
+      if (DEBUG_MODE) console.log('Reconstructed content length:', workingContent.length);
     }
 
     // Base content (HEAD) for split left column.
@@ -5126,7 +5977,7 @@
 
     // Split file into lines
     const lines = workingContent.split('\n');
-    console.log('Rendering diff with', lines.length, 'lines,', lineChanges.size, 'changes');
+    if (DEBUG_MODE) console.log('Rendering diff with', lines.length, 'lines,', lineChanges.size, 'changes');
 
     // Build change navigation bar
     let navigationHtml = '';
@@ -5944,6 +6795,12 @@
   }
 
   async function saveFile(filepath) {
+    // 检查是否在普通编辑器模式
+    if (window.__plainEditorFilename && !filepath) {
+      await savePlainEditorFile();
+      return;
+    }
+    
     if (curFile === null && !filepath) return;
     if (window.__saveFileInFlight) return;
     window.__saveFileInFlight = true;
@@ -8656,6 +9513,561 @@
 
   // 初始化主题
   initTheme();
+
+  // ── 文件拖拽导入功能 ──────────────────────────────────────────────────────────
+  function initFileDragDrop() {
+    const diffView = document.getElementById('diffView');
+    const overlay = document.getElementById('dragDropOverlay');
+    if (!diffView || !overlay) return;
+
+    // 检查是否已经初始化过，避免重复绑定
+    if (diffView._dragDropInitialized) return;
+    diffView._dragDropInitialized = true;
+
+    let dragCounter = 0;
+    let dragTimer = null;
+
+    // 拖拽进入
+    const handleDragEnter = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      
+      // 只处理文件拖拽
+      if (!e.dataTransfer.types.includes('Files')) return;
+      
+      dragCounter++;
+      
+      if (dragCounter === 1) {
+        // 清除之前的定时器
+        if (dragTimer) clearTimeout(dragTimer);
+        
+        // 添加高亮效果
+        diffView.classList.add('drag-active');
+        overlay.classList.add('active');
+        
+        // 显示toast提示
+        showDragToast('可以拖放文件到这里打开');
+      }
+    };
+
+    // 拖拽移动
+    const handleDragOver = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      
+      // 清除延迟隐藏的定时器，确保拖拽时提示一直显示
+      if (dragTimer) {
+        clearTimeout(dragTimer);
+        dragTimer = null;
+      }
+      
+      // 设置拖拽效果
+      if (e.dataTransfer.types.includes('Files')) {
+        e.dataTransfer.dropEffect = 'copy';
+      }
+    };
+
+    // 拖拽离开
+    const handleDragLeave = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      
+      dragCounter--;
+      
+      if (dragCounter === 0) {
+        // 延迟移除高亮，避免闪烁
+        dragTimer = setTimeout(() => {
+          diffView.classList.remove('drag-active');
+          overlay.classList.remove('active');
+          hideDragToast();
+        }, 100);
+      }
+    };
+
+    // 拖拽释放
+    const handleDrop = async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      
+      // 重置状态
+      dragCounter = 0;
+      diffView.classList.remove('drag-active');
+      overlay.classList.remove('active');
+      hideDragToast();
+      
+      if (dragTimer) clearTimeout(dragTimer);
+
+      const files = e.dataTransfer.files;
+      if (!files || files.length === 0) return;
+
+      // 处理多个文件的情况
+      if (files.length > 1) {
+        toast(`检测到 ${files.length} 个文件，将打开第一个文件`, 'warn');
+      }
+
+      // 只处理第一个文件
+      const file = files[0];
+      
+      // 检查文件大小（限制为10MB）
+      const maxSize = 10 * 1024 * 1024;
+      if (file.size > maxSize) {
+        toast(`文件过大 (${(file.size / 1024 / 1024).toFixed(2)}MB)，请选择小于10MB的文件`, 'err');
+        return;
+      }
+      
+      // 显示加载提示
+      showLoadingToast(`正在读取文件: ${file.name}`);
+      
+      try {
+        // 读取文件内容
+        const content = await readFileAsText(file);
+        
+        // 在编辑器模式中打开文件
+        openFileInEditor(file.name, content);
+        
+        hideLoadingToast();
+        toast(`✓ 已打开文件: ${file.name}`, 'ok');
+      } catch (error) {
+        hideLoadingToast();
+        toast(`读取文件失败: ${error.message}`, 'err');
+      }
+    };
+
+    // 绑定事件
+    diffView.addEventListener('dragenter', handleDragEnter);
+    diffView.addEventListener('dragover', handleDragOver);
+    diffView.addEventListener('dragleave', handleDragLeave);
+    diffView.addEventListener('drop', handleDrop);
+    
+    // 阻止整个页面的默认拖拽行为（只绑定一次）
+    if (!window._bodyDragHandlersAdded) {
+      window._bodyDragHandlersAdded = true;
+      ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+        document.body.addEventListener(eventName, (e) => {
+          const diffView = document.getElementById('diffView');
+          // 如果不是在diffView内，阻止默认行为
+          if (diffView && !diffView.contains(e.target)) {
+            e.preventDefault();
+            e.stopPropagation();
+          }
+        }, false);
+      });
+    }
+  }
+
+  // 显示拖拽提示toast
+  let dragToastEl = null;
+  function showDragToast(msg) {
+    hideDragToast();
+    dragToastEl = document.createElement('div');
+    dragToastEl.className = 'drag-toast';
+    dragToastEl.innerHTML = `
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="10"/>
+        <line x1="12" y1="8" x2="12" y2="12"/>
+        <line x1="12" y1="16" x2="12.01" y2="16"/>
+      </svg>
+      <span>${msg}</span>
+    `;
+    document.body.appendChild(dragToastEl);
+    setTimeout(() => {
+      if (dragToastEl) dragToastEl.classList.add('show');
+    }, 10);
+  }
+
+  function hideDragToast() {
+    if (dragToastEl) {
+      dragToastEl.classList.remove('show');
+      setTimeout(() => {
+        if (dragToastEl && dragToastEl.parentNode) {
+          dragToastEl.parentNode.removeChild(dragToastEl);
+        }
+        dragToastEl = null;
+      }, 300);
+    }
+  }
+
+  // 显示加载提示
+  let loadingToastEl = null;
+  function showLoadingToast(msg) {
+    hideLoadingToast();
+    loadingToastEl = document.createElement('div');
+    loadingToastEl.className = 'loading-toast';
+    loadingToastEl.innerHTML = `
+      <div class="spin-small"></div>
+      <span>${msg}</span>
+    `;
+    document.body.appendChild(loadingToastEl);
+    setTimeout(() => {
+      if (loadingToastEl) loadingToastEl.classList.add('show');
+    }, 10);
+  }
+
+  function hideLoadingToast() {
+    if (loadingToastEl) {
+      loadingToastEl.classList.remove('show');
+      setTimeout(() => {
+        if (loadingToastEl && loadingToastEl.parentNode) {
+          loadingToastEl.parentNode.removeChild(loadingToastEl);
+        }
+        loadingToastEl = null;
+      }, 300);
+    }
+  }
+
+  // 读取文件为文本
+  function readFileAsText(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => resolve(e.target.result);
+      reader.onerror = (e) => reject(new Error('文件读取失败'));
+      reader.readAsText(file);
+    });
+  }
+
+  // 在编辑器模式中打开文件
+  function openFileInEditor(filename, content) {
+    try { __gmInitLastLineTrackingOnce(); } catch (e) {}
+    try {
+      if (curFile !== null && files && files[curFile] && files[curFile].path) {
+        __gmCaptureLastLineForPath(files[curFile].path);
+      }
+      if (window.__plainEditorFilename) {
+        __gmCaptureLastLineForPath(window.__plainEditorFilename);
+      }
+    } catch (e) {}
+    // 清除当前选中状态
+    curFile = null;
+    curLogFile = null;
+    
+    // 更新文件信息标签，添加关闭按钮
+    const totalLines = content.split('\n').length;
+    document.getElementById('diffLabel').innerHTML = 
+      `<span class="fn" onclick="showRecentFilesDropdown(); event.stopPropagation();" title="点击查看最近打开的文件">${esc(filename)}</span>
+       <span class="line-count">${totalLines}行</span>
+       <span style="color:var(--text3);font-size:10px">编辑器模式</span>
+       <button class="editor-close-btn" onclick="closeEditorFile()" title="关闭文件 (Ctrl+W)">
+         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+           <line x1="18" y1="6" x2="6" y2="18"/>
+           <line x1="6" y1="6" x2="18" y2="18"/>
+         </svg>
+       </button>`;
+    
+    // 隐藏撤回按钮
+    document.getElementById('revertFileBtn').style.display = 'none';
+    
+    // 显示保存按钮
+    document.getElementById('saveFileBtn').style.display = 'flex';
+
+    // 记录外部拖拽打开的文件到最近列表
+    try {
+      const p = String(filename || '');
+      if (p) {
+        recentFiles = recentFiles.filter(f => String(f.path || '') !== p);
+        recentFiles.unshift({
+          path: p,
+          status: 'E',
+          external: true,
+          content: String(content || ''),
+          timestamp: Date.now()
+        });
+        if (recentFiles.length > MAX_RECENT_FILES) recentFiles = recentFiles.slice(0, MAX_RECENT_FILES);
+      }
+    } catch (e) {}
+    
+    // 渲染编辑器
+    renderPlainEditor(content, filename);
+    try { __gmRestoreLastLineForPath(String(filename || '')); } catch (e) {}
+  }
+
+  // 保存普通编辑器中的文件
+  async function savePlainEditorFile() {
+    if (!window.__plainEditorFilename) {
+      toast('未找到要保存的文件', 'err');
+      return;
+    }
+    
+    if (window.__saveFileInFlight) return;
+    window.__saveFileInFlight = true;
+
+    const saveBtn = document.getElementById('saveFileBtn');
+    if (saveBtn) {
+      saveBtn.disabled = true;
+      saveBtn.innerHTML = '<span style="font-size:10px;">保存中...</span>';
+    }
+
+    try {
+      const ta = document.getElementById('plainEditorTextarea');
+      const content = ta ? String(ta.value || '') : '';
+      const filename = window.__plainEditorFilename;
+      
+      // 尝试保存到工作目录
+      const res = await POST('/api/save_file', {path: filename, content: content});
+      
+      if (res.ok) {
+        toast(`✓ 文件已保存: ${filename}`, 'ok');
+        window.__plainEditorContent = content;
+        window.__dirtyEdits = false;
+        
+        // 清除编辑标记
+        document.querySelectorAll('.lc.editable-line[data-dirty="1"]').forEach(el => {
+          try { delete el.dataset.dirty; } catch (e) {}
+        });
+      } else {
+        toast(`保存失败: ${res.msg || res.error}`, 'err');
+      }
+    } catch (error) {
+      toast(`保存失败: ${error.message}`, 'err');
+    } finally {
+      window.__saveFileInFlight = false;
+      if (saveBtn) {
+        saveBtn.disabled = false;
+        saveBtn.innerHTML = `
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/>
+        </svg>保存
+      `;
+      }
+    }
+  }
+
+  // 关闭编辑器模式中的文件
+  function closeEditorFile() {
+    const filename = window.__plainEditorFilename;
+    
+    // 检查是否有未保存的更改
+    if (window.__dirtyEdits) {
+      const msg = `文件 "${filename}" 有未保存的更改。\n\n是否保存后关闭？\n\n点击"确定"保存并关闭\n点击"取消"直接关闭（放弃更改）`;
+      const saveBeforeClose = confirm(msg);
+      
+      if (saveBeforeClose) {
+        // 保存后关闭
+        savePlainEditorFile().then(() => {
+          performCloseEditor(filename);
+        }).catch(() => {
+          // 保存失败，询问是否仍要关闭
+          const forceClose = confirm('保存失败，是否仍要关闭文件？');
+          if (forceClose) {
+            performCloseEditor(filename);
+          }
+        });
+        return;
+      }
+    }
+
+    // 直接关闭
+    performCloseEditor(filename);
+  }
+
+  // 执行关闭编辑器操作
+  function performCloseEditor(filename) {
+    // 清除编辑器状态
+    window.__plainEditorFilename = null;
+    window.__plainEditorContent = null;
+    window.__dirtyEdits = false;
+
+    // 清除自动保存定时器
+    if (window.__autoSaveTimer) {
+      clearTimeout(window.__autoSaveTimer);
+      window.__autoSaveTimer = null;
+    }
+
+    // 重置视图
+    const view = document.getElementById('diffView');
+    if (view) {
+      // 清除拖拽初始化标记，以便重新绑定事件
+      view._dragDropInitialized = false;
+      
+      view.innerHTML = `
+        <div class="drag-drop-overlay" id="dragDropOverlay">
+          <div class="drag-drop-hint">
+            <div class="drag-drop-hint-content">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+                <polyline points="7 10 12 15 17 10"/>
+                <line x1="12" y1="15" x2="12" y2="3"/>
+              </svg>
+              <p>拖放文件到这里</p>
+              <small>将自动以编辑器模式打开文件</small>
+            </div>
+          </div>
+        </div>
+        <div class="empty-state">
+          <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+            <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/>
+          </svg>
+          <p>从左侧点击文件查看差异</p>
+        </div>
+      `;
+      
+      // 禁用contenteditable
+      view.setAttribute('data-ce-host', '0');
+      view.setAttribute('contenteditable', 'false');
+    }
+
+    // 重置标签和按钮
+    document.getElementById('diffLabel').innerHTML = '';
+    document.getElementById('revertFileBtn').style.display = 'none';
+    document.getElementById('saveFileBtn').style.display = 'none';
+    
+    // 清除状态信息
+    const selInfo = document.getElementById('selInfo');
+    if (selInfo) selInfo.textContent = '';
+
+    // 重新初始化拖拽功能
+    initFileDragDrop();
+
+    toast(filename ? `已关闭: ${filename}` : '已关闭文件', 'info');
+  }
+
+  // 渲染普通编辑器
+  function renderPlainEditor(content, filename) {
+    const view = document.getElementById('diffView');
+    const text = (content === null || content === undefined) ? '' : String(content);
+    view.innerHTML = `
+      <div class="plain-editor-container">
+        <div class="plain-editor-wrap">
+          <div class="plain-editor-gutter" id="plainEditorGutter"></div>
+          <textarea class="plain-editor-textarea" id="plainEditorTextarea" spellcheck="false"></textarea>
+        </div>
+      </div>
+    `;
+    
+    // 仅行级可编辑：避免宿主 contenteditable 干扰（回车/光标/选择行为更接近常规编辑器）
+    try {
+      view.setAttribute('data-ce-host', '0');
+      view.setAttribute('contenteditable', 'false');
+    } catch (e) {}
+
+    const ta = document.getElementById('plainEditorTextarea');
+    const gutter = document.getElementById('plainEditorGutter');
+    if (ta) ta.value = text;
+
+    const getLineCount = (s) => {
+      const t = (s === null || s === undefined) ? '' : String(s);
+      // 空内容也显示 1 行，符合常见编辑器
+      return Math.max(1, t.split('\n').length);
+    };
+
+    const renderGutter = () => {
+      if (!gutter || !ta) return;
+      const n = getLineCount(ta.value);
+      let html = '';
+      for (let i = 1; i <= n; i++) {
+        html += `<div class="n">${i}</div>`;
+      }
+      gutter.innerHTML = html;
+    };
+
+    const syncScroll = () => {
+      if (!gutter || !ta) return;
+      gutter.scrollTop = ta.scrollTop;
+    };
+
+    const insertTextAtSelection = (ins) => {
+      if (!ta) return;
+      const start = ta.selectionStart;
+      const end = ta.selectionEnd;
+      const v = ta.value;
+      ta.value = v.slice(0, start) + ins + v.slice(end);
+      const pos = start + ins.length;
+      ta.selectionStart = ta.selectionEnd = pos;
+    };
+
+    if (ta) {
+      renderGutter();
+      syncScroll();
+      try { ta.focus({ preventScroll: true }); } catch (e) { try { ta.focus(); } catch (e2) {} }
+
+      try { __gmInitLastLineTrackingOnce(); } catch (e) {}
+
+      ta.addEventListener('click', () => {
+        try {
+          const ln = __gmLineFromTextareaSelection(ta);
+          if (Number.isFinite(Number(ln)) && Number(ln) > 0) lastLineByPath.set(String(filename || ''), Number(ln));
+        } catch (e) {}
+      });
+
+      ta.addEventListener('keyup', () => {
+        try {
+          const ln = __gmLineFromTextareaSelection(ta);
+          if (Number.isFinite(Number(ln)) && Number(ln) > 0) lastLineByPath.set(String(filename || ''), Number(ln));
+        } catch (e) {}
+      });
+
+      ta.addEventListener('scroll', () => {
+        syncScroll();
+      });
+
+      ta.addEventListener('input', () => {
+        window.__dirtyEdits = true;
+        renderGutter();
+        syncScroll();
+        if (window.__autoSaveEnabled) {
+          if (typeof window.scheduleAutoSave === 'function') {
+            window.scheduleAutoSave();
+          }
+        } else {
+          if (typeof window.setEditStatus === 'function') {
+            window.setEditStatus('已修改：自动保存已关闭（Ctrl+S 立即保存）');
+          }
+        }
+      });
+
+      ta.addEventListener('keydown', (e) => {
+        if (e.key === 'Tab') {
+          e.preventDefault();
+          insertTextAtSelection('  ');
+          // 手动触发一次 input 逻辑
+          window.__dirtyEdits = true;
+          renderGutter();
+          syncScroll();
+          if (window.__autoSaveEnabled) {
+            if (typeof window.scheduleAutoSave === 'function') window.scheduleAutoSave();
+          } else {
+            if (typeof window.setEditStatus === 'function') window.setEditStatus('已修改：自动保存已关闭（Ctrl+S 立即保存）');
+          }
+        }
+      });
+    }
+    
+    // 存储当前内容用于保存
+    window.__plainEditorContent = text;
+    window.__plainEditorFilename = filename;
+    window.__dirtyEdits = false;
+    
+    // 初始化状态提示
+    if (typeof window.setEditStatus === 'function') {
+      window.setEditStatus('');
+    }
+  }
+
+  // 初始化拖拽功能
+  initFileDragDrop();
+
+  // 添加全局Ctrl+W拦截器（使用capture阶段，确保在浏览器默认行为之前执行）
+  window.addEventListener('keydown', (e) => {
+    const k = (e.key || '').toLowerCase();
+    if (e.ctrlKey && !e.shiftKey && !e.altKey && k === 'w') {
+      if (window.__plainEditorFilename) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        // 不在这里调用closeEditorFile，让document的监听器处理
+        // 只是阻止默认行为
+      }
+    }
+  }, true); // true 表示在捕获阶段处理
+
+  // 防止用户意外关闭有未保存更改的标签页
+  window.addEventListener('beforeunload', (e) => {
+    if (window.__plainEditorFilename && window.__dirtyEdits) {
+      e.preventDefault();
+      e.returnValue = ''; // Chrome需要这个
+      return ''; // 其他浏览器
+    }
+  });
 
   (async () => {
     try {
