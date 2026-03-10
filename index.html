@@ -832,27 +832,6 @@
       tab-size:2;
     }
     .plain-editor-textarea::selection{background:rgba(110,180,247,.25);}
-    .plain-editor-line{
-      display:flex;align-items:flex-start;
-      font-family:'JetBrains Mono',monospace;
-      font-size:12px;line-height:18px;
-      padding:0 4px;
-      min-height:18px;
-    }
-    .plain-editor-line:hover{
-      background:var(--bg3);
-    }
-    .plain-editor-line .ln{
-      width:50px;min-width:50px;
-      text-align:right;padding-right:12px;
-      color:var(--text3);font-size:11px;
-      user-select:none;
-    }
-    .plain-editor-line .lc{
-      flex:1;min-width:0;
-      white-space:pre;
-      overflow-x:visible;
-    }
     
     /* 编辑器关闭按钮 */
     .editor-close-btn{
@@ -1562,6 +1541,41 @@
     } catch (e) {
       return 1;
     }
+  }
+
+  function __gmSetBtnDisabledVisual(btn, disabled) {
+    try {
+      if (!btn) return;
+      if (String(btn.dataset && btn.dataset.busy || '') === '1') return;
+      btn.disabled = !!disabled;
+      if (btn.disabled) {
+        btn.style.opacity = '.6';
+        btn.style.pointerEvents = 'none';
+      } else {
+        btn.style.opacity = '';
+        btn.style.pointerEvents = '';
+      }
+    } catch (e) {}
+  }
+
+  function __gmSyncHistoryPushSoftResetDisabled() {
+    const pb = document.getElementById('pushCommitBtn');
+    const sb = document.getElementById('softResetCommitBtn');
+    if (!pb || !sb) return;
+
+    const pbVisible = pb.style.display !== 'none';
+    const sbVisible = sb.style.display !== 'none';
+
+    // If one of them is hidden, clear the other's linked-disabled visual (do not override busy state).
+    if (!pbVisible || !sbVisible) {
+      if (!pbVisible) __gmSetBtnDisabledVisual(sb, false);
+      if (!sbVisible) __gmSetBtnDisabledVisual(pb, false);
+      return;
+    }
+
+    const linkedDisabled = !!pb.disabled || !!sb.disabled;
+    __gmSetBtnDisabledVisual(pb, linkedDisabled);
+    __gmSetBtnDisabledVisual(sb, linkedDisabled);
   }
 
   function __gmGotoLineInTextarea(ta, line) {
@@ -8821,6 +8835,9 @@
     // Soft reset 仅用于：未 push + HEAD
     if (sb) sb.style.display = (pushed === false && isHead === true) ? '' : 'none';
 
+    // Ensure Push / ↩ disabled state is linked whenever visibility changes.
+    try { __gmSyncHistoryPushSoftResetDisabled(); } catch (e) {}
+
     if (hint) {
       if (pushed === true) {
         hint.textContent = '撤回该提交（git revert），会生成一个新的回滚提交';
@@ -8858,6 +8875,7 @@
     if (!ok) return;
     const pb = document.getElementById('pushCommitBtn');
     setButtonBusy(pb, true);
+    try { __gmSyncHistoryPushSoftResetDisabled(); } catch (e) {}
     try {
       toast('推送中...','warn');
       const res = await POST('/api/push',{});
@@ -8874,6 +8892,7 @@
       }
     } finally {
       setButtonBusy(pb, false);
+      try { __gmSyncHistoryPushSoftResetDisabled(); } catch (e) {}
     }
   }
 
@@ -8891,6 +8910,7 @@
 
     const sb = document.getElementById('softResetCommitBtn');
     setButtonBusy(sb, true);
+    try { __gmSyncHistoryPushSoftResetDisabled(); } catch (e) {}
     try {
       toast('撤销中...','warn');
       const res = await POST('/api/soft_reset_commit', {hash: fullHash});
@@ -8905,6 +8925,7 @@
       }
     } finally {
       setButtonBusy(sb, false);
+      try { __gmSyncHistoryPushSoftResetDisabled(); } catch (e) {}
     }
   }
 
@@ -9127,6 +9148,7 @@
       b.style.opacity = '';
       b.style.pointerEvents = '';
     }
+    try { __gmSyncHistoryPushSoftResetDisabled(); } catch (e) {}
   }
 
   function renderBranchMenu() {
@@ -9806,7 +9828,6 @@
       
       if (res.ok) {
         toast(`✓ 文件已保存: ${filename}`, 'ok');
-        window.__plainEditorContent = content;
         window.__dirtyEdits = false;
         
         // 清除编辑标记
@@ -9863,7 +9884,6 @@
   function performCloseEditor(filename) {
     // 清除编辑器状态
     window.__plainEditorFilename = null;
-    window.__plainEditorContent = null;
     window.__dirtyEdits = false;
 
     // 清除自动保存定时器
@@ -10033,7 +10053,6 @@
     }
     
     // 存储当前内容用于保存
-    window.__plainEditorContent = text;
     window.__plainEditorFilename = filename;
     window.__dirtyEdits = false;
     
