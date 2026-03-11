@@ -24,6 +24,7 @@
       --text2:     #8891b0;
       --text3:     #4e5472;
       --hunk-bg:   #181b28;
+      --on-accent: #000000;
     }
 
     /* Light Theme */
@@ -44,6 +45,7 @@
       --text2:     #495057;
       --text3:     #868e96;
       --hunk-bg:   #e7f5ff;
+      --on-accent: #ffffff;
     }
 
     /* Light theme specific overrides */
@@ -292,6 +294,15 @@
       border-color: #ced4da;
       box-shadow: 0 12px 40px rgba(0, 0, 0, 0.15);
     }
+
+    [data-theme="light"] .origin-link-btn{
+      border-color: rgba(25, 113, 194, 0.55);
+      color: var(--accent);
+    }
+    [data-theme="light"] .origin-link-btn:hover{
+      background: rgba(25, 113, 194, 0.08);
+      border-color: rgba(25, 113, 194, 0.85);
+    }
     [data-theme="light"] .recent-file-item:hover {
       background: #f8f9fa;
       border-left-color: #1971c2;
@@ -319,6 +330,10 @@
     [data-theme="light"] .recent-file-status.U {
       background: #fff3bf;
       color: #e67700;
+    }
+
+    [data-theme="light"] .editable-line:hover {
+      background: rgba(0, 0, 0, 0.03);
     }
 
     *{margin:0;padding:0;box-sizing:border-box;}
@@ -482,9 +497,9 @@
     .fi-cb{width:13px;height:13px;border:1px solid var(--border2);border-radius:2px;
       background:transparent;cursor:pointer;appearance:none;flex-shrink:0;}
     .fi-cb:checked{background:var(--accent);border-color:var(--accent);}
-    .fi-cb:checked::after{content:'✓';display:block;font-size:8px;text-align:center;color:#000;line-height:13px;}
+    .fi-cb:checked::after{content:'✓';display:block;font-size:8px;text-align:center;color:var(--on-accent);line-height:13px;}
     .fi-cb.indet{background:var(--accent);border-color:var(--accent);}
-    .fi-cb.indet::after{content:'-';display:block;font-size:10px;text-align:center;color:#000;line-height:12px;font-weight:700;}
+    .fi-cb.indet::after{content:'-';display:block;font-size:10px;text-align:center;color:var(--on-accent);line-height:12px;font-weight:700;}
     .fi-st{width:14px;height:14px;border-radius:3px;display:flex;align-items:center;justify-content:center;
       font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:700;flex-shrink:0;}
     .fi-st.M{background:#163060;color:#6eb4f7;}
@@ -830,6 +845,10 @@
       white-space:pre;
       overflow:auto;
       tab-size:2;
+      /* 优化滚动性能 */
+      will-change:scroll-position;
+      transform:translateZ(0);
+      -webkit-overflow-scrolling:touch;
     }
     .plain-editor-textarea::selection{background:rgba(110,180,247,.25);}
     
@@ -1093,9 +1112,9 @@
     .commit-cb{width:13px;height:13px;border:1px solid var(--border2);border-radius:2px;
       background:transparent;cursor:pointer;appearance:none;flex-shrink:0;transform:translateY(1px);user-select:none;-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;}
     .commit-cb:checked{background:var(--accent);border-color:var(--accent);}
-    .commit-cb:checked::after{content:'✓';display:block;font-size:8px;text-align:center;color:#000;line-height:13px;}
+    .commit-cb:checked::after{content:'✓';display:block;font-size:8px;text-align:center;color:var(--on-accent);line-height:13px;}
     .commit-cb.indet{background:var(--accent);border-color:var(--accent);}
-    .commit-cb.indet::after{content:'-';display:block;font-size:10px;text-align:center;color:#000;line-height:12px;font-weight:700;}
+    .commit-cb.indet::after{content:'-';display:block;font-size:10px;text-align:center;color:var(--on-accent);line-height:12px;font-weight:700;}
 
     /* Log tab */
     .log-search{padding:5px 7px;border-bottom:1px solid var(--border);flex-shrink:0;}
@@ -1530,6 +1549,11 @@
   let recentFiles = []; // 最近打开的文件列表 {index, path, status, ...}
   const MAX_RECENT_FILES = 10; // 最多保留10个最近文件
 
+  // External FileSystemAccess handles (best-effort cache keyed by path)
+  if (!window.__externalFileHandleByPath) {
+    window.__externalFileHandleByPath = new Map();
+  }
+
   const lastLineByPath = new Map();
 
   function __gmLineFromTextareaSelection(ta) {
@@ -1822,8 +1846,13 @@
 
       if (isExternal) {
         const status = String(file.status || 'E');
+        // 检查是否是当前打开的外部文件
+        const isActiveExternal = !!(window.__plainEditorFilename && 
+                                    window.__plainEditorIsExternal && 
+                                    String(window.__plainEditorFilename) === String(file.path));
+        
         html += `
-          <div class="recent-file-item" 
+          <div class="recent-file-item ${isActiveExternal ? 'active' : ''}" 
                onclick="openExternalRecentFile(${idx}); event.stopPropagation();">
             <span class="recent-file-status ${status}">${esc(status)}</span>
             <div class="recent-file-info">
@@ -1847,11 +1876,64 @@
     await selectFile(index);
   }
 
-  function removeRecentFileByPath(path) {
+  async function removeRecentFileByPath(path) {
     try {
       const p = String(path || '');
-      recentFiles = recentFiles.filter(f => String(f.path || '') !== p);
+      const oldList = Array.isArray(recentFiles) ? recentFiles.slice() : [];
+      const oldIdx = oldList.findIndex(f => String((f && f.path) || '') === p);
+      const wasActiveExternal = (() => {
+        try { return !!(window.__plainEditorFilename && String(window.__plainEditorFilename) === p); } catch (e) { return false; }
+      })();
+      const wasActiveRepo = (() => {
+        try { return !!(curFile !== null && files && files[curFile] && String(files[curFile].path || '') === p); } catch (e) { return false; }
+      })();
+
+      recentFiles = oldList.filter(f => String((f && f.path) || '') !== p);
       updateRecentFilesDropdown();
+
+      const needSwitch = wasActiveExternal || wasActiveRepo;
+      if (!needSwitch) return;
+
+      if (!recentFiles || recentFiles.length === 0) {
+        if (wasActiveExternal) {
+          try { performCloseEditor(p); } catch (e2) {}
+          return;
+        }
+        if (wasActiveRepo) {
+          try {
+            curFile = null;
+            curHunks = [];
+            curFileContent = '';
+            clearDiff();
+            renderFileList();
+          } catch (e3) {}
+        }
+        return;
+      }
+
+      const nextIdx = Math.max(0, Math.min((oldIdx >= 0 ? oldIdx : 0), recentFiles.length - 1));
+      const nextItem = recentFiles[nextIdx];
+      if (!nextItem) return;
+
+      if (nextItem.external) {
+        let fh = null;
+        try {
+          const pp = String(nextItem.path || '');
+          fh = (pp && window.__externalFileHandleByPath) ? window.__externalFileHandleByPath.get(pp) : null;
+        } catch (e2) { fh = null; }
+        openFileInEditor(String(nextItem.path || '外部文件'), String(nextItem.content || ''), true, fh);
+        return;
+      }
+
+      let idxInFiles = -1;
+      try {
+        const pp = String(nextItem.path || '');
+        idxInFiles = (files || []).findIndex(ff => String((ff && ff.path) || '') === pp);
+      } catch (e2) { idxInFiles = -1; }
+      if (idxInFiles >= 0) {
+        await selectFile(idxInFiles);
+        return;
+      }
     } catch (e) {}
   }
 
@@ -1860,7 +1942,12 @@
       const item = recentFiles && recentFiles[idx];
       if (!item || !item.external) return;
       hideRecentFilesDropdown();
-      openFileInEditor(String(item.path || '外部文件'), String(item.content || ''));
+      let fh = null;
+      try {
+        const p = String(item.path || '');
+        fh = (p && window.__externalFileHandleByPath) ? window.__externalFileHandleByPath.get(p) : null;
+      } catch (e2) { fh = null; }
+      openFileInEditor(String(item.path || '外部文件'), String(item.content || ''), true, fh);
     } catch (e) {}
   }
 
@@ -2095,15 +2182,26 @@
   document.addEventListener('keydown', (e) => {
     const k = (e.key || '').toLowerCase();
     
-    // Ctrl+W: 关闭当前打开的文件 - 优先处理，使用capture阶段
+    // 检查是否在普通编辑器模式
+    const isInPlainEditorMode = !!window.__plainEditorFilename;
+    
+    // Ctrl+W: 关闭当前打开的文件
     if (e.ctrlKey && !e.shiftKey && !e.altKey && k === 'w') {
       // 检查是否在编辑器模式
-      if (window.__plainEditorFilename) {
+      if (isInPlainEditorMode) {
         e.preventDefault();
         e.stopPropagation();
         e.stopImmediatePropagation();
         closeEditorFile();
         return false;
+      }
+    }
+    
+    // 在普通编辑器模式下,Ctrl+Z和Ctrl+Y使用textarea的原生撤销/重做
+    if (isInPlainEditorMode && (k === 'z' || k === 'y')) {
+      if (e.ctrlKey && !e.altKey) {
+        // 让textarea的原生撤销/重做处理
+        return;
       }
     }
     
@@ -2115,14 +2213,17 @@
 
     if (e.ctrlKey && !e.shiftKey && !e.altKey && k === 's') {
       // 支持普通编辑器模式和diff模式的保存
-      if (curFile !== null || window.__plainEditorFilename) {
+      if (curFile !== null || isInPlainEditorMode) {
         e.preventDefault();
         saveFile();
       }
     }
 
-    // Undo last revert
+    // Undo last revert - 仅在diff视图模式下生效
     if (e.ctrlKey && !e.shiftKey && !e.altKey && k === 'z') {
+      // 如果在普通编辑器模式,完全跳过此逻辑
+      if (isInPlainEditorMode) return;
+      
       try {
         const host = document.getElementById('diffView');
         if (host) {
@@ -2137,13 +2238,15 @@
 
           // In local-revert mode, treat Ctrl+Z as editor undo even if focus is outside host
           // (e.g. clicking revert buttons keeps focus on the button).
+          // 但必须确保不在普通编辑器模式下
           try {
-            if (window.__gmRevertAsLocalEdits && window.__gmEditUndoStack && window.__gmEditUndoStack.length > 0 && typeof window.__gmRestoreEditorSnapshot === 'function') {
+            if (!isInPlainEditorMode && window.__gmRevertAsLocalEdits && window.__gmEditUndoStack && window.__gmEditUndoStack.length > 0 && typeof window.__gmRestoreEditorSnapshot === 'function') {
               e.preventDefault();
               try { e.stopImmediatePropagation(); } catch (e3) {}
               try { e.stopPropagation(); } catch (e3) {}
               try {
                 window.__gmSuppressFlashHighlight = true;
+                window.__gmSuppressNextFlashHighlight = true;
                 window.__gmSuppressScrollToLine = true;
                 setTimeout(() => {
                   try { window.__gmSuppressFlashHighlight = false; } catch (e4) {}
@@ -2500,6 +2603,14 @@
           const t = e && e.target;
           if (!t || !host.contains(t)) return;
 
+          // Plain editor mode: never intercept textarea native undo/redo or input.
+          if (window.__plainEditorFilename) return;
+
+          try {
+            const tn = t && t.tagName ? String(t.tagName).toUpperCase() : '';
+            if (tn === 'INPUT' || tn === 'TEXTAREA') return;
+          } catch (e2) {}
+
           const it = String(e.inputType || '');
           const affectsText = it.startsWith('insert') || it.startsWith('delete') || it === 'historyUndo' || it === 'historyRedo';
           if (!affectsText) return;
@@ -2525,6 +2636,10 @@
 
           const host = document.getElementById('diffView');
           if (!host) return;
+          
+          // 如果在编辑器模式下,不拦截Ctrl+Z/Y,让textarea使用原生行为
+          if (window.__plainEditorFilename) return;
+          
           const ae = document.activeElement;
           const sel = window.getSelection ? window.getSelection() : null;
           const n = sel ? (sel.focusNode || sel.anchorNode) : null;
@@ -2544,6 +2659,7 @@
           if (isUndo) {
             try {
               window.__gmSuppressFlashHighlight = true;
+              window.__gmSuppressNextFlashHighlight = true;
               window.__gmSuppressScrollToLine = true;
               setTimeout(() => {
                 try { window.__gmSuppressFlashHighlight = false; } catch (e3) {}
@@ -2568,6 +2684,7 @@
           if (isRedo) {
             try {
               window.__gmSuppressFlashHighlight = true;
+              window.__gmSuppressNextFlashHighlight = true;
               window.__gmSuppressScrollToLine = true;
               setTimeout(() => {
                 try { window.__gmSuppressFlashHighlight = false; } catch (e3) {}
@@ -3400,11 +3517,31 @@
     }
 
     document.addEventListener('input', (e) => {
-      const t = e.target;
-      if (!t || !t.classList || !t.classList.contains('editable-line')) return;
-      try { t.dataset.dirty = '1'; } catch (e) {}
-      window.__dirtyEdits = true;
-      scheduleAutoSave();
+      try {
+        const host = document.getElementById('diffView');
+        if (!host) return;
+
+        let t = e && e.target;
+        let line = null;
+        try {
+          if (t && t.closest) line = t.closest('.editable-line');
+        } catch (e2) {}
+
+        // In ce-host mode, input target may be the host itself; locate active line from selection.
+        if (!line) {
+          try {
+            const sel = window.getSelection ? window.getSelection() : null;
+            const node = sel && sel.rangeCount ? (sel.focusNode || sel.anchorNode || sel.getRangeAt(0).startContainer) : null;
+            const el = node ? ((node.nodeType === Node.ELEMENT_NODE) ? node : (node.parentElement || null)) : null;
+            if (el && el.closest) line = el.closest('.editable-line');
+          } catch (e2) {}
+        }
+
+        if (!line || !host.contains(line)) return;
+        try { line.dataset.dirty = '1'; } catch (e2) {}
+        window.__dirtyEdits = true;
+        scheduleAutoSave();
+      } catch (e2) {}
     }, true);
 
     let __editMouseDown = null;
@@ -3551,26 +3688,32 @@
           if (host && typeof __gmPushEditorSnapshot === 'function') __gmPushEditorSnapshot(host);
         } catch (e2) {}
 
-        const allLines = Array.from(document.querySelectorAll('.editable-line'));
-        if (!allLines.length) return false;
-        const covered = [];
-        for (const el of allLines) {
+        // Determine covered rows by .dl to make multi-line deletion robust in split view
+        // (one row may contain multiple .lc cells).
+        const allDls = host ? Array.from(host.querySelectorAll('.dl')) : [];
+        if (!allDls.length) return false;
+        const coveredDls = [];
+        for (const dl of allDls) {
           try {
-            if (r.intersectsNode(el)) covered.push(el);
-          } catch (e) {
-          }
+            const cell = dl.querySelector ? dl.querySelector('.lc') : null;
+            if (cell && r.intersectsNode(cell)) coveredDls.push(dl);
+          } catch (e) {}
         }
-        if (!covered.length) return false;
-        const first = covered[0];
-        const last = covered[covered.length - 1];
+        if (!coveredDls.length) return false;
+
+        const firstDl = coveredDls[0];
+        const lastDl = coveredDls[coveredDls.length - 1];
+        if (!firstDl || !lastDl) return false;
+
+        const first = (firstDl.querySelector && (firstDl.querySelector('.lc.editable-line') || firstDl.querySelector('.lc'))) || null;
+        const last = (lastDl.querySelector && (lastDl.querySelector('.lc.editable-line') || lastDl.querySelector('.lc'))) || null;
         if (!first || !last) return false;
 
-        const lines = allLines;
-        const sIdx = lines.indexOf(first);
-        const eIdx = lines.indexOf(last);
-        if (sIdx < 0 || eIdx < 0) return false;
-        const from = Math.min(sIdx, eIdx);
-        const to = Math.max(sIdx, eIdx);
+        const from = allDls.indexOf(firstDl);
+        const to = allDls.indexOf(lastDl);
+        if (from < 0 || to < 0) return false;
+        const startRow = Math.min(from, to);
+        const endRow = Math.max(from, to);
 
         __enableLineEditing(first);
 
@@ -3600,8 +3743,10 @@
         window.__dirtyEdits = true;
         scheduleAutoSave();
 
-        for (let i = to; i > from; i--) {
-          const el = lines[i];
+        for (let i = endRow; i > startRow; i--) {
+          const dl = allDls[i];
+          if (!dl) continue;
+          const el = (dl.querySelector && (dl.querySelector('.lc.editable-line') || dl.querySelector('.lc'))) || null;
           if (el) __recordAndRemoveDl(el);
         }
 
@@ -3913,7 +4058,6 @@
     };
 
     document.addEventListener('keydown', __editableLineKeydownListener, true);
-    window.addEventListener('keydown', __editableLineKeydownListener, true);
 
     document.addEventListener('paste', (e) => {
       const text = (e.clipboardData && e.clipboardData.getData) ? e.clipboardData.getData('text') : '';
@@ -5138,6 +5282,12 @@
     try {
       if (window.__gmSuppressFlashHighlight) return;
     } catch (e) {}
+    try {
+      if (window.__gmSuppressNextFlashHighlight) {
+        window.__gmSuppressNextFlashHighlight = false;
+        return;
+      }
+    } catch (e) {}
     el.classList.remove('find-hit');
     // force reflow so animation restarts
     void el.offsetWidth;
@@ -5319,6 +5469,12 @@
         __gmCaptureLastLineForPath(window.__plainEditorFilename);
       }
     } catch (e) {}
+    
+    // 清除编辑器模式标记（切换到diff视图）
+    window.__plainEditorFilename = null;
+    window.__plainEditorIsExternal = false;
+    window.__plainEditorFileHandle = null;
+    
     curFile = i;
     try {
       const f0 = files && files[i];
@@ -6809,8 +6965,9 @@
   }
 
   async function saveFile(filepath) {
-    // 检查是否在普通编辑器模式
-    if (window.__plainEditorFilename && !filepath) {
+    // 检查是否在普通编辑器模式(必须同时满足: 有文件名 且 textarea存在)
+    const plainEditorTextarea = document.getElementById('plainEditorTextarea');
+    if (window.__plainEditorFilename && plainEditorTextarea && !filepath) {
       await savePlainEditorFile();
       return;
     }
@@ -6871,6 +7028,42 @@
           return t;
         };
 
+        const __serializeWorkingContentFromDom = () => {
+          try {
+            const host = document.getElementById('diffView');
+            if (!host) return null;
+
+            // Split view: serialize from the right panel (current/working tree)
+            let scope = host;
+            if (diffMode === 'split') {
+              const wrap = host.querySelector ? host.querySelector('.split-wrap') : null;
+              const right = wrap ? wrap.querySelector('.sp:last-child') : null;
+              if (!right) return null;
+              scope = right;
+            }
+
+            const dls = Array.from(scope.querySelectorAll('.dl'));
+            if (!dls.length) return null;
+
+            const out = [];
+            for (const dl of dls) {
+              if (!dl || !dl.classList) continue;
+              if (dl.classList.contains('revert-block-hint')) continue;
+
+              // Skip placeholder rows that are not part of working content
+              if (dl.classList.contains('removed')) continue;
+              if (dl.classList.contains('empty')) continue;
+
+              const lc = dl.querySelector ? dl.querySelector('.lc') : null;
+              const txt = lc ? normalizeEditableText(lc.textContent) : '';
+              out.push(txt);
+            }
+            return out;
+          } catch (e) {
+            return null;
+          }
+        };
+
         // 获取文件的当前内容
         const res = await GET(`/api/file_content?path=${encodeURIComponent(f.path)}`);
         if (res.content !== undefined) {
@@ -6882,83 +7075,11 @@
           const fileText = originalContent.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
           const lines = fileText.split('\n');
 
-          // 收集所有编辑过的行及其新内容
-          const editedLinesMap = new Map();
-          editableLines.forEach(line => {
-            const newContent = normalizeEditableText(line.textContent);
-            const dl = line.closest ? line.closest('.dl') : null;
-            const lineIndex = __parseLineIndexFromDl(dl);
-            if (lineIndex !== null && lineIndex !== undefined && lineIndex >= 0) {
-              editedLinesMap.set(lineIndex, newContent);
-            }
-          });
-
-          // 收集前端新增的插入行（没有行号，无法映射到原文件行索引）
-          const insertedOps = [];
-          try {
-            const insertedDls = document.querySelectorAll('.dl[data-gm-insert-after]');
-            let seq = 0;
-            insertedDls.forEach(dl => {
-              const afterStr = dl.getAttribute('data-gm-insert-after');
-              const afterIdx = parseInt(String(afterStr || ''), 10);
-              if (isNaN(afterIdx) || afterIdx < 0) return;
-              const line = dl.querySelector ? dl.querySelector('.lc.editable-line') : null;
-              if (!line) return;
-              const v = normalizeEditableText(line.textContent);
-              insertedOps.push({ type: 'insert', pos: afterIdx + 1, order: seq++, value: v });
-            });
-          } catch (e) {}
-
-          // 更新内容
-          const editedEntries = Array.from(editedLinesMap.entries()).map(([i, v]) => ({ type: 'edit', idx: i, value: v }));
-          let deletedSet = null;
-          try {
-            deletedSet = (window.__deletedLineIndicesByPath && window.__deletedLineIndicesByPath.get(f.path)) ? window.__deletedLineIndicesByPath.get(f.path) : null;
-          } catch (e) {}
-          const deletedEntries = deletedSet ? Array.from(deletedSet.values()).map(i => ({ type: 'delete', idx: i })) : [];
-          const ops = editedEntries.concat(deletedEntries);
-          ops.sort((a, b) => b.idx - a.idx);
-
-          ops.forEach((op) => {
-            const lineIndex = op.idx;
-            if (lineIndex < 0) return;
-            if (op.type === 'delete') {
-              if (lineIndex >= lines.length) return;
-              lines.splice(lineIndex, 1);
-              return;
-            }
-
-            if (lineIndex >= lines.length) return;
-            const newContent = op.value;
-            const s = (newContent !== null && newContent !== undefined) ? String(newContent) : '';
-            if (s.indexOf('\n') >= 0) {
-              const parts = s.split('\n');
-              lines.splice(lineIndex, 1, ...parts);
-            } else {
-              lines[lineIndex] = s;
-            }
-          });
-
-          if (insertedOps && insertedOps.length) {
-            insertedOps.sort((a, b) => {
-              if (b.pos !== a.pos) return b.pos - a.pos;
-              return b.order - a.order;
-            });
-            insertedOps.forEach(op => {
-              const p = op.pos;
-              if (p < 0) return;
-              const s = (op.value !== null && op.value !== undefined) ? String(op.value) : '';
-              if (s.indexOf('\n') >= 0) {
-                const parts = s.split('\n');
-                lines.splice(Math.min(p, lines.length), 0, ...parts);
-              } else {
-                lines.splice(Math.min(p, lines.length), 0, s);
-              }
-            });
+          // Serialize content directly from current DOM to guarantee WYSIWYG.
+          const domLines = __serializeWorkingContentFromDom();
+          if (domLines && Array.isArray(domLines)) {
+            content = domLines.join(detectedEOL);
           }
-
-          // 重新组合内容 - 使用原文件的换行符格式
-          content = lines.join(detectedEOL);
         }
       } else {
         // Get content from the editor
@@ -9629,6 +9750,15 @@
 
       // 只处理第一个文件
       const file = files[0];
+      let fileHandle = null;
+      try {
+        const items = e.dataTransfer && e.dataTransfer.items ? Array.from(e.dataTransfer.items) : [];
+        const it = items && items.length ? items.find(x => x && x.kind === 'file') : null;
+        if (it && typeof it.getAsFileSystemHandle === 'function') {
+          const h = await it.getAsFileSystemHandle();
+          if (h && h.kind === 'file') fileHandle = h;
+        }
+      } catch (e2) { fileHandle = null; }
       
       // 检查文件大小（限制为10MB）
       const maxSize = 10 * 1024 * 1024;
@@ -9644,8 +9774,8 @@
         // 读取文件内容
         const content = await readFileAsText(file);
         
-        // 在编辑器模式中打开文件
-        openFileInEditor(file.name, content);
+        // 在编辑器模式中打开文件，标记为外部文件
+        openFileInEditor(file.name, content, true, fileHandle);
         
         hideLoadingToast();
         toast(`✓ 已打开文件: ${file.name}`, 'ok');
@@ -9748,7 +9878,7 @@
   }
 
   // 在编辑器模式中打开文件
-  function openFileInEditor(filename, content) {
+  function openFileInEditor(filename, content, isExternal = false, fileHandle = null) {
     try { __gmInitLastLineTrackingOnce(); } catch (e) {}
     try {
       if (curFile !== null && files && files[curFile] && files[curFile].path) {
@@ -9758,16 +9888,27 @@
         __gmCaptureLastLineForPath(window.__plainEditorFilename);
       }
     } catch (e) {}
+    
     // 清除当前选中状态
     curFile = null;
     curLogFile = null;
     
+    // 清除diff模式的编辑器历史栈,防止状态混乱
+    // 这解决了从"变更文件"视图切换到编辑器模式时的撤销/重做问题
+    try {
+      if (window.__gmEditUndoStack) window.__gmEditUndoStack = [];
+      if (window.__gmEditRedoStack) window.__gmEditRedoStack = [];
+      window.__gmWholeContentDirty = false;
+    } catch (e) {}
+    
     // 更新文件信息标签，添加关闭按钮
     const totalLines = content.split('\n').length;
+    const externalLabel = isExternal ? '<span style="color:var(--warn);font-size:10px;margin-left:6px;">外部文件</span>' : '';
     document.getElementById('diffLabel').innerHTML = 
       `<span class="fn" onclick="showRecentFilesDropdown(); event.stopPropagation();" title="点击查看最近打开的文件">${esc(filename)}</span>
        <span class="line-count">${totalLines}行</span>
        <span style="color:var(--text3);font-size:10px">编辑器模式</span>
+       ${externalLabel}
        <button class="editor-close-btn" onclick="closeEditorFile()" title="关闭文件 (Ctrl+W)">
          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
            <line x1="18" y1="6" x2="6" y2="18"/>
@@ -9789,13 +9930,33 @@
         recentFiles.unshift({
           path: p,
           status: 'E',
-          external: true,
+          external: isExternal,
           content: String(content || ''),
           timestamp: Date.now()
         });
         if (recentFiles.length > MAX_RECENT_FILES) recentFiles = recentFiles.slice(0, MAX_RECENT_FILES);
       }
     } catch (e) {}
+    
+    // 标记是否为外部文件
+    window.__plainEditorIsExternal = isExternal;
+    // Reuse cached handle when switching views / reopening from recent list
+    try {
+      const p = String(filename || '');
+      if (isExternal && (!fileHandle) && p && window.__externalFileHandleByPath && window.__externalFileHandleByPath.get(p)) {
+        fileHandle = window.__externalFileHandleByPath.get(p);
+      }
+    } catch (e) {}
+    window.__plainEditorFileHandle = fileHandle || null;
+    try {
+      const p = String(filename || '');
+      if (isExternal && window.__plainEditorFileHandle && p && window.__externalFileHandleByPath) {
+        window.__externalFileHandleByPath.set(p, window.__plainEditorFileHandle);
+      }
+    } catch (e) {}
+    try { window.__plainEditorExternalLastModified = null; } catch (e) {}
+    try { window.__plainEditorExternalStaleWarned = false; } catch (e) {}
+    try { __gmStartExternalEditorWatch(); } catch (e) {}
     
     // 渲染编辑器
     renderPlainEditor(content, filename);
@@ -9809,6 +9970,151 @@
       return;
     }
     
+    const ta = document.getElementById('plainEditorTextarea');
+    const content = ta ? String(ta.value || '') : '';
+    const filename = window.__plainEditorFilename;
+    
+    // 外部文件:尝试使用File System Access API保存
+    if (window.__plainEditorIsExternal) {
+      // 优先复用已获得的文件句柄；避免每次保存都弹出选择器
+      if (window.__plainEditorFileHandle) {
+        try {
+          const fh = window.__plainEditorFileHandle;
+
+          // Ensure we have readwrite permission before writing
+          try {
+            if (fh.queryPermission && fh.requestPermission) {
+              let perm = await fh.queryPermission({ mode: 'readwrite' });
+              if (perm !== 'granted') {
+                perm = await fh.requestPermission({ mode: 'readwrite' });
+              }
+              if (perm !== 'granted') {
+                throw new Error('PermissionDenied');
+              }
+            }
+          } catch (eperm) {
+            throw eperm;
+          }
+
+          const writable = await fh.createWritable();
+          await writable.write(content);
+          await writable.close();
+
+          try {
+            if (window.__plainEditorIsExternal && window.__plainEditorFileHandle === fh && typeof fh.getFile === 'function') {
+              const f2 = await fh.getFile();
+              window.__plainEditorExternalLastModified = f2 && typeof f2.lastModified === 'number' ? f2.lastModified : window.__plainEditorExternalLastModified;
+            }
+          } catch (e2) {}
+
+          toast(`✓ 文件已保存: ${filename}`, 'ok');
+          window.__dirtyEdits = false;
+          try {
+            if (window.__autoSaveTimer) {
+              clearTimeout(window.__autoSaveTimer);
+              window.__autoSaveTimer = null;
+            }
+          } catch (e2) {}
+          try { if (typeof window.setEditStatus === 'function') window.setEditStatus('已保存'); } catch (e2) {}
+          return;
+        } catch (error) {
+          console.warn('使用文件句柄保存失败:', error);
+          // 继续尝试其他方法（如无权限/句柄失效等）
+        }
+      }
+      
+      // 无句柄时：优先让用户选择“原文件”并写回，避免保存为新文件
+      if (window.showOpenFilePicker) {
+        try {
+          const handles = await window.showOpenFilePicker({ multiple: false });
+          const fh = handles && handles.length ? handles[0] : null;
+          if (fh) {
+            const writable = await fh.createWritable();
+            await writable.write(content);
+            await writable.close();
+            window.__plainEditorFileHandle = fh;
+            try {
+              const p = String(filename || '');
+              if (p && window.__externalFileHandleByPath) window.__externalFileHandleByPath.set(p, fh);
+            } catch (e) {}
+            toast(`✓ 文件已保存: ${filename}`, 'ok');
+            window.__dirtyEdits = false;
+            try {
+              if (window.__autoSaveTimer) {
+                clearTimeout(window.__autoSaveTimer);
+                window.__autoSaveTimer = null;
+              }
+            } catch (e2) {}
+            try { if (typeof window.setEditStatus === 'function') window.setEditStatus('已保存'); } catch (e2) {}
+            return;
+          }
+        } catch (error) {
+          if (error && error.name === 'AbortError') return;
+          console.warn('showOpenFilePicker失败:', error);
+        }
+      }
+
+      // 兼容兜底：仅当无 showOpenFilePicker 时才用 showSaveFilePicker（可能产生新文件）
+      if (window.showSaveFilePicker) {
+        try {
+          const options = {
+            suggestedName: filename,
+            types: [{
+              description: 'Text Files',
+              accept: { 'text/plain': ['.txt', '.md', '.js', '.py', '.html', '.css', '.json'] }
+            }]
+          };
+          
+          const fileHandle = await window.showSaveFilePicker(options);
+          const writable = await fileHandle.createWritable();
+          await writable.write(content);
+          await writable.close();
+          
+          // 保存文件句柄供下次使用
+          window.__plainEditorFileHandle = fileHandle;
+          
+          toast(`✓ 文件已保存: ${filename}`, 'ok');
+          window.__dirtyEdits = false;
+          try {
+            if (window.__autoSaveTimer) {
+              clearTimeout(window.__autoSaveTimer);
+              window.__autoSaveTimer = null;
+            }
+          } catch (e2) {}
+          try { if (typeof window.setEditStatus === 'function') window.setEditStatus('已保存'); } catch (e2) {}
+          return;
+        } catch (error) {
+          // 用户取消或其他错误
+          if (error.name !== 'AbortError') {
+            console.warn('showSaveFilePicker失败:', error);
+          } else {
+            return; // 用户取消,不继续
+          }
+        }
+      }
+      
+      // 回退方案:触发下载
+      const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+      
+      toast(`✓ 文件已下载: ${filename}`, 'info');
+      window.__dirtyEdits = false;
+      try {
+        if (window.__autoSaveTimer) {
+          clearTimeout(window.__autoSaveTimer);
+          window.__autoSaveTimer = null;
+        }
+      } catch (e2) {}
+      try { if (typeof window.setEditStatus === 'function') window.setEditStatus('已保存'); } catch (e2) {}
+      return;
+    }
+    
+    // 仓库内文件:保存到工作目录
     if (window.__saveFileInFlight) return;
     window.__saveFileInFlight = true;
 
@@ -9819,16 +10125,19 @@
     }
 
     try {
-      const ta = document.getElementById('plainEditorTextarea');
-      const content = ta ? String(ta.value || '') : '';
-      const filename = window.__plainEditorFilename;
-      
       // 尝试保存到工作目录
       const res = await POST('/api/save_file', {path: filename, content: content});
       
       if (res.ok) {
         toast(`✓ 文件已保存: ${filename}`, 'ok');
         window.__dirtyEdits = false;
+        try {
+          if (window.__autoSaveTimer) {
+            clearTimeout(window.__autoSaveTimer);
+            window.__autoSaveTimer = null;
+          }
+        } catch (e2) {}
+        try { if (typeof window.setEditStatus === 'function') window.setEditStatus('已保存'); } catch (e2) {}
         
         // 清除编辑标记
         document.querySelectorAll('.lc.editable-line[data-dirty="1"]').forEach(el => {
@@ -9884,13 +10193,23 @@
   function performCloseEditor(filename) {
     // 清除编辑器状态
     window.__plainEditorFilename = null;
+    window.__plainEditorIsExternal = false;
+    window.__plainEditorFileHandle = null;
     window.__dirtyEdits = false;
+    try { __gmStopExternalEditorWatch(); } catch (e) {}
 
     // 清除自动保存定时器
     if (window.__autoSaveTimer) {
       clearTimeout(window.__autoSaveTimer);
       window.__autoSaveTimer = null;
     }
+    
+    // 清除编辑器历史栈,防止状态污染
+    try {
+      if (window.__gmEditUndoStack) window.__gmEditUndoStack = [];
+      if (window.__gmEditRedoStack) window.__gmEditRedoStack = [];
+      window.__gmWholeContentDirty = false;
+    } catch (e) {}
 
     // 重置视图
     const view = document.getElementById('diffView');
@@ -10022,6 +10341,7 @@
 
       ta.addEventListener('input', () => {
         window.__dirtyEdits = true;
+        try { window.__plainEditorExternalStaleWarned = false; } catch (e) {}
         renderGutter();
         syncScroll();
         if (window.__autoSaveEnabled) {
@@ -10055,6 +10375,7 @@
     // 存储当前内容用于保存
     window.__plainEditorFilename = filename;
     window.__dirtyEdits = false;
+    try { __gmStartExternalEditorWatch(); } catch (e) {}
     
     // 初始化状态提示
     if (typeof window.setEditStatus === 'function') {
@@ -10065,19 +10386,81 @@
   // 初始化拖拽功能
   initFileDragDrop();
 
-  // 添加全局Ctrl+W拦截器（使用capture阶段，确保在浏览器默认行为之前执行）
-  window.addEventListener('keydown', (e) => {
-    const k = (e.key || '').toLowerCase();
-    if (e.ctrlKey && !e.shiftKey && !e.altKey && k === 'w') {
-      if (window.__plainEditorFilename) {
-        e.preventDefault();
-        e.stopPropagation();
-        e.stopImmediatePropagation();
-        // 不在这里调用closeEditorFile，让document的监听器处理
-        // 只是阻止默认行为
+  function __gmStopExternalEditorWatch() {
+    try {
+      if (window.__plainEditorExternalWatchTimer) {
+        clearInterval(window.__plainEditorExternalWatchTimer);
+        window.__plainEditorExternalWatchTimer = null;
       }
-    }
-  }, true); // true 表示在捕获阶段处理
+    } catch (e) {}
+  }
+
+  function __gmStartExternalEditorWatch() {
+    try {
+      __gmStopExternalEditorWatch();
+      if (!window.__plainEditorFilename) return;
+      if (!window.__plainEditorIsExternal) return;
+      const handle = window.__plainEditorFileHandle;
+      if (!handle || typeof handle.getFile !== 'function') return;
+
+      // Prime lastModified
+      (async () => {
+        try {
+          const f = await handle.getFile();
+          window.__plainEditorExternalLastModified = f && typeof f.lastModified === 'number' ? f.lastModified : null;
+        } catch (e) {}
+      })();
+
+      window.__plainEditorExternalWatchTimer = setInterval(async () => {
+        try {
+          if (!window.__plainEditorFilename || !window.__plainEditorIsExternal) {
+            __gmStopExternalEditorWatch();
+            return;
+          }
+          const curHandle = window.__plainEditorFileHandle;
+          if (!curHandle || typeof curHandle.getFile !== 'function') return;
+
+          const f = await curHandle.getFile();
+          const lm = f && typeof f.lastModified === 'number' ? f.lastModified : null;
+          const prev = window.__plainEditorExternalLastModified;
+          if (lm === null || prev === null) {
+            window.__plainEditorExternalLastModified = lm;
+            return;
+          }
+          if (lm <= prev) return;
+
+          // external changed
+          if (window.__dirtyEdits) {
+            if (!window.__plainEditorExternalStaleWarned) {
+              window.__plainEditorExternalStaleWarned = true;
+              toast('检测到外部文件已修改（当前有未保存更改，未自动覆盖）', 'warn');
+            }
+            window.__plainEditorExternalLastModified = lm;
+            return;
+          }
+
+          const txt = await f.text();
+          const ta = document.getElementById('plainEditorTextarea');
+          const gutter = document.getElementById('plainEditorGutter');
+          if (ta) {
+            ta.value = String(txt || '');
+            try {
+              if (gutter) {
+                const n = Math.max(1, String(ta.value || '').split('\n').length);
+                let html = '';
+                for (let i = 1; i <= n; i++) html += `<div class="n">${i}</div>`;
+                gutter.innerHTML = html;
+                gutter.scrollTop = ta.scrollTop;
+              }
+            } catch (e2) {}
+            toast('外部文件已更新，已同步到编辑器', 'info');
+          }
+          window.__plainEditorExternalLastModified = lm;
+        } catch (e) {
+        }
+      }, 2000);
+    } catch (e) {}
+  }
 
   // 防止用户意外关闭有未保存更改的标签页
   window.addEventListener('beforeunload', (e) => {
