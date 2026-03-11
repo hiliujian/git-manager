@@ -4059,6 +4059,184 @@
 
     document.addEventListener('keydown', __editableLineKeydownListener, true);
 
+    if (!window.__gmCtrlASelectInited) {
+      window.__gmCtrlASelectInited = true;
+      document.addEventListener('keydown', (e) => {
+        try {
+          if (!e) return;
+          if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+          if (String(e.key || '').toLowerCase() !== 'a') return;
+
+          // Do not override native behavior in regular inputs/textarea or editor mode textarea
+          const t = e.target;
+          const tag = t && t.tagName ? String(t.tagName).toLowerCase() : '';
+          if (tag === 'input' || tag === 'textarea' || (t && t.isContentEditable === false && t.closest && t.closest('textarea'))) return;
+          if (t && t.id === 'plainEditorTextarea') return;
+
+          const host = document.getElementById('diffView');
+          if (!host) return;
+
+          const sel = window.getSelection ? window.getSelection() : null;
+          const hasSelInHost = (() => {
+            try {
+              if (t && host.contains(t)) return true;
+              const ae = document.activeElement;
+              if (ae && host.contains(ae)) return true;
+              if (!sel || sel.rangeCount === 0) return false;
+              const r = sel.getRangeAt(0);
+              const ca = r.commonAncestorContainer;
+              const caEl = ca ? ((ca.nodeType === Node.ELEMENT_NODE) ? ca : (ca.parentElement || null)) : null;
+              if (caEl && host.contains(caEl)) return true;
+              return false;
+            } catch (e2) {
+              return false;
+            }
+          })();
+          if (!hasSelInHost) return;
+
+          // Choose scope: in split view, select within the panel where the event happens
+          let scope = host;
+          try {
+            if (diffMode === 'split') {
+              const sp = t && t.closest ? t.closest('.sp') : null;
+              if (sp && host.contains(sp)) scope = sp;
+            }
+          } catch (e2) {}
+
+          const lcs = Array.from(scope.querySelectorAll('.dl:not(.revert-block-hint):not(.gm-gap-hint) .lc'));
+          if (!lcs.length) return;
+
+          const first = lcs[0];
+          const last = lcs[lcs.length - 1];
+          if (!first || !last) return;
+
+          let ok = false;
+          const r2 = document.createRange();
+          try {
+            r2.setStart(first, 0);
+          } catch (e2) {
+            try { r2.setStartBefore(first); } catch (e3) { return; }
+          }
+          try {
+            r2.setEnd(last, last.childNodes ? last.childNodes.length : 0);
+          } catch (e2) {
+            try { r2.setEndAfter(last); } catch (e3) { return; }
+          }
+          try {
+            if (!sel) return;
+            sel.removeAllRanges();
+            sel.addRange(r2);
+            ok = true;
+          } catch (e2) {
+            ok = false;
+          }
+          if (!ok) return;
+
+          e.preventDefault();
+          try { e.stopImmediatePropagation(); } catch (e2) {}
+          try { e.stopPropagation(); } catch (e2) {}
+        } catch (e2) {}
+      }, true);
+    }
+
+    const __gmInsertMultilineAtCaret = (lineEl, plainText) => {
+      try {
+        const host = document.getElementById('diffView');
+        if (!host || !lineEl || !host.contains(lineEl)) return false;
+
+        const dl = lineEl.closest ? lineEl.closest('.dl') : null;
+        if (!dl) return false;
+
+        try {
+          if (typeof __gmPushEditorSnapshot === 'function') __gmPushEditorSnapshot(host);
+        } catch (e2) {}
+
+        const col = (() => {
+          try { return Math.max(0, Number(getCaretOffset(lineEl)) || 0); } catch (e2) { return 0; }
+        })();
+
+        const clean = (s) => String(s || '').replace(/[\r\u2028\u2029]/g, '');
+        const raw = clean(lineEl.textContent || '');
+        const pos = Math.max(0, Math.min(col, raw.length));
+
+        const parts = String(plainText || '').split('\n');
+        if (parts.length <= 1) return false;
+
+        const left = raw.slice(0, pos);
+        const right = raw.slice(pos);
+
+        // First line stays in current dl
+        lineEl.textContent = left + clean(parts[0]);
+        try { lineEl.dataset.dirty = '1'; } catch (e2) {}
+        try { lineEl.dispatchEvent(new Event('input', { bubbles: true })); } catch (e2) {}
+
+        const baseIdx = (() => {
+          try {
+            const ln = dl.querySelector ? dl.querySelector('.ln') : null;
+            const n = ln ? parseInt(String(ln.textContent || ''), 10) : NaN;
+            return isNaN(n) ? null : (n - 1);
+          } catch (e2) {
+            return null;
+          }
+        })();
+
+        let insertAfter = dl;
+        for (let i = 1; i < parts.length; i++) {
+          let newDl = null;
+          try { newDl = dl.cloneNode(true); } catch (e2) { newDl = null; }
+          if (!newDl) break;
+
+          const newLine = newDl.querySelector ? newDl.querySelector('.editable-line') : null;
+          if (!newLine) break;
+
+          // Clear line number to avoid misleading indices
+          try {
+            const ln2 = newDl.querySelector ? newDl.querySelector('.ln') : null;
+            if (ln2) ln2.textContent = '';
+          } catch (e2) {}
+
+          try {
+            if (baseIdx !== null && baseIdx !== undefined && baseIdx >= 0) {
+              newDl.setAttribute('data-gm-insert-after', String(baseIdx));
+            }
+          } catch (e2) {}
+
+          const midText = clean(parts[i]);
+          if (i === parts.length - 1) {
+            newLine.textContent = midText + right;
+          } else {
+            newLine.textContent = midText;
+          }
+          try { newLine.dataset.dirty = '1'; } catch (e2) {}
+          try { newLine.dispatchEvent(new Event('input', { bubbles: true })); } catch (e2) {}
+
+          try {
+            insertAfter.parentNode.insertBefore(newDl, insertAfter.nextSibling);
+            insertAfter = newDl;
+          } catch (e2) {
+            break;
+          }
+        }
+
+        window.__dirtyEdits = true;
+        scheduleAutoSave();
+
+        // Focus last inserted line at end of inserted content
+        try {
+          const lastDl = insertAfter;
+          const lastLine = lastDl && lastDl.querySelector ? lastDl.querySelector('.editable-line') : null;
+          if (lastLine) {
+            lastLine.focus();
+            setCaretOffset(lastLine, (lastLine.textContent || '').length - right.length);
+          }
+        } catch (e2) {}
+
+        return true;
+      } catch (e) {
+        return false;
+      }
+    };
+
     document.addEventListener('paste', (e) => {
       const text = (e.clipboardData && e.clipboardData.getData) ? e.clipboardData.getData('text') : '';
       if (!text) return;
@@ -4067,6 +4245,17 @@
         const sel = window.getSelection ? window.getSelection() : null;
         if (sel && !sel.isCollapsed && __selectionWithinEditableLines()) {
           e.preventDefault();
+          if (plain.indexOf('\n') >= 0) {
+            const okDel = __handleMultiLineSelectionReplace('');
+            if (okDel) {
+              // insert at new caret position
+              const r = sel && sel.rangeCount ? sel.getRangeAt(0) : null;
+              const node = r ? (sel.focusNode || r.startContainer) : null;
+              const el = node ? ((node.nodeType === Node.ELEMENT_NODE) ? node : (node.parentElement || null)) : null;
+              const line = (el && el.closest) ? el.closest('.editable-line') : null;
+              if (line && __gmInsertMultilineAtCaret(line, plain)) return;
+            }
+          }
           const ok = __handleMultiLineSelectionReplace(plain);
           if (ok) return;
           return;
@@ -4074,16 +4263,46 @@
       } catch (e) {}
       if (__selectionSpansMultipleEditableLines()) {
         e.preventDefault();
+        if (plain.indexOf('\n') >= 0) {
+          try {
+            const okDel = __handleMultiLineSelectionReplace('');
+            if (okDel) {
+              const sel = window.getSelection ? window.getSelection() : null;
+              const r = sel && sel.rangeCount ? sel.getRangeAt(0) : null;
+              const node = r ? (sel.focusNode || r.startContainer) : null;
+              const el = node ? ((node.nodeType === Node.ELEMENT_NODE) ? node : (node.parentElement || null)) : null;
+              const line = (el && el.closest) ? el.closest('.editable-line') : null;
+              if (line && __gmInsertMultilineAtCaret(line, plain)) return;
+            }
+          } catch (e2) {}
+        }
         const ok = __handleMultiLineSelectionReplace(plain);
         if (ok) return;
         return;
       }
       const t = e.target;
-      if (!t || !t.classList || !t.classList.contains('editable-line')) return;
+      let line = null;
+      try {
+        if (t && t.closest) line = t.closest('.editable-line');
+      } catch (e2) {}
+      if (!line) {
+        try {
+          const sel = window.getSelection ? window.getSelection() : null;
+          const r = sel && sel.rangeCount ? sel.getRangeAt(0) : null;
+          const node = r ? (sel.focusNode || sel.anchorNode || r.startContainer) : null;
+          const el = node ? ((node.nodeType === Node.ELEMENT_NODE) ? node : (node.parentElement || null)) : null;
+          if (el && el.closest) line = el.closest('.editable-line');
+        } catch (e2) {}
+      }
+      if (!line) return;
       e.preventDefault();
-      __enableLineEditing(t);
-      insertTextAtCaret(t, plain);
-      t.dispatchEvent(new Event('input', { bubbles: true }));
+      __enableLineEditing(line);
+      if (plain.indexOf('\n') >= 0) {
+        const ok = __gmInsertMultilineAtCaret(line, plain);
+        if (ok) return;
+      }
+      insertTextAtCaret(line, plain);
+      line.dispatchEvent(new Event('input', { bubbles: true }));
     }, true);
 
     function __gmCopyFromLcCells(e) {
@@ -4597,6 +4816,7 @@
   let commitLinesTotalByPath = new Map();
   let curFileContent = '';       // 当前文件完整内容
   let baseFileContent = null;    // HEAD 版本文件内容（原始版本展示用）
+  let curFileEncoding = 'utf-8'; // 当前文件编码
 
   // 变更视图上下文行数（git diff --unified=N）
   let changeViewCtx = 5;
@@ -5524,6 +5744,7 @@
       const name = segs[segs.length-1];
       const totalLines = getTotalLineCount(curFileContent);
       const lineCountLabel = totalLines > 0 ? `<span class="line-count">${totalLines}行</span>` : '';
+
       document.getElementById('diffLabel').innerHTML =
               `<span class="fi-st ${fileObj.status}" style="font-size:9px">${fileObj.status}</span>
        <span class="fn" onclick="showRecentFilesDropdown(); event.stopPropagation();" title="点击查看最近打开的文件">${esc(fileObj.path)}</span>
@@ -5590,22 +5811,26 @@
     console.log('loadDiff: loading file content for:', f.path, 'status:', f.status);
     if (f.status === 'D') {
       curFileContent = null;
+      curFileEncoding = 'utf-8';
     } else {
       try {
-        const contentRes = await POST('/api/file_content', {path: f.path});
+        const contentRes = await POST('/api/file_content', { path: f.path });
         console.log('loadDiff: content response:', contentRes);
 
         if (contentRes.ok && contentRes.content !== null && contentRes.content !== undefined) {
           curFileContent = contentRes.content;
-          console.log('loadDiff: file content loaded, length:', curFileContent.length);
+          curFileEncoding = contentRes.encoding || 'utf-8';
+          console.log('loadDiff: file content loaded, length:', curFileContent.length, 'encoding:', curFileEncoding);
         } else {
           console.warn('loadDiff: failed to load file content:', contentRes);
           curFileContent = '';
+          curFileEncoding = 'utf-8';
           console.log('loadDiff: setting empty content as fallback');
         }
       } catch (error) {
         console.error('loadDiff: error loading file content:', error);
         curFileContent = '';
+        curFileEncoding = 'utf-8';
       }
     }
 
@@ -6069,20 +6294,20 @@
       const to = Number(toNum);
       const missing = (Number.isFinite(from) && Number.isFinite(to)) ? Math.max(0, to - from - 1) : '';
       const msg = missing ? `中间已折叠 ${missing} 行（上下文 ${changeViewCtx}）` : `中间内容已折叠（上下文 ${changeViewCtx}）`;
-      return `<div class="dl context" style="opacity:.8">
-      <span class="ls"></span>
-      <span class="ln"></span>
-      <span class="lc" style="color:var(--text3)">... ${msg} <a href="#" onclick="expandChangeViewContext(5);return false;" style="color:var(--accent)">展开更多</a></span>
+      return `<div class="dl context gm-gap-hint" style="opacity:.8" contenteditable="false">
+      <span class="ls" contenteditable="false"></span>
+      <span class="ln" contenteditable="false"></span>
+      <span class="lc" contenteditable="false" style="color:var(--text3)">... ${msg} <a href="#" contenteditable="false" onclick="expandChangeViewContext(5);return false;" style="color:var(--accent)">展开更多</a></span>
     </div>`;
     }
 
     function renderEdgeGapRow(position, missing) {
       const side = position === 'top' ? '上方' : '下方';
       const msg = missing ? `${side}已折叠 ${missing} 行（上下文 ${changeViewCtx}）` : `${side}内容已折叠（上下文 ${changeViewCtx}）`;
-      return `<div class="dl context" style="opacity:.8">
-      <span class="ls"></span>
-      <span class="ln"></span>
-      <span class="lc" style="color:var(--text3)">... ${msg} <a href="#" onclick="expandChangeViewContext(5);return false;" style="color:var(--accent)">展开更多</a></span>
+      return `<div class="dl context gm-gap-hint" style="opacity:.8" contenteditable="false">
+      <span class="ls" contenteditable="false"></span>
+      <span class="ln" contenteditable="false"></span>
+      <span class="lc" contenteditable="false" style="color:var(--text3)">... ${msg} <a href="#" contenteditable="false" onclick="expandChangeViewContext(5);return false;" style="color:var(--accent)">展开更多</a></span>
     </div>`;
     }
 
@@ -6718,6 +6943,11 @@
     </div>`;
 
       applyIndeterminateCheckboxes(view);
+      setupEditableLineEditing();
+      try {
+        const first = view.querySelector('.editable-line');
+        if (first && typeof first.focus === 'function') first.focus({ preventScroll: true });
+      } catch (e) {}
     } else {
       // Unified single-column (current-only) view
       const fpEsc = escJsString(file.path);
@@ -6995,24 +7225,10 @@
       if (window.__gmWholeContentDirty) {
         // Use curFileContent directly (e.g. revert-as-local-edits path)
       } else {
-
-      function __parseLineIndexFromDl(dl){
-        if (!dl || !dl.querySelectorAll) return null;
-        const els = dl.querySelectorAll('.ln');
-        if (!els || !els.length) return null;
-        for (let i = els.length - 1; i >= 0; i--) {
-          const txt = els[i] ? (els[i].textContent || '') : '';
-          const n = parseInt(txt, 10);
-          if (!isNaN(n)) return n - 1;
-        }
-        return null;
-      }
-
-      // 检查是否在diff视图中，并且有编辑过的行
-      const dirtyLines = document.querySelectorAll('.lc.editable-line[data-dirty="1"]');
-      const allEditableLines = document.querySelectorAll('.lc.editable-line');
-      const editableLines = (dirtyLines && dirtyLines.length) ? dirtyLines : allEditableLines;
-      if (editableLines && editableLines.length > 0) {
+      // 在 diffView 的 ce-host 模式下，保存内容一律以 DOM 为准（避免 U 文件“全删空”时回退到旧的 curFileContent）
+      const host = document.getElementById('diffView');
+      const isCeHost = !!(host && String(host.getAttribute('data-ce-host') || '') === '1');
+      if (isCeHost) {
         const normalizeEditableText = (s) => {
           const v = (s !== null && s !== undefined) ? String(s) : '';
           const t = v.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
@@ -7033,17 +7249,20 @@
             const host = document.getElementById('diffView');
             if (!host) return null;
 
-            // Split view: serialize from the right panel (current/working tree)
+            // 检测渲染模式：如果有.split-wrap则是split模式，否则是single/unified模式
+            const wrap = host.querySelector('.split-wrap');
             let scope = host;
-            if (diffMode === 'split') {
-              const wrap = host.querySelector ? host.querySelector('.split-wrap') : null;
-              const right = wrap ? wrap.querySelector('.sp:last-child') : null;
+            
+            if (wrap) {
+              // Split模式：从右侧面板序列化
+              const right = wrap.querySelector('.sp:last-child');
               if (!right) return null;
               scope = right;
             }
+            // single/unified模式：直接从host序列化
 
             const dls = Array.from(scope.querySelectorAll('.dl'));
-            if (!dls.length) return null;
+            if (!dls.length) return [];
 
             const out = [];
             for (const dl of dls) {
@@ -7052,34 +7271,70 @@
 
               // Skip placeholder rows that are not part of working content
               if (dl.classList.contains('removed')) continue;
-              if (dl.classList.contains('empty')) continue;
+              if (dl.classList.contains('empty')) {
+                // Empty line is a valid part of the working content (including trailing empty line).
+                // Serialize it explicitly so join(EOL) preserves the final newline.
+                out.push('');
+                continue;
+              }
 
-              const lc = dl.querySelector ? dl.querySelector('.lc') : null;
+              // Only serialize real editable lines. UI rows (collapsed hint, hunk header, etc.)
+              // may also contain a .lc but are not .editable-line.
+              const lc = dl.querySelector ? dl.querySelector('.lc.editable-line') : null;
+              if (!lc) continue;
               const txt = lc ? normalizeEditableText(lc.textContent) : '';
               out.push(txt);
             }
             return out;
           } catch (e) {
+            console.error('序列化DOM内容失败:', e);
             return null;
           }
         };
 
         // 获取文件的当前内容
-        const res = await GET(`/api/file_content?path=${encodeURIComponent(f.path)}`);
-        if (res.content !== undefined) {
-          // 检测原文件的换行符格式
-          const originalContent = String(res.content || '');
-          const detectedEOL = originalContent.includes('\r\n') ? '\r\n' : '\n';
-          
-          // 将内容按行分割（统一换行符，避免 CRLF 导致行尾残留 \r）
-          const fileText = originalContent.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-          const lines = fileText.split('\n');
-
-          // Serialize content directly from current DOM to guarantee WYSIWYG.
-          const domLines = __serializeWorkingContentFromDom();
-          if (domLines && Array.isArray(domLines)) {
-            content = domLines.join(detectedEOL);
+        // 对于U类型文件(新增文件),直接从DOM序列化内容,不需要检测原文件换行符
+        // 因为原文件不存在,使用系统默认的LF换行符
+        console.log('saveFile: preparing to save, file status:', f.status, 'path:', f.path);
+        let detectedEOL = '\n';
+        let originalEndsWithEOL = false;
+        
+        // 对于非U类型文件,才需要获取原文件内容来检测换行符格式
+        const isNewFile = (f.status === 'U' || f.status === 'A');
+        console.log('saveFile: isNewFile:', isNewFile);
+        
+        if (!isNewFile) {
+          try {
+            const res = await GET(`/api/file_content?path=${encodeURIComponent(f.path)}`);
+            if (res.content !== undefined) {
+              // 检测原文件的换行符格式
+              const originalContent = String(res.content || '');
+              detectedEOL = originalContent.includes('\r\n') ? '\r\n' : '\n';
+              originalEndsWithEOL = originalContent.endsWith('\n') || originalContent.endsWith('\r');
+              console.log('saveFile: detected EOL:', detectedEOL === '\n' ? 'LF' : 'CRLF');
+            }
+          } catch (e) {
+            console.warn('获取原文件内容失败,使用默认LF换行符:', e);
           }
+        } else {
+          console.log('saveFile: new file, using default LF');
+        }
+        
+        // Serialize content directly from current DOM to guarantee WYSIWYG.
+        const domLines = __serializeWorkingContentFromDom();
+        console.log('saveFile: serialized lines count:', domLines ? domLines.length : 'null');
+        if (domLines && Array.isArray(domLines)) {
+          // Preserve original "ends with newline" semantics to avoid dropping trailing empty line
+          // when user didn't actually modify the content.
+          if (!isNewFile && originalEndsWithEOL) {
+            if (!domLines.length || domLines[domLines.length - 1] !== '') {
+              domLines.push('');
+            }
+          }
+          content = domLines.join(detectedEOL);
+          console.log('saveFile: final content length:', content.length);
+        } else {
+          console.error('saveFile: failed to serialize DOM content');
         }
       } else {
         // Get content from the editor
@@ -7090,7 +7345,8 @@
       }
       }
 
-      const res = await POST('/api/save_file', {path: f.path, content: content});
+      console.log('saveFile: 准备保存, content length:', content.length);
+      const res = await POST('/api/save_file', { path: f.path, content: content });
       if (res.ok) {
         toast('✓ 保存成功', 'ok');
         curFileContent = content; // Update the cached content
@@ -9660,8 +9916,42 @@
   // ── 文件拖拽导入功能 ──────────────────────────────────────────────────────────
   function initFileDragDrop() {
     const diffView = document.getElementById('diffView');
-    const overlay = document.getElementById('dragDropOverlay');
-    if (!diffView || !overlay) return;
+    if (!diffView) return;
+
+    const ensureOverlay = () => {
+      try {
+        let overlay = document.getElementById('dragDropOverlay');
+        if (overlay) return overlay;
+
+        // diffView 可能在“空态渲染”时被整体 innerHTML 覆盖，从而丢失 overlay。
+        // 这里动态补齐，保证任意空态下拖拽都可显示提示。
+        overlay = document.createElement('div');
+        overlay.className = 'drag-drop-overlay';
+        overlay.id = 'dragDropOverlay';
+        overlay.innerHTML = `
+          <div class="drag-drop-hint">
+            <div class="drag-drop-hint-content">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+                <polyline points="7 10 12 15 17 10"/>
+                <line x1="12" y1="15" x2="12" y2="3"/>
+              </svg>
+              <p>拖放文件到这里</p>
+              <small>将自动以编辑器模式打开文件</small>
+            </div>
+          </div>
+        `;
+        try {
+          if (diffView.firstChild) diffView.insertBefore(overlay, diffView.firstChild);
+          else diffView.appendChild(overlay);
+        } catch (e2) {
+          try { diffView.appendChild(overlay); } catch (e3) {}
+        }
+        return overlay;
+      } catch (e) {
+        return null;
+      }
+    };
 
     // 检查是否已经初始化过，避免重复绑定
     if (diffView._dragDropInitialized) return;
@@ -9683,10 +9973,12 @@
       if (dragCounter === 1) {
         // 清除之前的定时器
         if (dragTimer) clearTimeout(dragTimer);
+
+        const overlay = ensureOverlay();
         
         // 添加高亮效果
         diffView.classList.add('drag-active');
-        overlay.classList.add('active');
+        if (overlay) overlay.classList.add('active');
         
         // 显示toast提示
         showDragToast('可以拖放文件到这里打开');
@@ -9720,8 +10012,9 @@
       if (dragCounter === 0) {
         // 延迟移除高亮，避免闪烁
         dragTimer = setTimeout(() => {
+          const overlay = ensureOverlay();
           diffView.classList.remove('drag-active');
-          overlay.classList.remove('active');
+          if (overlay) overlay.classList.remove('active');
           hideDragToast();
         }, 100);
       }
@@ -9734,8 +10027,9 @@
       
       // 重置状态
       dragCounter = 0;
+      const overlay = ensureOverlay();
       diffView.classList.remove('drag-active');
-      overlay.classList.remove('active');
+      if (overlay) overlay.classList.remove('active');
       hideDragToast();
       
       if (dragTimer) clearTimeout(dragTimer);

@@ -17,6 +17,14 @@ except ImportError:
     print("警告: websockets 库未安装，WebSocket功能将不可用")
     print("安装方法: pip install websockets")
 
+try:
+    import chardet
+    CHARDET_AVAILABLE = True
+except ImportError:
+    CHARDET_AVAILABLE = False
+    print("提示: chardet 库未安装，中文编码检测可能不够准确")
+    print("安装方法: pip install chardet")
+
 # ════════════════════════════════════════════════════════
 #  日志系统配置
 # ════════════════════════════════════════════════════════
@@ -462,23 +470,117 @@ def _safe_repo_abspath(rel_path: str):
     return abs_path
 
 
-def get_file_content(filepath: str):
-    """Read working tree file content as text."""
+def get_file_content(filepath: str, return_encoding=False):
+    """Read working tree file content as text.
+    
+    Args:
+        filepath: 文件路径
+        return_encoding: 是否返回检测到的编码，默认False（向后兼容）
+    
+    Returns:
+        如果return_encoding=False: 返回文件内容字符串或None
+        如果return_encoding=True: 返回(内容字符串, 编码名称)或(None, None)
+    """
     try:
         full = _safe_repo_abspath(filepath)
         if not full or (not os.path.exists(full)) or os.path.isdir(full):
-            return None
+            return (None, None) if return_encoding else None
         with open(full, "rb") as f:
             data = f.read()
-        for enc in ("utf-8", "utf-8-sig", "gbk", "gb2312", "cp936"):
-            try:
-                return data.decode(enc)
-            except Exception:
-                continue
-        return data.decode("utf-8", errors="replace")
+        
+        # 如果数据为空,直接返回空字符串
+        if not data:
+            return ("", "utf-8") if return_encoding else ""
+        
+        detected_encoding = None
+        
+        # 首先尝试UTF-8（最常见的编码）
+        try:
+            # 先尝试纯UTF-8解码
+            result = data.decode('utf-8')
+            detected_encoding = "utf-8"
+            logger.debug(f"文件 {filepath} 使用 UTF-8 编码")
+            return (result, detected_encoding) if return_encoding else result
+        except UnicodeDecodeError:
+            pass
+        
+        # 尝试UTF-8 with BOM
+        try:
+            result = data.decode('utf-8-sig')
+            detected_encoding = "utf-8-sig"
+            logger.debug(f"文件 {filepath} 使用 UTF-8-BOM 编码")
+            return (result, detected_encoding) if return_encoding else result
+        except UnicodeDecodeError:
+            pass
+        
+        # UTF-8 严格解码失败：仍使用 UTF-8+replace 返回。
+        # 目标：避免把 UTF-8 文件误按 GBK/GB2312 解码导致典型乱码（并在保存后写回扩大损害）。
+        result = data.decode("utf-8", errors="replace")
+        detected_encoding = "utf-8"
+        logger.warning(f"文件 {filepath} UTF-8 严格解码失败，已使用 UTF-8+replace 读取")
+        return (result, detected_encoding) if return_encoding else result
     except Exception as e:
         logger.error(f"读取文件内容失败: {filepath} - {e}")
-        return None
+        return (None, None) if return_encoding else None
+
+
+def _detect_text_encoding_from_bytes(data: bytes):
+    """检测文本数据的编码格式"""
+    if data is None or len(data) == 0:
+        return "utf-8"
+    
+    # 检查 UTF-8 BOM
+    try:
+        if data.startswith(b"\xef\xbb\xbf"):
+            return "utf-8-sig"
+    except Exception:
+        pass
+    
+    # 首先尝试UTF-8（最常见）
+    try:
+        data.decode('utf-8')
+        return "utf-8"
+    except UnicodeDecodeError:
+        pass
+    
+    # 使用chardet检测（如果可用）
+    if CHARDET_AVAILABLE:
+        try:
+            detected = chardet.detect(data)
+            if detected and detected.get('encoding'):
+                detected_enc = detected['encoding']
+                confidence = detected.get('confidence', 0)
+                
+                if confidence > 0.5:
+                    detected_enc_lower = detected_enc.lower()
+                    # 标准化编码
+                    if detected_enc_lower in ('gb2312',):
+                        return 'gb2312'
+                    if detected_enc_lower in ('gbk', 'windows-1252'):
+                        return 'gbk'
+                    if detected_enc_lower in ('gb18030',):
+                        return 'gb18030'
+                    elif detected_enc_lower.startswith('utf'):
+                        return 'utf-8'
+                    else:
+                        # 验证检测到的编码是否有效
+                        try:
+                            data.decode(detected_enc)
+                            return detected_enc
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+    
+    # Fallback: 按优先级尝试常见编码
+    for enc in ("gbk", "gb18030", "gb2312", "cp936", "latin-1"):
+        try:
+            data.decode(enc)
+            return enc
+        except Exception:
+            continue
+    
+    return "utf-8"
 
 
 def get_head_file_content(filepath: str):
@@ -493,15 +595,46 @@ def get_head_file_content(filepath: str):
     return out
 
 
-def save_file_content(filepath: str, content: str):
-    """Save content to working tree file (text)."""
+def save_file_content(filepath: str, content: str, force_encoding: str = None):
+    """Save content to working tree file (text).
+    
+    Args:
+        filepath: 文件路径
+        content: 文件内容
+        force_encoding: 强制使用的编码（如果提供，将覆盖自动检测）
+    """
     try:
         full = _safe_repo_abspath(filepath)
         if not full:
+            logger.error(f"保存文件失败: 非法路径 {filepath}")
             return False, "非法路径"
+        
+        logger.info(f"开始保存文件: {filepath}, 内容长度: {len(content) if content else 0}, 强制编码: {force_encoding}")
+        
         parent = os.path.dirname(full)
         if parent and (not os.path.exists(parent)):
             os.makedirs(parent, exist_ok=True)
+            logger.debug(f"创建目录: {parent}")
+
+        target_enc = "utf-8"
+        file_exists = os.path.exists(full) and (not os.path.isdir(full))
+        
+        # 如果指定了编码，优先使用
+        if force_encoding:
+            target_enc = force_encoding
+            logger.debug(f"使用强制指定的编码: {target_enc}")
+        else:
+            try:
+                if file_exists:
+                    with open(full, "rb") as rf:
+                        raw0 = rf.read()
+                    target_enc = _detect_text_encoding_from_bytes(raw0)
+                    logger.debug(f"检测到已存在文件编码: {target_enc}")
+                else:
+                    logger.debug(f"新文件，使用默认编码: {target_enc}")
+            except Exception as e:
+                logger.warning(f"检测文件编码失败: {e}, 使用默认UTF-8")
+                target_enc = "utf-8"
 
         rel_path = (filepath or "").replace("\\", "/").lstrip("/")
 
@@ -514,7 +647,7 @@ def save_file_content(filepath: str, content: str):
 
         # Step 1: Detect from existing file (highest priority - preserves original)
         try:
-            if os.path.exists(full) and (not os.path.isdir(full)):
+            if file_exists:
                 with open(full, "rb") as rf:
                     data = rf.read()
                 # Check if file has CRLF or LF
@@ -582,10 +715,11 @@ def save_file_content(filepath: str, content: str):
                 txt = txt.replace("\n", target_eol)
 
         # Write exact newlines without implicit translation
-        with open(full, "w", encoding="utf-8", newline="") as f:
+        logger.debug(f"准备写入文件: {full}, 编码: {target_enc}, 换行符: {repr(target_eol)}, 内容长度: {len(txt)}")
+        with open(full, "w", encoding=target_enc, newline="") as f:
             f.write(txt)
         
-        logger.info(f"文件保存成功: {filepath} (换行符: {repr(target_eol)})")
+        logger.info(f"✓ 文件保存成功: {filepath} (编码: {target_enc}, 换行符: {repr(target_eol)}, {len(txt)}字符)")
         return True, "保存成功"
     except Exception as e:
         logger.error(f"保存文件失败: {filepath} - {e}", exc_info=True)
@@ -669,8 +803,8 @@ def get_changed_files():
         added, removed = (0, 0)
         if status == "U":
             try:
-                full = _repo_abspath(p_key)
-                added = sum(1 for _ in open(full, "r", errors="replace"))
+                txt_u = get_file_content(p_key) or ""
+                added = len(txt_u.splitlines())
                 removed = 0
             except Exception as e:
                 logger.debug(f"读取新文件行数失败: {p_key} - {e}")
@@ -709,14 +843,21 @@ def get_file_diff(filepath, status, ctx_lines=5):
     logger.debug(f"获取文件 diff: {filepath} (状态: {status}, ctx: {ctx_lines})")
     if status == "U":
         try:
-            full    = os.path.join(REPO_PATH, filepath)
-            content = open(full, "r", errors="replace").readlines()
+            txt_u = get_file_content(filepath) or ""
+            content = txt_u.splitlines(keepends=True)
+            # Empty new file: still render one editable empty line so user can type.
+            if not content:
+                content = ["\n"]
+            # Preserve trailing empty line for files ending with EOL.
+            # Python splitlines(keepends=True) does not include the final empty line.
+            if txt_u.endswith("\n") or txt_u.endswith("\r"):
+                content.append("\n")
             logger.debug(f"读取新文件内容: {filepath} - {len(content)} 行")
             return [{
                 "header":    f"@@ -0,0 +1,{len(content)} @@ 新文件",
                 "old_start": 0,
                 "new_start": 1,
-                "lines": [{"type":"added","old":None,"new":i+1,"text":l.rstrip("\n")}
+                "lines": [{"type":"added","old":None,"new":i+1,"text":l.rstrip("\n").rstrip("\r")}
                           for i, l in enumerate(content)]
             }], None
         except Exception as e:
@@ -1199,54 +1340,6 @@ def _build_partial_hunk_patch(file_header_lines, hunk, include_raw_idx_set):
     if not patch.endswith("\n"):
         patch += "\n"
     return patch
-
-
-def _expand_include_with_near_context(raw_lines, include_set, ctx=3):
-    try:
-        ctx = int(ctx)
-    except Exception:
-        ctx = 3
-    if ctx < 0:
-        ctx = 0
-    if ctx > 20:
-        ctx = 20
-
-    out = set(include_set or [])
-    if not raw_lines:
-        return out
-
-    for idx in list(out):
-        if idx is None:
-            continue
-        try:
-            idx = int(idx)
-        except Exception:
-            continue
-        # backward
-        got = 0
-        j = idx - 1
-        while j >= 0 and got < ctx:
-            ln = raw_lines[j]
-            if ln.startswith(" "):
-                out.add(j)
-                got += 1
-            elif ln.startswith("\\"):
-                out.add(j)
-            j -= 1
-
-        # forward
-        got = 0
-        j = idx + 1
-        while j < len(raw_lines) and got < ctx:
-            ln = raw_lines[j]
-            if ln.startswith(" "):
-                out.add(j)
-                got += 1
-            elif ln.startswith("\\"):
-                out.add(j)
-            j += 1
-
-    return out
 
 
 def _git_apply_reverse_patch(patch_text: str):
@@ -1943,10 +2036,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"error":"未打开仓库"}, 400)
                 return
             fp = qget("path")
-            content = get_file_content(fp)
+            content, encoding = get_file_content(fp, return_encoding=True)
             if content is not None:
-                # 兼容旧前端：直接使用 content 字段
-                self.send_json({"ok": True, "content": content})
+                self.send_json({"ok": True, "content": content, "encoding": encoding})
             else:
                 self.send_json({"ok": False, "error": "无法读取文件内容"}, 404)
 
@@ -2103,9 +2195,9 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json({"error":"未打开仓库"}, 400)
                     return
                 fp = data.get("path", "")
-                content = get_file_content(fp)
+                content, encoding = get_file_content(fp, return_encoding=True)
                 if content is not None:
-                    self.send_json({"ok": True, "content": content})
+                    self.send_json({"ok": True, "content": content, "encoding": encoding})
                 else:
                     self.send_json({"ok": False, "error": "无法读取文件内容"})
 
@@ -2120,18 +2212,6 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json({"ok": True, "content": content})
                 else:
                     self.send_json({"ok": False, "content": None})
-            
-            elif p == "/api/switch_branch":
-                logger.info("处理 /api/switch_branch 请求")
-                b = (data.get("branch") or "").strip()
-                ok, current, error, output, dirty = switch_branch(b)
-                self.send_json({
-                    "ok": ok,
-                    "current": current,
-                    "error": error,
-                    "output": (output or "").strip(),
-                    "dirty": bool(dirty),
-                })
 
             elif p == "/api/save_file":
                 logger.info("处理 /api/save_file 请求")
