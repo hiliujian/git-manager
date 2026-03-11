@@ -42,7 +42,7 @@ cd git-manager
 pip install websockets
 ```
 
-> **注意**：WebSocket 功能是可选的。如果不安装 `websockets` 库，程序仍可正常运行，只是不会有实时文件监控功能。
+> **注意**：WebSocket 功能是可选的。如果不安装 `websockets` 库，程序仍可正常运行，但无法提供实时文件监控功能。
 
 ### 3. 启动服务器
 
