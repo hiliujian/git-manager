@@ -1186,8 +1186,8 @@ def _get_raw_file_diff_patch(filepath, status, ctx_lines=5):
         return None, "缺少 path"
 
     st = (status or "").strip().upper() or "M"
-    if st == "U":
-        return None, "未跟踪文件不支持按行/按块撤回"
+    # U 类型文件在提交时会通过 git add -N 处理，可以支持按行/按块操作
+    # 只有在撤回操作时才真正不支持
 
     unified_arg = f"--unified={ctx_lines}"
     for args in (
@@ -1200,6 +1200,11 @@ def _get_raw_file_diff_patch(filepath, status, ctx_lines=5):
             return out, None
 
     return "", None
+
+
+def get_raw_file_diff_patch(filepath, status, ctx_lines=5):
+    """Compatibility wrapper: return unified diff patch text for file."""
+    return _get_raw_file_diff_patch(filepath, status, ctx_lines=ctx_lines)
 
 
 def _parse_unified_patch_with_mapping(patch_text: str):
@@ -1340,6 +1345,147 @@ def _build_partial_hunk_patch(file_header_lines, hunk, include_raw_idx_set):
     if not patch.endswith("\n"):
         patch += "\n"
     return patch
+
+
+def extract_selected_hunks_from_patch(patch_text: str, hunk_indices):
+    """Extract selected hunks (by index) from a unified diff patch."""
+    file_header, hunks = _parse_unified_patch_with_mapping(patch_text or "")
+    if not hunks:
+        return ""
+
+    picked = []
+    for hi in (hunk_indices or []):
+        try:
+            picked.append(int(hi))
+        except Exception:
+            continue
+
+    picked = sorted(set(picked))
+
+    hunks_out = []
+    for hi in picked:
+        if hi < 0 or hi >= len(hunks):
+            continue
+        h = hunks[hi] or {}
+        include = set(range(len(h.get("raw_lines") or [])))
+        p = _build_partial_hunk_patch([], h, include)
+        if p:
+            hunks_out.append(p)
+
+    if not hunks_out:
+        return ""
+    return "".join(file_header) + "".join(hunks_out)
+
+
+def extract_selected_lines_from_patch(patch_text: str, line_keys):
+    """Extract selected changed lines from a unified diff patch.
+
+    line_keys: list like ["hunkIndex:lineIndex", ...] where lineIndex matches the
+    parsed line index within that hunk (aligned with unified patch parsing order).
+    """
+    file_header, hunks = _parse_unified_patch_with_mapping(patch_text or "")
+    if not hunks:
+        return ""
+
+    include_map = {}  # hunk_idx -> set(raw_idx)
+    for k in (line_keys or []):
+        if k is None:
+            continue
+        s = str(k)
+        if ":" not in s:
+            continue
+        a, b = s.split(":", 1)
+        try:
+            hi = int(a)
+            li = int(b)
+        except Exception:
+            continue
+        if hi < 0 or hi >= len(hunks):
+            continue
+        h = hunks[hi] or {}
+        m = h.get("map") or {}
+        raw_idxs = m.get(li)
+        if not raw_idxs:
+            continue
+        inc = include_map.get(hi)
+        if inc is None:
+            inc = set()
+            include_map[hi] = inc
+        for ridx in raw_idxs:
+            try:
+                inc.add(int(ridx))
+            except Exception:
+                pass
+
+    hunks_out = []
+    for hi, inc in include_map.items():
+        h = hunks[hi] or {}
+        p = _build_partial_hunk_patch([], h, inc)
+        if p:
+            hunks_out.append(p)
+
+    if not hunks_out:
+        return ""
+    return "".join(file_header) + "".join(hunks_out)
+
+
+def apply_patch_to_index(patch_text: str):
+    """Apply a unified diff patch to Git index (staging area) only."""
+    if not patch_text or not (patch_text or "").strip():
+        return False, "空 patch"
+
+    attempts = [
+        ["apply", "--cached", "--whitespace=nowarn", "--recount"],
+        ["apply", "--cached", "--whitespace=nowarn", "--recount", "-C0"],
+        ["apply", "--cached", "--whitespace=nowarn", "--recount", "--unidiff-zero"],
+        ["apply", "--cached", "--whitespace=nowarn", "--recount", "--unidiff-zero", "-C0"],
+    ]
+
+    last_msg = ""
+    for args in attempts:
+        out, err, code = run_git(args, input_data=patch_text, timeout=120)
+        if code == 0:
+            return True, ""
+        last_msg = (err or out or "git apply --cached 失败")
+
+    return False, last_msg
+
+
+def restore_file_from_commit(commit: str, filepath: str):
+    if not REPO_PATH:
+        return False, "未打开仓库"
+
+    commit = (commit or "").strip()
+    filepath = (filepath or "").replace("\\", "/").lstrip("/")
+    if not commit:
+        return False, "缺少 hash"
+    if not filepath:
+        return False, "缺少 path"
+
+    full = _safe_repo_abspath(filepath)
+    if not full:
+        return False, "非法路径"
+
+    _, err, code = run_git(["checkout", commit, "--", filepath], timeout=120)
+    if code != 0:
+        return False, (err or "恢复文件失败")
+    return True, ""
+
+
+def restore_workspace_to_commit(commit: str):
+    if not REPO_PATH:
+        return False, "未打开仓库"
+
+    commit = (commit or "").strip()
+    if not commit:
+        return False, "缺少 hash"
+
+    # Reset tracked files to commit and clean untracked files.
+    _, err, code = run_git(["reset", "--hard", commit], timeout=120)
+    if code != 0:
+        return False, (err or "恢复工作区失败")
+    run_git(["clean", "-fd"], timeout=120)
+    return True, ""
 
 
 def _git_apply_reverse_patch(patch_text: str):
@@ -2340,6 +2486,13 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json({"error": err or "软回退失败"}, 400)
                     return
 
+                # Soft reset keeps index staged, which breaks partial commit flows.
+                # Clear staging area while preserving working tree changes.
+                _, unstage_err, unstage_code = run_git(["reset"], timeout=120)
+                if unstage_code != 0:
+                    self.send_json({"error": unstage_err or "清空暂存区失败"}, 400)
+                    return
+
                 new_head_out, _, new_head_code = run_git(["rev-parse", "HEAD"])
                 new_head_full = (new_head_out or "").strip() if new_head_code == 0 else ""
                 self.send_json({
@@ -2347,6 +2500,23 @@ class Handler(BaseHTTPRequestHandler):
                     "full_hash": new_head_full,
                     "hash": new_head_full[:7] if new_head_full else "",
                 })
+
+            elif p == "/api/stage_file":
+                logger.info("处理 /api/stage_file 请求")
+                if not REPO_PATH:
+                    self.send_json({"error":"未打开仓库"}, 400)
+                    return
+                filepath = (data.get("path") or "").strip()
+                if not filepath:
+                    self.send_json({"error":"缺少文件路径"}, 400)
+                    return
+                _, err, code = run_git(["add", "--", filepath])
+                if code != 0:
+                    logger.error(f"暂存文件失败: {err}")
+                    self.send_json({"error": err or "暂存文件失败"}, 400)
+                    return
+                logger.info(f"暂存文件成功: {filepath}")
+                self.send_json({"ok": True})
 
             elif p == "/api/commit":
                 logger.info("处理 /api/commit 请求")
@@ -2406,25 +2576,120 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json({"error": "检测到已有暂存区内容，请先提交/取消暂存后再进行按块提交"}, 400)
                     return
 
+                # Untracked new file: create an intent-to-add entry so git diff can produce a patch.
+                # IMPORTANT: Do this after staged-check; add -N itself would make index non-empty.
+                st = (status or "").strip().upper() or "M"
+                if st == "U":
+                    _, addn_err, addn_code = run_git(["add", "-N", "--", filepath], timeout=60)
+                    if addn_code != 0:
+                        self.send_json({"error": addn_err or "初始化新文件暂存失败"}, 400)
+                        return
+
                 raw_patch, patch_err = get_raw_file_diff_patch(filepath, status, ctx_lines=ctx_lines)
                 if patch_err:
+                    if st == "U":
+                        run_git(["reset", "--", filepath])
                     self.send_json({"error": patch_err}, 400)
                     return
 
                 picked_patch = extract_selected_hunks_from_patch(raw_patch, hunks)
                 ok, apply_err = apply_patch_to_index(picked_patch)
                 if not ok:
+                    if st == "U":
+                        run_git(["reset", "--", filepath])
                     self.send_json({"error": apply_err}, 400)
                     return
 
                 _, err, code = run_git(["commit", "-m", msg])
                 if code != 0:
                     logger.error(f"按块提交失败: {err}")
+                    if st == "U":
+                        run_git(["reset", "--", filepath])
                     run_git(["reset"])
                     self.send_json({"error": err}, 400)
                     return
 
                 logger.info("按块提交成功")
+                full_hash, _, code2 = run_git(["rev-parse", "HEAD"])
+                full_hash = (full_hash or "").strip() if code2 == 0 else ""
+                self.send_json({
+                    "ok": True,
+                    "full_hash": full_hash,
+                    "hash": full_hash[:7] if full_hash else ""
+                })
+
+            elif p == "/api/commit_lines":
+                logger.info("处理 /api/commit_lines 请求")
+                if not REPO_PATH:
+                    self.send_json({"error":"未打开仓库"}, 400)
+                    return
+
+                msg = (data.get("message") or "").strip()
+                filepath = (data.get("path") or "").strip()
+                status = (data.get("status") or "").strip() or "M"
+                lines = data.get("lines") or []
+                ctx_lines = data.get("ctx", 5)
+
+                if not msg:
+                    self.send_json({"error":"提交信息不能为空"}, 400)
+                    return
+                if not filepath:
+                    self.send_json({"error":"缺少 path"}, 400)
+                    return
+                if not isinstance(lines, list) or not lines:
+                    self.send_json({"error":"未选择任何变更行"}, 400)
+                    return
+
+                st = (status or "").strip().upper() or "M"
+                if st in ("A", "D"):
+                    self.send_json({"error": "该文件状态不支持按行提交"}, 400)
+                    return
+
+                staged, err = has_any_staged_changes()
+                if err:
+                    self.send_json({"error": err}, 400)
+                    return
+                if staged:
+                    self.send_json({"error": "检测到已有暂存区内容，请先提交/取消暂存后再进行按行提交"}, 400)
+                    return
+
+                # Untracked new file: create an intent-to-add entry so git diff can produce a patch.
+                # IMPORTANT: Do this after staged-check; add -N itself would make index non-empty.
+                if st == "U":
+                    _, addn_err, addn_code = run_git(["add", "-N", "--", filepath], timeout=60)
+                    if addn_code != 0:
+                        self.send_json({"error": addn_err or "初始化新文件暂存失败"}, 400)
+                        return
+
+                raw_patch, patch_err = get_raw_file_diff_patch(filepath, st, ctx_lines=ctx_lines)
+                if patch_err:
+                    self.send_json({"error": patch_err}, 400)
+                    return
+
+                picked_patch = extract_selected_lines_from_patch(raw_patch, lines)
+                if not (picked_patch or "").strip():
+                    if st == "U":
+                        run_git(["reset", "--", filepath])
+                    self.send_json({"error": "构建 patch 失败（可能选择的行已变更，请刷新后重试）"}, 400)
+                    return
+
+                ok, apply_err = apply_patch_to_index(picked_patch)
+                if not ok:
+                    if st == "U":
+                        run_git(["reset", "--", filepath])
+                    self.send_json({"error": apply_err}, 400)
+                    return
+
+                _, err, code = run_git(["commit", "-m", msg])
+                if code != 0:
+                    logger.error(f"按行提交失败: {err}")
+                    if st == "U":
+                        run_git(["reset", "--", filepath])
+                    run_git(["reset"])
+                    self.send_json({"error": err}, 400)
+                    return
+
+                logger.info("按行提交成功")
                 full_hash, _, code2 = run_git(["rev-parse", "HEAD"])
                 full_hash = (full_hash or "").strip() if code2 == 0 else ""
                 self.send_json({

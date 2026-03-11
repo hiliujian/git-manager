@@ -1597,7 +1597,11 @@
       return;
     }
 
-    const linkedDisabled = !!pb.disabled || !!sb.disabled;
+    // Only link the *busy* state. If we link `disabled` directly it can latch:
+    // pb busy => disables sb; later pb recovers but sb remains disabled, then both stay disabled.
+    const pbBusy = String(pb.dataset && pb.dataset.busy || '') === '1';
+    const sbBusy = String(sb.dataset && sb.dataset.busy || '') === '1';
+    const linkedDisabled = pbBusy || sbBusy;
     __gmSetBtnDisabledVisual(pb, linkedDisabled);
     __gmSetBtnDisabledVisual(sb, linkedDisabled);
   }
@@ -3520,6 +3524,15 @@
       try {
         const host = document.getElementById('diffView');
         if (!host) return;
+
+        const rawTarget = e && e.target;
+        if (rawTarget && rawTarget.tagName) {
+          const tag = String(rawTarget.tagName || '').toUpperCase();
+          if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'BUTTON') {
+            // Checkbox 等控件的交互不应被视为内容编辑，避免误触发自动保存
+            return;
+          }
+        }
 
         let t = e && e.target;
         let line = null;
@@ -5570,29 +5583,37 @@
       div.onclick = () => selectFile(i);
       fragment.appendChild(div);
 
-      // 文件级 checkbox 半选态：根据行级勾选状态计算（当 total 已知时）
+      // 文件级 checkbox 半选态：根据行级勾选状态计算
       const cb = div.querySelector('input.fi-cb');
       if (cb && f && f.path) {
-        // IMPORTANT: For non-current files, the checkbox should be driven by checkedSet only.
-        // Otherwise line-level sets from previously opened files can override the UI and make it look like
-        // the checkbox can't be toggled unless you reopen that file.
+        // 首先设置基础的勾选状态
         cb.checked = checkedSet.has(i);
         cb.indeterminate = false;
         cb.classList.remove('indet');
 
-        const hunksKnown = (curFile === i) && Array.isArray(curHunks);
-        if (hunksKnown) {
-          const total = commitLinesTotalByPath.get(f.path);
-          if (Number.isFinite(total) && total > 0) {
-            const set = getSelectedCommitLinesSet(f.path);
-            const isAll = set.size === total;
-            const isNone = set.size === 0;
-            const isPart = !isAll && !isNone;
-            cb.indeterminate = isPart;
-            if (isPart) cb.classList.add('indet');
-            else cb.classList.remove('indet');
-            // When partial, visually treat as checked.
-            if (isPart) cb.checked = true;
+        // 计算半选状态（对所有文件，不仅仅是当前文件）
+        const total = commitLinesTotalByPath.get(f.path);
+        if (Number.isFinite(total) && total > 0) {
+          const set = getSelectedCommitLinesSet(f.path);
+          const isAll = set.size === total;
+          const isNone = set.size === 0;
+          const isPart = !isAll && !isNone;
+          
+          // 设置半选状态
+          cb.indeterminate = isPart;
+          if (isPart) {
+            cb.classList.add('indet');
+            cb.checked = true;  // 半选状态视觉上显示为已勾选
+          } else {
+            cb.classList.remove('indet');
+            // 全选或全不选时，根据实际行勾选状态设置
+            cb.checked = !isNone;
+            // 同步到 checkedSet
+            if (!isNone) {
+              checkedSet.add(i);
+            } else {
+              checkedSet.delete(i);
+            }
           }
         }
 
@@ -5636,8 +5657,17 @@
         const changeLocations = buildChangeLocationsFromHunks(curHunks);
         renderDiffWithFullContext(f, curHunks, false, changeLocations);
       } else {
-        // hunks 未加载，先记录期望，进入 diff 时应用
-        commitLinesDesiredByPath.set(f.path, checkedSet.has(i));
+        // hunks 未加载时
+        if (checkedSet.has(i)) {
+          // 勾选：先记录期望，进入 diff 时应用
+          commitLinesDesiredByPath.set(f.path, true);
+        } else {
+          // 取消勾选：立即清除该文件的所有代码行勾选状态
+          commitLinesDesiredByPath.set(f.path, false);
+          const set = getSelectedCommitLinesSet(f.path);
+          set.clear();
+          commitLinesInitByPath.set(f.path, true);
+        }
       }
     }
     updateStats(); renderFileList();
@@ -5669,8 +5699,51 @@
     updateStats(); renderFileList();
   }
   function updateStats() {
-    let ta=0,tr=0,tm=0;
-    checkedSet.forEach(i => { ta+=(files[i] && files[i].added)||0; tr+=(files[i] && files[i].removed)||0; tm+=(files[i] && files[i].modified)||0; });
+    let ta=0, tr=0, tm=0;
+    
+    // 遍历所有勾选的文件
+    checkedSet.forEach(i => {
+      const file = files[i];
+      if (!file) return;
+      
+      const filepath = file.path;
+      const total = commitLinesTotalByPath.get(filepath);
+      const lineSet = getSelectedCommitLinesSet(filepath);
+      
+      // 如果有行级勾选信息，按行统计
+      if (Number.isFinite(total) && total > 0 && lineSet.size > 0) {
+        // 需要遍历 hunks 来统计每行的类型
+        // 但这需要知道 hunks 数据，对于非当前文件可能没有
+        // 所以只对当前文件进行精确统计，其他文件用比例估算
+        
+        if (curFile === i && Array.isArray(curHunks)) {
+          // 当前文件：精确统计勾选的行
+          curHunks.forEach((hunk, hunkIdx) => {
+            (hunk.lines || []).forEach((line, lineIdx) => {
+              if (!line) return;
+              const key = getLineKey(hunkIdx, lineIdx);
+              if (lineSet.has(key)) {
+                if (line.type === 'added') ta++;
+                else if (line.type === 'removed') tr++;
+                else if (line.type === 'modified') tm++;
+              }
+            });
+          });
+        } else {
+          // 非当前文件：按比例估算
+          const ratio = lineSet.size / total;
+          ta += Math.round((file.added || 0) * ratio);
+          tr += Math.round((file.removed || 0) * ratio);
+          tm += Math.round((file.modified || 0) * ratio);
+        }
+      } else {
+        // 没有行级勾选信息，使用整个文件的统计
+        ta += (file.added || 0);
+        tr += (file.removed || 0);
+        tm += (file.modified || 0);
+      }
+    });
+    
     document.getElementById('totA').textContent = '+'+ta;
     document.getElementById('totR').textContent = '-'+tr;
     document.getElementById('totM').textContent = '~'+tm;
@@ -6219,17 +6292,62 @@
   function syncCheckedSetForFile(filepath) {
     const idx = files.findIndex(f => f && f.path === filepath);
     if (idx < 0) return;
-    const total = commitLinesTotalByPath.get(filepath);
-    if (!Number.isFinite(total) || total <= 0) return;
     const set = getSelectedCommitLinesSet(filepath);
+
+    // Keep file-level checkbox state aligned with line-level selection.
+    // Do NOT require total to be known; total is only used for indeterminate UI.
     if (set.size === 0) checkedSet.delete(idx);
     else checkedSet.add(idx);
+
+    // If current file hunks are known, update total for indeterminate calculations.
+    // This prevents line-level selection from being ignored when total wasn't initialized yet.
+    if (curFile === idx && Array.isArray(curHunks)) {
+      let total = 0;
+      (curHunks || []).forEach((hunk, hi) => {
+        (hunk.lines || []).forEach((l, li) => {
+          if (l.type === 'added' || l.type === 'removed' || l.type === 'modified') total++;
+        });
+      });
+      commitLinesTotalByPath.set(filepath, total);
+    }
   }
 
   function syncFileCheckFromHunks(filepath) {
     syncCheckedSetForFile(filepath);
     updateStats();
-    renderFileList();
+    // 不调用 renderFileList()，避免完整重渲染触发副作用
+    // 只更新特定文件的复选框状态
+    updateFileCheckboxState(filepath);
+  }
+  
+  function updateFileCheckboxState(filepath) {
+    // 只更新指定文件的复选框状态，不重新渲染整个列表
+    const idx = files.findIndex(f => f && f.path === filepath);
+    if (idx < 0) return;
+    
+    const cb = document.querySelector(`input.fi-cb[data-idx="${idx}"]`);
+    if (!cb) return;
+    
+    const total = commitLinesTotalByPath.get(filepath);
+    if (Number.isFinite(total) && total > 0) {
+      const set = getSelectedCommitLinesSet(filepath);
+      const isAll = set.size === total;
+      const isNone = set.size === 0;
+      const isPart = !isAll && !isNone;
+      
+      cb.indeterminate = isPart;
+      if (isPart) {
+        cb.classList.add('indet');
+        cb.checked = true;
+      } else {
+        cb.classList.remove('indet');
+        cb.checked = !isNone;
+      }
+    } else {
+      cb.checked = checkedSet.has(idx);
+      cb.indeterminate = false;
+      cb.classList.remove('indet');
+    }
   }
 
   function toggleCommitLine(filepath, hunkIdx, lineIdx, checked) {
@@ -6237,25 +6355,18 @@
     const k = getLineKey(hunkIdx, lineIdx);
     if (checked) set.add(k); else set.delete(k);
     commitLinesInitByPath.set(filepath, true);
+    // Record an explicit user intent so ensureDefaultLineSelection won't auto-expand
+    // selections in a way that surprises the user.
+    commitLinesDesiredByPath.set(filepath, set.size > 0);
     syncFileCheckFromHunks(filepath);
 
+    // 仅更新复选框视觉状态，不触发完整的重新渲染以避免干扰编辑状态和自动保存计时器
     if (curFile !== null && files[curFile] && files[curFile].path === filepath) {
-      const f = files[curFile];
-      const changeLocations = [];
-      (curHunks || []).forEach((hunk, hunkIndex) => {
-        let lastNewLineNumber = null;
-        (hunk.lines || []).forEach((line, li) => {
-          if (line && line.new !== undefined && line.new !== null && Number.isFinite(Number(line.new))) {
-            lastNewLineNumber = Number(line.new);
-          }
-          if (line.type === 'added' || line.type === 'removed' || line.type === 'modified') {
-            const displayLn = (line.type === 'removed') ? __nn(line.old, __nn(line.new, lastNewLineNumber)) : __nn(line.new, line.old);
-            const anchorLn = (line.type === 'removed') ? __nn(lastNewLineNumber, __nn(line.new, line.old)) : displayLn;
-            changeLocations.push({ hunkIndex, lineIndex: li, lineNumber: anchorLn, anchorLineNumber: anchorLn, displayLineNumber: displayLn, type: line.type, text: line.text });
-          }
-        });
-      });
-      renderDiffWithFullContext(f, curHunks, false, changeLocations);
+      const view = document.getElementById('diffView');
+      if (view) {
+        // 更新块级复选框的半选状态（不会触发重新渲染，只更新现有复选框）
+        applyIndeterminateCheckboxes(view);
+      }
     }
   }
 
@@ -6272,12 +6383,31 @@
       }
     }
     commitLinesInitByPath.set(filepath, true);
+    commitLinesDesiredByPath.set(filepath, set.size > 0);
     syncFileCheckFromHunks(filepath);
 
+    // 仅更新复选框视觉状态，不触发完整的重新渲染以避免干扰编辑状态
     if (curFile !== null && files[curFile] && files[curFile].path === filepath) {
-      const f = files[curFile];
-      const changeLocations = buildChangeLocationsFromHunks(curHunks);
-      renderDiffWithFullContext(f, curHunks, false, changeLocations);
+      const view = document.getElementById('diffView');
+      if (view) {
+        // 更新所有受影响行的复选框
+        const commitCbs = view.querySelectorAll('.commit-cb');
+        commitCbs.forEach(cb => {
+          // 从 onchange 属性中解析 hunkIdx 和 lineIdx
+          const onchangeAttr = cb.getAttribute('onchange') || '';
+          const match = onchangeAttr.match(/toggleCommitLine\('([^']+)',(\d+),(\d+),/);
+          if (match) {
+            const cbHunkIdx = parseInt(match[2]);
+            const cbLineIdx = parseInt(match[3]);
+            if (cbHunkIdx === hunkIdx && cbLineIdx >= startLineIdx && cbLineIdx <= endLineIdx) {
+              cb.checked = checked;
+            }
+          }
+        });
+        
+        // 更新块级复选框的半选状态
+        applyIndeterminateCheckboxes(view);
+      }
     }
   }
 
@@ -6553,7 +6683,7 @@
 
           const checkedAttr = lineCheckedAttr(ctl.hunkIndex, ctl.originalLineIndex);
           const commitCb = (showCommitCb && columnType === 'right' && !readonly && ctl.hunkIndex !== undefined && ctl.originalLineIndex !== undefined) ?
-                  `<input class="commit-cb" type="checkbox" ${checkedAttr} onclick="event.stopPropagation()" onchange="toggleCommitLine('${fpEsc}',${ctl.hunkIndex},${ctl.originalLineIndex},this.checked)">` : '';
+                  `<input class="commit-cb" type="checkbox" ${checkedAttr} onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" onchange="event.stopPropagation();toggleCommitLine('${fpEsc}',${ctl.hunkIndex},${ctl.originalLineIndex},this.checked)">` : '';
 
           const revertTitleNum = (ctl.num || line.num || '');
           const revertBtn = (showRevert && columnType === 'right' && !readonly && ctl.hunkIndex !== undefined && ctl.originalLineIndex !== undefined) ?
@@ -6595,7 +6725,7 @@
           const isPart = !isAll && !isNone;
           const checkedAttr = isAll ? 'checked' : '';
           const indetAttr = isPart ? 'data-indet="1"' : '';
-          const commitCb = (columnType === 'right' && !readonly) ? `<input class="commit-cb" type="checkbox" ${checkedAttr} ${indetAttr} onclick="event.stopPropagation()" onchange="toggleCommitBlock('${fpEsc}',${hunkIndex},${startIdx},${endIdx},this.checked)">` : '';
+          const commitCb = (columnType === 'right' && !readonly) ? `<input class="commit-cb" type="checkbox" ${checkedAttr} ${indetAttr} onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" onchange="event.stopPropagation();toggleCommitBlock('${fpEsc}',${hunkIndex},${startIdx},${endIdx},this.checked)">` : '';
           const btn = (showBtn && columnType === 'right' && !readonly) ?
                   `<button class="hint-btn" onclick="askRevertMultiLines('${fpEsc}',${hunkIndex},${startIdx},${endIdx},'${file.status}')">块撤回（${count}）</button>`
                   : '';
@@ -6787,7 +6917,7 @@
         const canRevert = (line.type === 'added' || line.type === 'removed' || line.type === 'modified');
         const checkedAttr = (line.hunkIndex !== undefined && line.originalLineIndex !== undefined && selectedLinesSet.has(getLineKey(line.hunkIndex, line.originalLineIndex))) ? 'checked' : '';
         const commitCb = (!readonly && canRevert && line.hunkIndex !== undefined && line.originalLineIndex !== undefined) ?
-                `<input class="commit-cb" type="checkbox" ${checkedAttr} onclick="event.stopPropagation()" onchange="toggleCommitLine('${fpEsc}',${line.hunkIndex},${line.originalLineIndex},this.checked)">` : '';
+                `<input class="commit-cb" type="checkbox" ${checkedAttr} onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" onchange="event.stopPropagation();toggleCommitLine('${fpEsc}',${line.hunkIndex},${line.originalLineIndex},this.checked)">` : '';
         const revertBtn = (!readonly && canRevert && line.hunkIndex !== undefined && line.originalLineIndex !== undefined) ?
                 `<button class="line-revert" onclick="askRevertLine('${fpEsc}',${line.hunkIndex},${line.originalLineIndex},'${file.status}')" title="撤回">
           <span style="font-size:9px;font-weight:bold;">&gt;&gt;</span>
@@ -6852,7 +6982,7 @@
           const isPart = !isAll && !isNone;
           const checkedAttr = isAll ? 'checked' : '';
           const indetAttr = isPart ? 'data-indet="1"' : '';
-          const commitCb = (!readonly) ? `<input class="commit-cb" type="checkbox" ${checkedAttr} ${indetAttr} onclick="event.stopPropagation()" onchange="toggleCommitBlock('${fpEsc}',${hunkIndex},${startIdx},${endIdx},this.checked)">` : '';
+          const commitCb = (!readonly) ? `<input class="commit-cb" type="checkbox" ${checkedAttr} ${indetAttr} onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" onchange="event.stopPropagation();toggleCommitBlock('${fpEsc}',${hunkIndex},${startIdx},${endIdx},this.checked)">` : '';
           const btn = (!readonly) ? `<button class="hint-btn" onclick="askRevertMultiLines('${fpEsc}',${hunkIndex},${startIdx},${endIdx},'${file.status}')">块撤回（${count}）</button>` : '';
           const actions = `<span class="dl-actions">${commitCb}${btn}</span>`;
           return `<div class="dl revert-block-hint">${actions}<span class="ls"></span><span class="ln"></span><span class="lc" contenteditable="false"><span class="hint-tag" contenteditable="false">块撤回</span><span class="hint-text" contenteditable="false">已识别为连续变更块（${count}行），可一键撤回</span></span></div>`;
@@ -6963,7 +7093,7 @@
         const canRevert = (line.type === 'added' || line.type === 'removed' || line.type === 'modified');
         const checkedAttr = (line.hunkIndex !== undefined && line.originalLineIndex !== undefined && selectedLinesSet.has(getLineKey(line.hunkIndex, line.originalLineIndex))) ? 'checked' : '';
         const commitCb = (!readonly && canRevert && line.hunkIndex !== undefined && line.originalLineIndex !== undefined) ?
-                `<input class="commit-cb" type="checkbox" ${checkedAttr} onclick="event.stopPropagation()" onchange="toggleCommitLine('${fpEsc}',${line.hunkIndex},${line.originalLineIndex},this.checked)">` : '';
+                `<input class="commit-cb" type="checkbox" ${checkedAttr} onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" onchange="event.stopPropagation();toggleCommitLine('${fpEsc}',${line.hunkIndex},${line.originalLineIndex},this.checked)">` : '';
         const revertBtn = (!readonly && canRevert && line.hunkIndex !== undefined && line.originalLineIndex !== undefined) ?
                 `<button class="line-revert" onclick="askRevertLine('${fpEsc}',${line.hunkIndex},${line.originalLineIndex},'${file.status}')" title="撤回">
           <span style="font-size:9px;font-weight:bold;">&gt;&gt;</span>
@@ -7023,7 +7153,7 @@
           const isPart = !isAll && !isNone;
           const checkedAttr = isAll ? 'checked' : '';
           const indetAttr = isPart ? 'data-indet="1"' : '';
-          const commitCb = (!readonly) ? `<input class="commit-cb" type="checkbox" ${checkedAttr} ${indetAttr} onclick="event.stopPropagation()" onchange="toggleCommitBlock('${fpEsc}',${hunkIndex},${startIdx},${endIdx},this.checked)">` : '';
+          const commitCb = (!readonly) ? `<input class="commit-cb" type="checkbox" ${checkedAttr} ${indetAttr} onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" onchange="event.stopPropagation();toggleCommitBlock('${fpEsc}',${hunkIndex},${startIdx},${endIdx},this.checked)">` : '';
           const btn = (!readonly) ? `<button class="hint-btn" onclick="askRevertMultiLines('${fpEsc}',${hunkIndex},${startIdx},${endIdx},'${file.status}')">块撤回（${count}）</button>` : '';
           const actions = `<span class="dl-actions">${commitCb}${btn}</span>`;
           return `<div class="dl revert-block-hint">${actions}<span class="ls"></span><span class="ln"></span><span class="lc"><span class="hint-tag">块撤回</span><span class="hint-text">已识别为连续变更块（${count}行），可一键撤回</span></span></div>`;
@@ -8169,6 +8299,37 @@
 
   // 真正的实时撤回 - 立即删除，后台保存，实时更新统计
   async function revertLineInstantly(filepath, hunkIdx, lineIdx, status) {
+    // 检查未跟踪文件（U类型）
+    if (status === 'U') {
+      const ok = await showConfirm({
+        title: '未跟踪文件',
+        message: `该文件尚未加入版本控制（git add）。\n\n要执行按行撤回操作，需要先将文件加入暂存区。\n\n是否自动执行 git add 并继续撤回？`,
+        okText: '加入并撤回',
+        cancelText: '取消',
+      });
+      
+      if (!ok) return;
+      
+      // 先执行 git add
+      toast('正在加入版本控制...', 'info');
+      const addRes = await POST('/api/stage_file', { path: filepath });
+      if (!addRes || !addRes.ok) {
+        toast(`加入版本控制失败: ${addRes?.error || '未知错误'}`, 'err');
+        return;
+      }
+      
+      // 刷新文件列表，更新状态
+      await refresh();
+      
+      // 重新选择当前文件以更新 diff 视图
+      if (curFile !== null) {
+        await selectFile(curFile);
+      }
+      
+      toast('文件已加入版本控制，可以继续撤回操作', 'ok');
+      return;
+    }
+    
     if (revertLineBusyByPath.get(filepath)) {
       toast('正在撤回，请稍候…', 'warn');
       return;
@@ -8446,6 +8607,37 @@
 
   // 真正的实时多行撤回 - 立即删除多行，后台保存，实时更新统计
   async function revertMultiLinesInstantly(filepath, hunkIdx, startLineIdx, endLineIdx, status) {
+    // 检查未跟踪文件（U类型）
+    if (status === 'U') {
+      const ok = await showConfirm({
+        title: '未跟踪文件',
+        message: `该文件尚未加入版本控制（git add）。\n\n要执行按块撤回操作，需要先将文件加入暂存区。\n\n是否自动执行 git add 并继续撤回？`,
+        okText: '加入并撤回',
+        cancelText: '取消',
+      });
+      
+      if (!ok) return;
+      
+      // 先执行 git add
+      toast('正在加入版本控制...', 'info');
+      const addRes = await POST('/api/stage_file', { path: filepath });
+      if (!addRes || !addRes.ok) {
+        toast(`加入版本控制失败: ${addRes?.error || '未知错误'}`, 'err');
+        return;
+      }
+      
+      // 刷新文件列表，更新状态
+      await refresh();
+      
+      // 重新选择当前文件以更新 diff 视图
+      if (curFile !== null) {
+        await selectFile(curFile);
+      }
+      
+      toast('文件已加入版本控制，可以继续撤回操作', 'ok');
+      return;
+    }
+    
     if (revertLineBusyByPath.get(filepath)) {
       toast('正在撤回，请稍候…', 'warn');
       return;
@@ -9102,10 +9294,36 @@
 
       if (canPartial) {
         const f = files[curFile];
+        // A 和 D 类型不支持行级提交（整文件添加/删除）
+        const unsupportedLines = (f.status === 'A' || f.status === 'D');
+        // A 和 D 类型不支持块级提交（整文件添加/删除）
+        const unsupportedHunks = (f.status === 'A' || f.status === 'D');
+
+        // 1) 行级部分提交（优先级更高）
+        const lineSet = ensureDefaultLineSelection(f.path, curHunks);
+        const totalLines = commitLinesTotalByPath.get(f.path);
+        const lineIsPartial = (lineSet && lineSet.size > 0 && Number.isFinite(totalLines) && totalLines > 0 && lineSet.size < totalLines);
+        if (lineIsPartial && !unsupportedLines) {
+          const ctx = (diffMode === 'unified') ? changeViewCtx : 5;
+          res = await POST('/api/commit_lines', {
+            message: msg,
+            path: f.path,
+            status: f.status,
+            lines: [...lineSet],
+            ctx
+          });
+          if (!(res && res.error)) {
+            toast(`✓ 已提交 ${paths[0]}（按行）`,'ok');
+            // 清空该文件的行级勾选，避免下次复用旧选择
+            getSelectedCommitLinesSet(f.path).clear();
+            try { commitLinesDesiredByPath.delete(f.path); } catch (e) {}
+          }
+        }
+
+        // 2) 块级部分提交（回退）
         const selectedSet = ensureDefaultHunkSelection(f.path, curHunks.length);
         const isPartial = selectedSet.size > 0 && selectedSet.size < curHunks.length;
-        const unsupported = (f.status === 'U' || f.status === 'A' || f.status === 'D');
-        if (isPartial && !unsupported) {
+        if (!res && isPartial && !unsupportedHunks) {
           const ctx = (diffMode === 'unified') ? changeViewCtx : 5;
           res = await POST('/api/commit_hunks', {
             message: msg,
@@ -9293,7 +9511,16 @@
       const res = await POST('/api/soft_reset_commit', {hash: fullHash});
       if (res && res.ok) {
         toast('✓ 已撤销提交（修改已保留）','ok');
+        
+        // 刷新文件列表
         await refresh();
+        
+        // 清除当前选中的文件和 diff 视图
+        curFile = null;
+        curHunks = [];
+        clearDiff();
+        
+        // 返回日志列表视图
         backToLog();
       } else {
         toast(`撤销失败: ${(res && (res.msg||res.error)) ? (res.msg||res.error) : '未知错误'}`,'err');
