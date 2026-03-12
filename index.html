@@ -1338,7 +1338,7 @@
     <div class="sf-foot">
       <button class="btn" style="flex:1" onclick="selAll(true)">全选</button>
       <button class="btn" style="flex:1" onclick="selAll(false)">取消</button>
-      <button class="btn red" style="flex:1" onclick="showModal('revertAllModal')">全撤回</button>
+      <button class="btn red" id="revertAllBtn" style="flex:1" onclick="showModal('revertAllModal')">全撤回</button>
     </div>
   </div>
   <div class="resizer" id="r1"></div>
@@ -1480,11 +1480,11 @@
 
 <div class="overlay" id="revertAllModal">
   <div class="modal">
-    <h3>撤回所有修改</h3>
+    <h3 id="revertAllTitle">撤回所有修改</h3>
     <p id="revertAllDesc">将撤回工作区所有未提交修改，此操作不可撤销！</p>
     <div class="modal-btns">
       <button class="btn" onclick="closeModal('revertAllModal')">取消</button>
-      <button class="btn red" onclick="doRevertAll()">全部撤回</button>
+      <button class="btn red" id="revertAllOkBtn" onclick="doRevertAll()">全部撤回</button>
     </div>
   </div>
 </div>
@@ -5776,6 +5776,8 @@
     // Clear and append all at once
     el.innerHTML = '';
     el.appendChild(fragment);
+
+    updateRevertAllTexts();
   }
 
   function filterFiles(q) { debouncedFilterFiles(q); }
@@ -5811,34 +5813,28 @@
       }
     }
     updateStats(); renderFileList();
+    updateRevertAllTexts();
   }
+
   function selAll(v) {
     if (v) {
-      files.forEach((_,i) => checkedSet.add(i));
+      files.forEach((_, i) => checkedSet.add(i));
     } else {
       checkedSet.clear();
     }
 
-    // 文件级全选/全取消：同步到各文件的 hunk 选择（未知 hunksLen 的先记录期望）
-    files.forEach((f, i) => {
+    files.forEach((f) => {
       if (!f || !f.path) return;
-      const hunksKnown = (curFile === i) && Array.isArray(curHunks);
-      if (hunksKnown) {
-        setAllCommitLines(f.path, curHunks, v);
+      commitLinesDesiredByPath.set(f.path, !!v);
+      if (!v) {
+        const set = getSelectedCommitLinesSet(f.path);
+        set.clear();
+        commitLinesInitByPath.set(f.path, true);
+        commitLinesTotalByPath.set(f.path, 0);
       } else {
-        commitLinesDesiredByPath.set(f.path, !!v);
-        // 全不选时，立即清除未初始化文件的行级选择
-        if (!v) {
+        if (!commitLinesInitByPath.get(f.path)) {
           const set = getSelectedCommitLinesSet(f.path);
           set.clear();
-          commitLinesInitByPath.set(f.path, true);
-          commitLinesTotalByPath.set(f.path, 0);
-        } else {
-          // 全选时，如果文件尚未初始化，清除旧的行级选择（避免残留数据）
-          if (!commitLinesInitByPath.get(f.path)) {
-            const set = getSelectedCommitLinesSet(f.path);
-            set.clear();
-          }
         }
       }
     });
@@ -5850,6 +5846,7 @@
       renderDiffWithFullContext(f, curHunks, false, changeLocations);
     }
     updateStats(); renderFileList();
+    updateRevertAllTexts();
   }
   function updateStats() {
     let ta=0, tr=0, tm=0;
@@ -9390,6 +9387,10 @@
     // 禁用自动刷新diff，避免撤回后被WebSocket推送打断
     disableAutoRefreshDiff();
 
+    const selectedPaths = [...checkedSet].map(i=>files[i] && files[i].path).filter(Boolean);
+    const isPartial = selectedPaths.length > 0;
+    const scopePaths = isPartial ? selectedPaths : null;
+
     // Show loading indicator
     const diffView = document.getElementById('diffView');
     const fileList = document.getElementById('fileList');
@@ -9403,13 +9404,16 @@
     // Snapshot before revert-all for Undo (best-effort, limited)
     let undoSnaps = [];
     try {
-      const list = await GET('/api/files');
-      const fs = (list && Array.isArray(list.files)) ? list.files : [];
-      const paths = fs.map(x => x && x.path).filter(Boolean);
+      let paths = scopePaths;
+      if (!paths) {
+        const list = await GET('/api/files');
+        const fs = (list && Array.isArray(list.files)) ? list.files : [];
+        paths = fs.map(x => x && x.path).filter(Boolean);
+      }
       const limit = 50;
-      const take = paths.slice(0, limit);
+      const take = (paths || []).slice(0, limit);
       undoSnaps = (await Promise.all(take.map(p => snapshotWorkingFile(p)))).filter(Boolean);
-      if (paths.length > limit) {
+      if (paths && paths.length > limit) {
         console.warn(`Undo snapshot limited to first ${limit} files (total ${paths.length})`);
       }
     } catch (e) {
@@ -9418,13 +9422,13 @@
     }
 
     try {
-      const res = await POST('/api/revert_all',{});
+      const res = await POST('/api/revert_all', isPartial ? {paths: selectedPaths} : {});
       if (res.ok) {
-        toast('✓ 已撤回所有修改','ok');
+        toast(isPartial ? '✓ 已撤回所选文件修改' : '✓ 已撤回所有修改','ok');
         if (undoSnaps && undoSnaps.length) {
           pushUndoAction({
             type: 'revert_all',
-            label: `已撤回所有修改，可撤销（${undoSnaps.length} 个文件）`,
+            label: `${isPartial ? '已撤回所选文件修改' : '已撤回所有修改'}，可撤销（${undoSnaps.length} 个文件）`,
             snapshots: undoSnaps,
           });
         }
@@ -9866,8 +9870,38 @@
   }
 
   // ── Modal / Toast ─────────────────────────────────────────────────────────────
+  function updateRevertAllTexts() {
+    const selectedPaths = [...checkedSet].map(i=>files[i] && files[i].path).filter(Boolean);
+    const totalFiles = Array.isArray(files) ? files.length : 0;
+    const selectedCount = selectedPaths.length;
+    const isNone = selectedCount === 0;
+    const isAll = totalFiles > 0 && selectedCount === totalFiles;
+    const isPartial = (!isNone) && (!isAll);
+
+    const btn = document.getElementById('revertAllBtn');
+    if (btn) {
+      btn.textContent = isPartial ? '撤回所选' : '全撤回';
+      btn.disabled = isNone;
+    }
+
+    const titleEl = document.getElementById('revertAllTitle');
+    const descEl = document.getElementById('revertAllDesc');
+    const okBtn = document.getElementById('revertAllOkBtn');
+    if (titleEl) titleEl.textContent = isPartial ? '撤回所选文件' : '撤回所有修改';
+    if (descEl) {
+      descEl.textContent = isPartial
+              ? `将撤回已勾选文件的未提交修改（${selectedCount} 个），此操作不可撤销！`
+              : '将撤回工作区所有未提交修改，此操作不可撤销！';
+    }
+    if (okBtn) {
+      okBtn.textContent = isPartial ? '撤回所选' : '全部撤回';
+      okBtn.disabled = isNone;
+    }
+  }
+
   function showModal(id) {
     if (id === 'revertFileModal') showRevertFileModal();
+    if (id === 'revertAllModal') updateRevertAllTexts();
     document.getElementById(id).classList.add('show');
   }
   function closeModal(id) { document.getElementById(id).classList.remove('show'); }
