@@ -2654,6 +2654,8 @@
     }
 
     if (el) {
+      try { el.classList.remove('find-hit'); } catch (e0) {}
+      try { void el.offsetWidth; } catch (e1) {}
       el.classList.add('find-hit');
       el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
@@ -5645,6 +5647,9 @@
     });
     checkedSet = nextChecked;
 
+    // 清空所有行级和块级勾选状态（刷新后重置）
+    clearAllCheckboxStates();
+
     renderFileList();
     renderLogList();
     updateStats();
@@ -6265,17 +6270,19 @@
     const f = files[i];
     if (f && f.path) {
       const hunksKnown = (curFile === i) && Array.isArray(curHunks);
+      const isChecked = checkedSet.has(i);
+      
       if (hunksKnown) {
-        setAllCommitLines(f.path, curHunks, checkedSet.has(i));
-
+        // 当前文件：立即更新所有行级勾选状态
+        setAllCommitLines(f.path, curHunks, isChecked);
         const changeLocations = buildChangeLocationsFromHunks(curHunks);
         renderDiffWithFullContext(f, curHunks, false, changeLocations);
       } else {
         // hunks 未加载时
-        if (checkedSet.has(i)) {
-          // 勾选：先记录期望，进入 diff 时应用
+        if (isChecked) {
+          // 勾选：记录期望，进入 diff 时应用
           commitLinesDesiredByPath.set(f.path, true);
-          // 如果文件尚未初始化，也清除旧的行级选择（避免残留数据）
+          // 如果文件尚未初始化，清除旧的行级选择
           if (!commitLinesInitByPath.get(f.path)) {
             const set = getSelectedCommitLinesSet(f.path);
             set.clear();
@@ -6286,7 +6293,6 @@
           const set = getSelectedCommitLinesSet(f.path);
           set.clear();
           commitLinesInitByPath.set(f.path, true);
-          // 更新 total 为 0，确保下次计算时不会误判
           commitLinesTotalByPath.set(f.path, 0);
         }
       }
@@ -6305,14 +6311,29 @@
     files.forEach((f) => {
       if (!f || !f.path) return;
       commitLinesDesiredByPath.set(f.path, !!v);
+      const set = getSelectedCommitLinesSet(f.path);
+      
       if (!v) {
-        const set = getSelectedCommitLinesSet(f.path);
+        // 取消全选：清除所有行级勾选
         set.clear();
         commitLinesInitByPath.set(f.path, true);
         commitLinesTotalByPath.set(f.path, 0);
       } else {
-        if (!commitLinesInitByPath.get(f.path)) {
-          const set = getSelectedCommitLinesSet(f.path);
+        // 全选：如果文件已初始化，勾选所有行；否则标记期望状态
+        if (commitLinesInitByPath.get(f.path)) {
+          // 已初始化的文件：需要有hunks数据才能勾选所有行
+          // 对于当前文件，立即勾选所有行
+          if (curFile !== null && files[curFile] && files[curFile].path === f.path && Array.isArray(curHunks)) {
+            curHunks.forEach((hunk, hi) => {
+              (hunk.lines || []).forEach((l, li) => {
+                if (l.type === 'added' || l.type === 'removed' || l.type === 'modified') {
+                  set.add(getLineKey(hi, li));
+                }
+              });
+            });
+          }
+        } else {
+          // 未初始化的文件：清除行级选择，等待加载时应用desired状态
           set.clear();
         }
       }
@@ -6326,6 +6347,18 @@
     }
     updateStats(); renderFileList();
     updateRevertAllTexts();
+  }
+
+  // 清空所有勾选状态（用于提交、撤回、恢复等操作后）
+  function clearAllCheckboxStates() {
+    checkedSet.clear();
+    commitLinesSelectedByPath.clear();
+    commitLinesInitByPath.clear();
+    commitLinesDesiredByPath.clear();
+    commitLinesTotalByPath.clear();
+    commitHunksSelectedByPath.clear();
+    commitHunksInitByPath.clear();
+    commitHunksDesiredByPath.clear();
   }
   function updateStats() {
     let ta=0, tr=0, tm=0;
@@ -6866,14 +6899,43 @@
       });
 
       const prevTotal = commitLinesTotalByPath.get(filepath);
+      const prevSetSize = set.size; // 记录当前已勾选的行数（包含可能已删除的旧key）
       commitLinesTotalByPath.set(filepath, total);
 
+      // 移除所有不在当前changeKeys中的旧key（已删除的行）
+      const currentKeysSet = new Set(changeKeys);
+      const keysToRemove = [];
+      set.forEach(k => {
+        if (!currentKeysSet.has(k)) {
+          keysToRemove.push(k);
+        }
+      });
+      keysToRemove.forEach(k => set.delete(k));
+
+      // 检测新增行的关键逻辑（必须在自动全选逻辑之前）
+      // 1. 总行数增加（total > prevTotal）
+      // 2. 之前是全选状态（清理后的set.size等于prevTotal）
+      // 3. 新增的行默认不勾选
+      let hasNewLines = false;
+      if (Number.isFinite(prevTotal) && prevTotal > 0 && total > prevTotal) {
+        // 检查之前是否是全选状态（清理旧key后的set大小应该等于或接近prevTotal）
+        const wasFullySelected = (set.size >= prevTotal - 1) || (desired === true && set.size === prevTotal);
+        if (wasFullySelected) {
+          // 有新增行且之前是全选状态
+          // 新增行不自动勾选，保持原有已勾选的行
+          // 将desired设置为null，表示部分勾选状态
+          commitLinesDesiredByPath.set(filepath, null);
+          hasNewLines = true;
+        }
+      }
+
       // Sync line-level selection with explicit file-level intent.
-      // - desired=true + file checked => ensure all changed lines are selected
       // - desired=false => ensure none are selected
+      // - desired=true + file checked => ensure all changed lines are selected (但有新增行时不执行)
       if (desired === false) {
         set.clear();
-      } else if (desired === true && fileChecked === true) {
+      } else if (desired === true && fileChecked === true && !hasNewLines) {
+        // 只有在没有新增行的情况下，才自动全选所有行
         // When user expects the whole file to be selected, but line set is empty/partial,
         // make it consistent by selecting all current changed lines.
         if (total > 0 && set.size < total) {
@@ -6881,25 +6943,18 @@
         }
       }
 
-      // Only auto-select new change lines when:
-      // - file is checked (not half checked)
-      // - previous state was "all selected" (set.size >= prevTotal)
-      // - not explicitly desired=false
-      if (desired !== false && fileChecked === true && Number.isFinite(prevTotal) && prevTotal >= 0 && set.size >= prevTotal && total > prevTotal) {
-        changeKeys.forEach(k => set.add(k));
-      }
-
       syncCheckedSetForFile(filepath);
       return set;
     }
 
-    // First-time init for this file
+    // First-time init for this file - 默认所有行都不勾选
     set.clear();
     let total = 0;
     (hunks || []).forEach((hunk, hi) => {
       (hunk.lines || []).forEach((l, li) => {
         if (l.type === 'added' || l.type === 'removed' || l.type === 'modified') {
           total++;
+          // 只有当明确设置desired=true时才勾选
           if (desired === true) set.add(getLineKey(hi, li));
         }
       });
@@ -6940,20 +6995,83 @@
     });
   }
 
+  // 更新所有块级复选框的状态（勾选、半勾选、未勾选）
+  function updateAllBlockCheckboxes(viewEl, filepath, hunks) {
+    if (!viewEl || !hunks) return;
+    const set = getSelectedCommitLinesSet(filepath);
+    
+    // 查找所有块级复选框
+    const blockCheckboxes = viewEl.querySelectorAll('.commit-cb');
+    blockCheckboxes.forEach(cb => {
+      const onchangeAttr = cb.getAttribute('onchange') || '';
+      // 匹配块级复选框: toggleCommitBlock('path',hunkIdx,startIdx,endIdx,...)
+      const blockMatch = onchangeAttr.match(/toggleCommitBlock\('([^']+)',(\d+),(\d+),(\d+),/);
+      if (blockMatch) {
+        const hunkIdx = parseInt(blockMatch[2]);
+        const startIdx = parseInt(blockMatch[3]);
+        const endIdx = parseInt(blockMatch[4]);
+        
+        const h = hunks[hunkIdx];
+        if (!h || !Array.isArray(h.lines)) return;
+        
+        // 计算这个块内有多少行被勾选
+        let total = 0;
+        let selected = 0;
+        for (let li = startIdx; li <= endIdx; li++) {
+          const l = h.lines[li];
+          if (!l) continue;
+          if (l.type === 'added' || l.type === 'removed' || l.type === 'modified') {
+            total++;
+            if (set.has(getLineKey(hunkIdx, li))) {
+              selected++;
+            }
+          }
+        }
+        
+        // 更新块级复选框状态
+        const isAll = total > 0 && selected === total;
+        const isNone = selected === 0;
+        const isPart = !isAll && !isNone;
+        
+        cb.checked = !isNone;
+        cb.indeterminate = isPart;
+        if (isPart) {
+          cb.classList.add('indet');
+          cb.setAttribute('data-indet', '1');
+        } else {
+          cb.classList.remove('indet');
+          cb.removeAttribute('data-indet');
+        }
+      }
+    });
+  }
+
   function syncCheckedSetForFile(filepath) {
     const idx = files.findIndex(f => f && f.path === filepath);
     if (idx < 0) return;
     const set = getSelectedCommitLinesSet(filepath);
     const desired = commitLinesDesiredByPath.get(filepath);
+    const total = commitLinesTotalByPath.get(filepath);
 
-    // Keep file-level checkbox state aligned with line-level selection.
-    // Do NOT require total to be known; total is only used for indeterminate UI.
-    // But: user can explicitly request file-level selection via desired.
-    // When desired is set, do NOT override it based on current set.size (it may lag during async render/update).
-    if (desired === true) checkedSet.add(idx);
-    else if (desired === false) checkedSet.delete(idx);
-    else {
-      if (set.size === 0) checkedSet.delete(idx);
+    // 根据行级勾选状态决定文件级勾选框状态
+    // 优先使用精确的行级统计，只在没有行级数据时使用desired
+    if (Number.isFinite(total) && total > 0) {
+      const isAll = set.size === total;
+      const isNone = set.size === 0;
+      
+      if (isAll) {
+        checkedSet.add(idx);
+      } else if (isNone) {
+        checkedSet.delete(idx);
+      } else {
+        // 部分勾选：保持文件为勾选状态（显示半勾选）
+        checkedSet.add(idx);
+      }
+    } else {
+      // 没有行级数据时，使用desired状态
+      if (desired === true) checkedSet.add(idx);
+      else if (desired === false) checkedSet.delete(idx);
+      else if (set.size === 0) checkedSet.delete(idx);
       else checkedSet.add(idx);
     }
 
@@ -7015,15 +7133,15 @@
     commitLinesInitByPath.set(filepath, true);
     // Record an explicit user intent so ensureDefaultLineSelection won't auto-expand
     // selections in a way that surprises the user.
-    commitLinesDesiredByPath.set(filepath, set.size > 0);
+    commitLinesDesiredByPath.set(filepath, set.size > 0 ? null : false);
     syncFileCheckFromHunks(filepath);
 
-    // 仅更新复选框视觉状态，不触发完整的重新渲染以避免干扰编辑状态和自动保存计时器
+    // 立即更新当前文件的块级勾选框状态
     if (curFile !== null && files[curFile] && files[curFile].path === filepath) {
       const view = document.getElementById('diffView');
-      if (view) {
-        // 更新块级复选框的半选状态（不会触发重新渲染，只更新现有复选框）
-        applyIndeterminateCheckboxes(view);
+      if (view && Array.isArray(curHunks)) {
+        // 更新所有块级复选框的状态
+        updateAllBlockCheckboxes(view, filepath, curHunks);
       }
     }
   }
@@ -7041,10 +7159,10 @@
       }
     }
     commitLinesInitByPath.set(filepath, true);
-    commitLinesDesiredByPath.set(filepath, set.size > 0);
+    commitLinesDesiredByPath.set(filepath, set.size > 0 ? null : false);
     syncFileCheckFromHunks(filepath);
 
-    // 仅更新复选框视觉状态，不触发完整的重新渲染以避免干扰编辑状态
+    // 立即更新当前文件的所有行级勾选框和块级勾选框状态
     if (curFile !== null && files[curFile] && files[curFile].path === filepath) {
       const view = document.getElementById('diffView');
       if (view) {
@@ -7053,18 +7171,23 @@
         commitCbs.forEach(cb => {
           // 从 onchange 属性中解析 hunkIdx 和 lineIdx
           const onchangeAttr = cb.getAttribute('onchange') || '';
-          const match = onchangeAttr.match(/toggleCommitLine\('([^']+)',(\d+),(\d+),/);
+          const match = onchangeAttr.match(/toggleCommitLine\('([^']+)',(\d+),(\d+),/) ||
+                        onchangeAttr.match(/toggleCommitBlock\('([^']+)',(\d+),(\d+),(\d+),/);
           if (match) {
             const cbHunkIdx = parseInt(match[2]);
             const cbLineIdx = parseInt(match[3]);
             if (cbHunkIdx === hunkIdx && cbLineIdx >= startLineIdx && cbLineIdx <= endLineIdx) {
               cb.checked = checked;
+              cb.indeterminate = false;
+              cb.classList.remove('indet');
             }
           }
         });
         
-        // 更新块级复选框的半选状态
-        applyIndeterminateCheckboxes(view);
+        // 更新所有块级复选框的半选状态
+        if (Array.isArray(curHunks)) {
+          updateAllBlockCheckboxes(view, filepath, curHunks);
+        }
       }
     }
   }
@@ -7476,6 +7599,7 @@
     </div>`;
 
       applyIndeterminateCheckboxes(view);
+      updateAllBlockCheckboxes(view, file.path, hunks);
       setupEditableLineEditing();
     } else if (effectiveMode === 'single') {
       // 状态 U/D：单列显示（U 仅当前；D 仅原始）
@@ -7731,6 +7855,7 @@
     </div>`;
 
       applyIndeterminateCheckboxes(view);
+      updateAllBlockCheckboxes(view, file.path, hunks);
       setupEditableLineEditing();
       try {
         const first = view.querySelector('.editable-line');
@@ -7902,6 +8027,7 @@
     </div>`;
 
       applyIndeterminateCheckboxes(view);
+      updateAllBlockCheckboxes(view, file.path, hunks);
       setupEditableLineEditing();
     }
   }
