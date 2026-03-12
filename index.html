@@ -343,22 +343,6 @@
     ::-webkit-scrollbar-track{background:transparent;}
     ::-webkit-scrollbar-thumb{background:var(--bg5);border-radius:3px;}
 
-    .diff-tooltip{
-      position:fixed;
-      z-index:9999;
-      max-width:min(520px, 70vw);
-      background:var(--bg2);
-      border:1px solid var(--border);
-      color:var(--text);
-      font-size:11px;
-      line-height:1.5;
-      padding:8px 10px;
-      border-radius:8px;
-      box-shadow:0 12px 30px rgba(0,0,0,.35);
-      white-space:pre-wrap;
-      pointer-events:none;
-      display:none;
-    }
 
     /* ── TOPBAR ── */
     .topbar{
@@ -912,7 +896,6 @@
     .split-wrap{display:grid;grid-template-columns:1fr 1fr;min-height:100%;overflow-x:auto;}
     .sp{overflow:auto;border-right:2px solid var(--border);}
     .sp:last-child{border-right:none;}
-    .sp-body{overflow-x:auto;}
     .sp-hdr{padding:4px 10px;background:var(--bg3);border-bottom:1px solid var(--border);font-size:11px;position:sticky;top:0;z-index:1;font-family:'JetBrains Mono',monospace;}
 
     .change-navigation{padding:8px 10px;background:var(--bg2);border-bottom:1px solid var(--border);margin-bottom:10px;overflow-x:auto;white-space:nowrap;position:sticky;top:0;z-index:100;}
@@ -927,12 +910,6 @@
 
     .change-modified{border-left:3px solid var(--accent);}
 
-    .findbar{position:absolute;top:86px;right:10px;z-index:9999;background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:8px 10px;display:none;gap:8px;align-items:center;box-shadow:0 8px 30px rgba(0,0,0,.35);cursor:grab;user-select:none}
-    .findbar:active{cursor:grabbing}
-    .findbar input{background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:6px 8px;outline:none;width:220px;font-size:12px;cursor:text;user-select:text}
-    .findbar .btn{background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:6px 8px;font-size:12px;cursor:pointer}
-    .findbar .btn:hover{background:var(--bg3)}
-    .findbar .meta{font-size:11px;color:var(--text3);min-width:70px;text-align:right}
     .find-hit{animation:findFlash 0.9s ease-out 1 forwards;}
     @keyframes findFlash{
       0%{
@@ -1133,15 +1110,15 @@
 
     /* Log detail */
     .log-detail{flex:1;display:flex;flex-direction:column;overflow:hidden;}
-    .log-detail-hdr{padding:8px 10px;border-bottom:1px solid var(--border);flex-shrink:0;}
-    .log-detail-hash{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--warn);}
-    .log-detail-msg{font-size:13px;font-weight:600;margin:3px 0;}
-    .log-detail-meta{font-size:11px;color:var(--text2);}
-    .log-back{display:flex;align-items:center;gap:4px;color:var(--accent);font-size:11px;
-      cursor:pointer;margin-bottom:6px;}
-    .log-back:hover{text-decoration:underline;}
-    .log-file-list{flex:1;overflow-y:auto;}
-    .lf{display:flex;align-items:center;gap:6px;padding:5px 10px;cursor:pointer;
+    .log-detail-top{padding:8px 8px;border-bottom:1px solid var(--border);flex-shrink:0;}
+    .log-detail-back{display:flex;align-items:center;gap:4px;color:var(--accent);font-size:11px;
+      cursor:pointer;margin-bottom:4px;}
+    .log-detail-back:hover{text-decoration:underline;}
+    .log-detail-hash{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--warn);margin-bottom:1px;}
+    .log-detail-msg{font-size:13px;font-weight:600;margin:2px 0;}
+    .log-detail-meta{font-size:11px;color:var(--text2);margin-top:1px;}
+    .log-file-list{flex:1;overflow-y:auto;padding:2px 0;}
+    .lf{display:flex;align-items:center;gap:6px;padding:4px 8px;cursor:pointer;
       border-left:2px solid transparent;transition:all .1s;}
     .lf:hover{background:var(--bg3);}
     .lf.active{background:var(--bg4);border-left-color:var(--purple);}
@@ -2391,6 +2368,100 @@
     // 将函数暴露到全局作用域以便编辑器模式使用
     window.setEditStatus = setEditStatus;
 
+    // 实时更新行号的函数
+    const updateLineNumbers = () => {
+      try {
+        const host = document.getElementById('diffView');
+        if (!host) return;
+        
+        // 对于并排视图和变更视图,重新计算行号
+        const isPlainEditor = !!window.__plainEditorFilename;
+        if (isPlainEditor) return; // 普通编辑器有自己的行号更新机制
+        
+        // 检查是否是并排视图
+        const splitWrap = host.querySelector('.split-wrap');
+        if (splitWrap) {
+          // 并排视图 - 左右两列分别更新
+          const leftPanel = splitWrap.querySelector('.sp:first-child');
+          const rightPanel = splitWrap.querySelector('.sp:last-child');
+          
+          if (leftPanel) {
+            const leftLines = leftPanel.querySelectorAll('.dl');
+            let leftLineNum = 1;
+            leftLines.forEach(dl => {
+              const lnEl = dl.querySelector('.ln');
+              // 跳过空行和提示行
+              if (!lnEl || dl.classList.contains('empty') || dl.classList.contains('revert-block-hint')) {
+                return;
+              }
+              
+              if (dl.classList.contains('context')) {
+                lnEl.textContent = leftLineNum;
+                leftLineNum++;
+              } else if (dl.classList.contains('removed') || dl.classList.contains('modified')) {
+                lnEl.textContent = leftLineNum;
+                leftLineNum++;
+              } else if (dl.classList.contains('added')) {
+                // 新增行在左侧不显示行号
+                lnEl.textContent = '';
+              }
+            });
+          }
+          
+          if (rightPanel) {
+            const rightLines = rightPanel.querySelectorAll('.dl');
+            let rightLineNum = 1;
+            rightLines.forEach(dl => {
+              const lnEl = dl.querySelector('.ln');
+              // 跳过空行和提示行
+              if (!lnEl || dl.classList.contains('empty') || dl.classList.contains('revert-block-hint')) {
+                return;
+              }
+              
+              if (dl.classList.contains('context')) {
+                lnEl.textContent = rightLineNum;
+                rightLineNum++;
+              } else if (dl.classList.contains('added') || dl.classList.contains('modified')) {
+                lnEl.textContent = rightLineNum;
+                rightLineNum++;
+              } else if (dl.classList.contains('removed')) {
+                // 删除行在右侧不显示行号
+                lnEl.textContent = '';
+              }
+            });
+          }
+        } else {
+          // 变更视图（unified） - 单列更新
+          const allLines = host.querySelectorAll('.dl');
+          let currentLineNum = 1;
+          allLines.forEach(dl => {
+            const lnEl = dl.querySelector('.ln');
+            // 跳过空行、提示行和折叠提示行
+            if (!lnEl || dl.classList.contains('empty') || dl.classList.contains('revert-block-hint') || dl.classList.contains('gm-gap-hint')) {
+              return;
+            }
+            
+            // 为有效代码行更新行号
+            if (dl.classList.contains('context') || dl.classList.contains('added') || dl.classList.contains('modified')) {
+              lnEl.textContent = currentLineNum;
+              currentLineNum++;
+            } else if (dl.classList.contains('removed')) {
+              // 删除行保持其原始行号,不递增
+              // 如果行号为空,则设置为当前值(但不递增)
+              if (!lnEl.textContent || lnEl.textContent === '') {
+                lnEl.textContent = currentLineNum;
+              }
+            }
+          });
+        }
+      } catch (e) {
+        console.error('Error updating line numbers:', e);
+      }
+    };
+    
+    // 暴露到全局以便其他函数调用
+    window.updateLineNumbers = updateLineNumbers;
+
     const scheduleAutoSave = () => {
       if (window.__autoSaveTimer) clearTimeout(window.__autoSaveTimer);
       if (!window.__autoSaveEnabled) {
@@ -2554,6 +2625,11 @@
 
         window.__dirtyEdits = true;
         scheduleAutoSave();
+        
+        // 更新行号
+        if (typeof window.updateLineNumbers === 'function') {
+          window.updateLineNumbers();
+        }
 
         try {
           newLine.focus();
@@ -2930,6 +3006,12 @@
                   __recordAndRemoveDl(lineEl);
                   window.__dirtyEdits = true;
                   scheduleAutoSave();
+                  
+                  // 更新行号
+                  if (typeof window.updateLineNumbers === 'function') {
+                    window.updateLineNumbers();
+                  }
+                  
                   if (prev) {
                     prev.focus();
                     setCaretOffset(prev, (prev.textContent || '').length);
@@ -2963,6 +3045,12 @@
                   __recordAndRemoveDl(lineEl);
                   window.__dirtyEdits = true;
                   scheduleAutoSave();
+                  
+                  // 更新行号
+                  if (typeof window.updateLineNumbers === 'function') {
+                    window.updateLineNumbers();
+                  }
+                  
                   prev.focus();
                   setCaretOffset(prev, prevTextClean.length);
                 } catch (e) {}
@@ -3269,6 +3357,12 @@
                       __recordAndRemoveDl(lineEl);
                       window.__dirtyEdits = true;
                       scheduleAutoSave();
+                      
+                      // 更新行号
+                      if (typeof window.updateLineNumbers === 'function') {
+                        window.updateLineNumbers();
+                      }
+                      
                       prev.focus();
                       setCaretOffset(prev, (prev.textContent || '').length);
                       return;
@@ -3284,6 +3378,12 @@
                     __recordAndRemoveDl(lineEl);
                     window.__dirtyEdits = true;
                     scheduleAutoSave();
+                    
+                    // 更新行号
+                    if (typeof window.updateLineNumbers === 'function') {
+                      window.updateLineNumbers();
+                    }
+                    
                     prev.focus();
                     setCaretOffset(prev, prevTextClean.length);
                     return;
