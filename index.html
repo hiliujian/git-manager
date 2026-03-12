@@ -9254,7 +9254,18 @@
     if (window.__gmRevertAsLocalEdits) {
       try { window.__gmWholeContentDirty = true; } catch (e) {}
       window.__dirtyEdits = true;
-      try { scheduleAutoSave(); } catch (e) {}
+      
+      // 撤回操作后立即保存文件，不触发自动保存计时器
+      try {
+        (async () => {
+          try {
+            await saveFile();
+            window.__dirtyEdits = false;
+          } catch (e) {
+            console.error('撤回后立即保存失败:', e);
+          }
+        })();
+      } catch (e) {}
 
       try {
         const host = document.getElementById('diffView');
@@ -9591,7 +9602,18 @@
     if (window.__gmRevertAsLocalEdits) {
       try { window.__gmWholeContentDirty = true; } catch (e) {}
       window.__dirtyEdits = true;
-      try { scheduleAutoSave(); } catch (e) {}
+      
+      // 块撤回操作后立即保存文件，不触发自动保存计时器
+      try {
+        (async () => {
+          try {
+            await saveFile();
+            window.__dirtyEdits = false;
+          } catch (e) {
+            console.error('块撤回后立即保存失败:', e);
+          }
+        })();
+      } catch (e) {}
 
       try {
         const host = document.getElementById('diffView');
@@ -9806,7 +9828,18 @@
     if (window.__gmRevertAsLocalEdits) {
       try { window.__gmWholeContentDirty = true; } catch (e) {}
       window.__dirtyEdits = true;
-      try { scheduleAutoSave(); } catch (e) {}
+      
+      // 代码块撤回操作后立即保存文件，不触发自动保存计时器
+      try {
+        (async () => {
+          try {
+            await saveFile();
+            window.__dirtyEdits = false;
+          } catch (e) {
+            console.error('代码块撤回后立即保存失败:', e);
+          }
+        })();
+      } catch (e) {}
 
       try {
         const host = document.getElementById('diffView');
