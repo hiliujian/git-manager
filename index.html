@@ -911,22 +911,142 @@
     .change-modified{border-left:3px solid var(--accent);}
 
     .find-hit{animation:findFlash 0.9s ease-out 1 forwards;}
+    [data-theme="light"] .find-hit{animation-name:findFlashLight;}
     @keyframes findFlash{
       0%{
-        box-shadow: inset 0 0 0 9999px rgba(255, 255, 0, 0.22);
-        outline: 1px solid rgba(255, 240, 120, 0.75);
+        box-shadow: inset 0 0 0 9999px rgba(255, 214, 10, 0.16);
+        outline: 1px solid rgba(255, 214, 10, 0.26);
         outline-offset: -1px;
       }
       55%{
-        box-shadow: inset 0 0 0 9999px rgba(255, 255, 0, 0.16);
-        outline: 1px solid rgba(255, 240, 120, 0.55);
+        box-shadow: inset 0 0 0 9999px rgba(255, 214, 10, 0.10);
+        outline: 1px solid rgba(255, 214, 10, 0.18);
         outline-offset: -1px;
       }
       100%{
-        box-shadow: inset 0 0 0 9999px rgba(255, 255, 0, 0);
-        outline: 1px solid rgba(255, 240, 120, 0);
+        box-shadow: inset 0 0 0 9999px rgba(255, 214, 10, 0);
+        outline: 1px solid rgba(255, 214, 10, 0);
         outline-offset: -1px;
       }
+    }
+
+    @keyframes findFlashLight{
+      0%{
+        box-shadow: inset 0 0 0 9999px rgba(255, 193, 7, 0.26);
+        outline: 1px solid rgba(255, 193, 7, 0.30);
+        outline-offset: -1px;
+      }
+      55%{
+        box-shadow: inset 0 0 0 9999px rgba(255, 193, 7, 0.16);
+        outline: 1px solid rgba(255, 193, 7, 0.20);
+        outline-offset: -1px;
+      }
+      100%{
+        box-shadow: inset 0 0 0 9999px rgba(255, 193, 7, 0);
+        outline: 1px solid rgba(255, 193, 7, 0);
+        outline-offset: -1px;
+      }
+    }
+
+    .find-mark{
+      background:rgba(255, 230, 120, 0.22);
+      box-shadow:0 0 0 1px rgba(255, 230, 120, 0.20) inset;
+      border-radius:4px;
+      padding:0 1px;
+    }
+    [data-theme="light"] .find-mark{
+      background:rgba(255, 214, 10, 0.24);
+      box-shadow:0 0 0 1px rgba(255, 214, 10, 0.20) inset;
+    }
+
+    .plain-editor-gutter .n.find-match{
+      color:var(--text);
+      background:rgba(255, 230, 120, 0.10);
+      box-shadow: inset 2px 0 0 rgba(255, 230, 120, 0.60);
+    }
+    [data-theme="light"] .plain-editor-gutter .n.find-match{
+      background:rgba(255, 214, 10, 0.16);
+      box-shadow: inset 2px 0 0 rgba(255, 214, 10, 0.55);
+    }
+
+    .find-overlay{
+      position:absolute;
+      top:0;
+      left:0;
+      width:100%;
+      height:100%;
+      pointer-events:none;
+      z-index:20;
+    }
+    .find-ol-hit{
+      position:absolute;
+      border-radius:4px;
+      background:rgba(255, 214, 10, 0.16);
+      box-shadow:
+        0 0 0 1px rgba(255, 214, 10, 0.26) inset,
+        0 0 0 1px rgba(0,0,0,0.10);
+      mix-blend-mode:normal;
+    }
+    [data-theme="light"] .find-ol-hit{
+      background:rgba(255, 193, 7, 0.26);
+      box-shadow:
+        0 0 0 1px rgba(255, 193, 7, 0.30) inset,
+        0 0 0 1px rgba(0,0,0,0.06);
+    }
+
+    .findbar{
+      position:absolute;
+      top:8px;
+      right:10px;
+      left:auto;
+      bottom:auto;
+      display:none;
+      align-items:center;
+      gap:6px;
+      padding:7px 8px;
+      background:rgba(26,28,36,.78);
+      border:none;
+      border-radius:10px;
+      box-shadow:
+        0 20px 60px rgba(0,0,0,.55),
+        0 0 0 1px rgba(255,255,255,.06) inset;
+      backdrop-filter: blur(10px);
+      z-index:1200;
+      cursor:move;
+      user-select:none;
+    }
+    .findbar input{
+      width:180px;
+      max-width:240px;
+      background:rgba(255,255,255,.06);
+      border:none;
+      border-radius:8px;
+      padding:6px 8px;
+      color:var(--text);
+      font-family:'JetBrains Mono',monospace;
+      font-size:12px;
+      outline:none;
+      cursor:text;
+      user-select:text;
+    }
+    .findbar input:focus{
+      box-shadow:0 0 0 2px rgba(110,180,247,.28);
+    }
+    .findbar .meta{font-size:10px;color:var(--text3);min-width:42px;text-align:center;}
+    .findbar button.btn{padding:6px 10px;border-radius:8px;font-size:11px;}
+
+    [data-theme="light"] .findbar{
+      background:rgba(255,255,255,.88);
+      box-shadow:
+        0 20px 60px rgba(0,0,0,.14),
+        0 0 0 1px rgba(0,0,0,.06) inset;
+    }
+    [data-theme="light"] .findbar input{
+      background:rgba(0,0,0,.045);
+      color:#1f2d3d;
+    }
+    [data-theme="light"] .findbar input:focus{
+      box-shadow:0 0 0 2px rgba(25,113,194,.20);
     }
 
     /* Hunk block */
@@ -1957,12 +2077,59 @@
   let findQuery = '';
   let findMatches = [];
   let findPos = -1;
+  let findLineHits = null;
+  let __gmFindOverlayScrollHandlers = [];
+  let __gmFindOverlayRaf = 0;
 
   let findDragActive = false;
   let findDragStartX = 0;
   let findDragStartY = 0;
   let findDragStartLeft = 0;
   let findDragStartTop = 0;
+
+  function __gmIsPlainEditorMode() {
+    const ta = document.getElementById('plainEditorTextarea');
+    return !!(window.__plainEditorFilename && ta);
+  }
+
+  function __gmScrollTextareaToSelection(ta, posOverride) {
+    try {
+      if (!ta) return;
+      const v = String(ta.value || '');
+      const pos = (posOverride !== undefined && posOverride !== null)
+              ? Number(posOverride || 0)
+              : Number(ta.selectionStart || 0);
+      const before = v.slice(0, Math.max(0, pos));
+      const line = before.split('\n').length;
+      const lhRaw = (window.getComputedStyle && window.getComputedStyle(ta)) ? window.getComputedStyle(ta).lineHeight : '';
+      let lh = 18;
+      try {
+        const n = parseFloat(String(lhRaw || '').replace('px',''));
+        if (Number.isFinite(n) && n > 0) lh = n;
+      } catch (e) {}
+      const targetTop = Math.max(0, (line - 1) * lh - Math.max(0, (ta.clientHeight - lh) / 2));
+      const prevTaTop = ta.scrollTop;
+      ta.scrollTop = targetTop;
+
+      // 兼容：实际滚动容器可能是外层 diffView（因为 diffView 自身 overflow:auto）
+      try {
+        const host = document.getElementById('diffView');
+        if (host) {
+          const taTopInHost = Math.max(0, ta.offsetTop || 0);
+          const want = Math.max(0, taTopInHost + (line - 1) * lh - host.clientHeight * 0.35);
+          // 只要 textarea 没能明显滚动到位，就同步驱动 host 滚动（或 host 本就有滚动条）
+          const taDidNotMove = Math.abs(Number(ta.scrollTop || 0) - Number(targetTop || 0)) > 2;
+          const hostCanScroll = (host.scrollHeight - host.clientHeight) > 2;
+          if (taDidNotMove || hostCanScroll) host.scrollTop = want;
+        }
+      } catch (e3) {}
+
+      try {
+        const gutter = document.getElementById('plainEditorGutter');
+        if (gutter) gutter.scrollTop = ta.scrollTop;
+      } catch (e2) {}
+    } catch (e) {}
+  }
 
   function mountFindBar() {
     if (!findBarEl) return;
@@ -2072,6 +2239,28 @@
     const el = ensureFindBar();
     el.style.display = 'flex';
     const input = el.querySelector('#findInput');
+
+    // If user has a selection, use it as default query
+    try {
+      let selText = '';
+      if (__gmIsPlainEditorMode()) {
+        const ta = document.getElementById('plainEditorTextarea');
+        if (ta) {
+          const s = Number(ta.selectionStart || 0);
+          const e = Number(ta.selectionEnd || 0);
+          if (e > s) selText = String(ta.value || '').slice(s, e);
+        }
+      } else {
+        const sel = window.getSelection ? window.getSelection() : null;
+        selText = sel ? String(sel.toString() || '') : '';
+      }
+
+      selText = String(selText || '').replace(/\s+/g, ' ').trim();
+      if (selText && selText.length <= 120) {
+        findQuery = selText;
+      }
+    } catch (e) {}
+
     input.focus();
     input.select();
     if (findQuery) {
@@ -2133,24 +2322,287 @@
     const dv = document.getElementById('diffView');
     if (!dv) return;
     dv.querySelectorAll('.find-hit').forEach(el => el.classList.remove('find-hit'));
+
+    // Clear overlay highlights
+    try { __gmClearFindOverlays(); } catch (e0) {}
+
+    // Clear plain editor gutter markers
+    try {
+      const gutter = document.getElementById('plainEditorGutter');
+      if (gutter && gutter.querySelectorAll) {
+        gutter.querySelectorAll('.n.find-match').forEach(el => el.classList.remove('find-match'));
+      }
+    } catch (e3) {}
+  }
+
+  function __gmEscapeHtml(s) {
+    return String(s || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function __gmClearFindOverlays() {
+    try {
+      if (__gmFindOverlayScrollHandlers && __gmFindOverlayScrollHandlers.length) {
+        __gmFindOverlayScrollHandlers.forEach(it => {
+          try {
+            if (it && it.el && it.fn) it.el.removeEventListener('scroll', it.fn);
+          } catch (e2) {}
+        });
+      }
+    } catch (e) {}
+    __gmFindOverlayScrollHandlers = [];
+    try {
+      const dv = document.getElementById('diffView');
+      if (dv && dv.querySelectorAll) {
+        dv.querySelectorAll('.find-overlay').forEach(el => el.remove());
+      }
+    } catch (e2) {}
+  }
+
+  function __gmGetFindScrollHosts() {
+    const dv = document.getElementById('diffView');
+    if (!dv) return [];
+    try {
+      const sps = dv.querySelectorAll ? Array.from(dv.querySelectorAll('.sp')) : [];
+      if (sps && sps.length) return sps;
+    } catch (e) {}
+    return [dv];
+  }
+
+  function __gmEnsureOverlayForHost(host) {
+    try {
+      if (!host) return null;
+      const cs = window.getComputedStyle ? window.getComputedStyle(host) : null;
+      if (cs && cs.position === 'static') host.style.position = 'relative';
+    } catch (e) {}
+    let ol = null;
+    try {
+      ol = host.querySelector ? host.querySelector(':scope > .find-overlay') : null;
+    } catch (e2) { ol = null; }
+    if (ol) return ol;
+    try {
+      const d = document.createElement('div');
+      d.className = 'find-overlay';
+      host.appendChild(d);
+      return d;
+    } catch (e3) {
+      return null;
+    }
+  }
+
+  function __gmOverlayAddRect(overlay, hostRect, r) {
+    try {
+      if (!overlay || !r) return;
+      const el = document.createElement('div');
+      el.className = 'find-ol-hit';
+      el.style.left = `${Math.max(0, r.left - hostRect.left)}px`;
+      el.style.top = `${Math.max(0, r.top - hostRect.top)}px`;
+      el.style.width = `${Math.max(0, r.width)}px`;
+      el.style.height = `${Math.max(0, r.height)}px`;
+      overlay.appendChild(el);
+    } catch (e) {}
+  }
+
+  function __gmBuildTextNodeIndex(rootEl) {
+    try {
+      if (!rootEl || !document.createTreeWalker) return null;
+      const w = document.createTreeWalker(rootEl, NodeFilter.SHOW_TEXT);
+      const nodes = [];
+      const ends = [];
+      let text = '';
+      let n = w.nextNode();
+      while (n) {
+        const v = String(n.nodeValue || '');
+        nodes.push(n);
+        text += v;
+        ends.push(text.length);
+        n = w.nextNode();
+      }
+      return { text, nodes, ends };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function __gmLocateTextPos(idxObj, pos) {
+    try {
+      if (!idxObj || !idxObj.nodes || !idxObj.ends) return null;
+      const p = Math.max(0, Number(pos || 0));
+      const ends = idxObj.ends;
+      let lo = 0;
+      let hi = ends.length - 1;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (p < ends[mid]) hi = mid - 1;
+        else lo = mid + 1;
+      }
+      const i = Math.max(0, Math.min(lo, ends.length - 1));
+      const prevEnd = i > 0 ? ends[i - 1] : 0;
+      const node = idxObj.nodes[i];
+      const offset = Math.max(0, p - prevEnd);
+      return { node, offset };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function __gmRenderFindOverlays(q) {
+    try {
+      __gmClearFindOverlays();
+      const needle = String(q || '').trim();
+      if (!needle) return;
+      const needleLower = needle.toLowerCase();
+
+      const hosts = __gmGetFindScrollHosts();
+      const renderOnce = () => {
+        try {
+          hosts.forEach(host => {
+            const overlay = __gmEnsureOverlayForHost(host);
+            if (!overlay) return;
+            overlay.innerHTML = '';
+
+            const hostRect = host.getBoundingClientRect();
+            const lines = host.querySelectorAll ? host.querySelectorAll('.dl .lc') : [];
+            let rectCount = 0;
+            for (let i = 0; i < lines.length; i++) {
+              const lc = lines[i];
+              if (!lc) continue;
+              // Editable lines: still allow overlay rects (no DOM mutation)
+              const idxObj = __gmBuildTextNodeIndex(lc);
+              if (!idxObj || !idxObj.text) continue;
+              const rawLower = String(idxObj.text || '').toLowerCase();
+              if (!rawLower.includes(needleLower)) continue;
+
+              let from = 0;
+              while (from <= rawLower.length) {
+                const idx = rawLower.indexOf(needleLower, from);
+                if (idx < 0) break;
+                try {
+                  const a = __gmLocateTextPos(idxObj, idx);
+                  const b = __gmLocateTextPos(idxObj, idx + needle.length);
+                  if (a && b && a.node && b.node) {
+                    const rg = document.createRange();
+                    rg.setStart(a.node, a.offset);
+                    rg.setEnd(b.node, b.offset);
+                    const rects = rg.getClientRects ? Array.from(rg.getClientRects()) : [];
+                    for (let k = 0; k < rects.length; k++) {
+                      __gmOverlayAddRect(overlay, hostRect, rects[k]);
+                      rectCount++;
+                      if (rectCount > 1500) break;
+                    }
+                  }
+                } catch (e2) {}
+                if (rectCount > 1500) break;
+                from = idx + Math.max(1, needle.length);
+              }
+              if (rectCount > 1500) break;
+            }
+          });
+        } catch (e) {}
+      };
+
+      renderOnce();
+
+      hosts.forEach(host => {
+        const fn = () => {
+          try {
+            if (__gmFindOverlayRaf) cancelAnimationFrame(__gmFindOverlayRaf);
+          } catch (e2) {}
+          __gmFindOverlayRaf = requestAnimationFrame(() => {
+            try { renderOnce(); } catch (e3) {}
+          });
+        };
+        try {
+          host.addEventListener('scroll', fn, { passive: true });
+          __gmFindOverlayScrollHandlers.push({ el: host, fn });
+        } catch (e2) {}
+      });
+
+      try {
+        const onResize = () => {
+          try {
+            if (__gmFindOverlayRaf) cancelAnimationFrame(__gmFindOverlayRaf);
+          } catch (e2) {}
+          __gmFindOverlayRaf = requestAnimationFrame(() => {
+            try { renderOnce(); } catch (e3) {}
+          });
+        };
+        window.addEventListener('resize', onResize, { passive: true, once: true });
+      } catch (e2) {}
+    } catch (e) {}
+  }
+
+  function __gmApplyPlainEditorGutterMarks() {
+    try {
+      const gutter = document.getElementById('plainEditorGutter');
+      if (!gutter || !gutter.querySelectorAll) return;
+      gutter.querySelectorAll('.n.find-match').forEach(el => el.classList.remove('find-match'));
+      if (!findLineHits || !(findLineHits instanceof Set) || findLineHits.size === 0) return;
+      const nodes = gutter.querySelectorAll('.n');
+      for (let i = 0; i < nodes.length; i++) {
+        const el = nodes[i];
+        const ln = Number((el && el.textContent) ? el.textContent.trim() : '');
+        if (Number.isFinite(ln) && findLineHits.has(ln)) el.classList.add('find-match');
+      }
+    } catch (e) {}
   }
 
   function rebuildFindMatches() {
     clearFindHighlights();
     findMatches = [];
     findPos = -1;
+    findLineHits = null;
     const q = (findQuery || '').trim();
     const dv = document.getElementById('diffView');
     if (!dv || !q) {
       updateFindMeta();
       return;
     }
+    if (__gmIsPlainEditorMode()) {
+      const ta = document.getElementById('plainEditorTextarea');
+      const text = ta ? String(ta.value || '') : '';
+      const needle = q.toLowerCase();
+      const hay = text.toLowerCase();
+      let from = 0;
+      const hits = new Set();
+      while (from <= hay.length) {
+        const idx = hay.indexOf(needle, from);
+        if (idx < 0) break;
+        findMatches.push({ type: 'ta', start: idx, end: idx + q.length });
+
+        try {
+          const before = text.slice(0, idx);
+          const ln = before.split('\n').length;
+          if (Number.isFinite(Number(ln)) && Number(ln) > 0) hits.add(Number(ln));
+        } catch (e2) {}
+
+        from = idx + Math.max(1, q.length);
+      }
+      findLineHits = hits;
+      __gmApplyPlainEditorGutterMarks();
+      updateFindMeta();
+      return;
+    }
+
     const rows = Array.from(dv.querySelectorAll('.dl'));
     rows.forEach(r => {
       const t = (r.innerText || '').toLowerCase();
       if (t.includes(q.toLowerCase())) findMatches.push(r);
     }, true);
+    __gmRenderFindOverlays(q);
     updateFindMeta();
+  }
+
+  function __gmClearFindHitOnly() {
+    try {
+      const dv = document.getElementById('diffView');
+      if (!dv) return;
+      dv.querySelectorAll('.find-hit').forEach(el => el.classList.remove('find-hit'));
+    } catch (e) {}
   }
 
   function updateFindMeta() {
@@ -2171,9 +2623,36 @@
     const n = findMatches.length;
     if (idx < 0) idx = n - 1;
     if (idx >= n) idx = 0;
-    clearFindHighlights();
+    __gmClearFindHitOnly();
     findPos = idx;
     const el = findMatches[findPos];
+    if (__gmIsPlainEditorMode()) {
+      const inputEl = (findBarEl && findBarEl.querySelector) ? findBarEl.querySelector('#findInput') : null;
+      const keepInputFocus = !!(inputEl && document.activeElement === inputEl);
+      const ta = document.getElementById('plainEditorTextarea');
+      if (ta && el && el.type === 'ta') {
+        const s = Math.max(0, Number(el.start || 0));
+        const e = Math.max(s, Number(el.end || s));
+        try { ta.setSelectionRange(s, e); } catch (e2) {}
+        try {
+          requestAnimationFrame(() => {
+            try { __gmScrollTextareaToSelection(ta, s); } catch (e3) {}
+            if (keepInputFocus && inputEl) {
+              try { inputEl.focus({ preventScroll: true }); } catch (e4) { try { inputEl.focus(); } catch (e5) {} }
+              try { inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length); } catch (e6) {}
+            }
+          });
+        } catch (e3) {
+          try { __gmScrollTextareaToSelection(ta, s); } catch (e4) {}
+          if (keepInputFocus && inputEl) {
+            try { inputEl.focus({ preventScroll: true }); } catch (e5) { try { inputEl.focus(); } catch (e6) {} }
+          }
+        }
+      }
+      updateFindMeta();
+      return;
+    }
+
     if (el) {
       el.classList.add('find-hit');
       el.scrollIntoView({ behavior: 'smooth', block: 'center' });
