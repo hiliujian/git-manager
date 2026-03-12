@@ -5974,7 +5974,15 @@
        ${lineCountLabel}
        ${fileObj.added > 0 ? `<span style="color:var(--accent2);font-size:10px">+${fileObj.added}</span>` : ''}
        ${fileObj.removed > 0 ? `<span style="color:var(--danger);font-size:10px">-${fileObj.removed}</span>` : ''}
-       ${fileObj.modified > 0 ? `<span style="color:var(--accent);font-size:10px">~${fileObj.modified}</span>` : ''}`;
+       ${fileObj.modified > 0 ? `<span style="color:var(--accent);font-size:10px">~${fileObj.modified}</span>` : ''}
+       <button class="editor-close-btn" id="diffLabelCloseBtn" title="从最近列表移除并切换下一个 (Ctrl+W)">
+         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+           <line x1="18" y1="6" x2="6" y2="18"></line>
+           <line x1="6" y1="6" x2="18" y2="18"></line>
+         </svg>
+       </button>`;
+
+      try { bindDiffLabelCloseBtn(String(fileObj.path || '')); } catch (e) {}
     };
 
     // Update label (best-effort, may be refined after hunks load)
@@ -7444,11 +7452,19 @@
         const lineCountLabel = totalLines > 0 ? `<span class="line-count">${totalLines}行</span>` : '';
         document.getElementById('diffLabel').innerHTML =
                 `<span class="fi-st ${fileObj.status}" style="font-size:9px">${fileObj.status}</span>
-       <span class="fn">${esc(fileObj.path)}</span>
+       <span class="fn" onclick="showRecentFilesDropdown(); event.stopPropagation();" title="点击查看最近打开的文件">${esc(fileObj.path)}</span>
        ${lineCountLabel}
        ${fileObj.added > 0 ? `<span style="color:var(--accent2);font-size:10px">+${fileObj.added}</span>` : ''}
        ${fileObj.removed > 0 ? `<span style="color:var(--danger);font-size:10px">-${fileObj.removed}</span>` : ''}
-       ${fileObj.modified > 0 ? `<span style="color:var(--accent);font-size:10px">~${fileObj.modified}</span>` : ''}`;
+       ${fileObj.modified > 0 ? `<span style="color:var(--accent);font-size:10px">~${fileObj.modified}</span>` : ''}
+       <button class="editor-close-btn" id="diffLabelCloseBtn" title="从最近列表移除并切换下一个 (Ctrl+W)">
+         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+           <line x1="18" y1="6" x2="6" y2="18"></line>
+           <line x1="6" y1="6" x2="18" y2="18"></line>
+         </svg>
+       </button>`;
+
+        try { bindDiffLabelCloseBtn(String(fileObj.path || '')); } catch (e) {}
       };
 
       const ctxParam = (diffMode === 'unified') ? `&ctx=${encodeURIComponent(changeViewCtx)}` : '';
@@ -9899,6 +9915,16 @@
     }
   }
 
+  function bindDiffLabelCloseBtn(path) {
+    const btn = document.getElementById('diffLabelCloseBtn');
+    if (!btn) return;
+    const p = String(path || '');
+    btn.onclick = (e) => {
+      try { e.preventDefault(); e.stopPropagation(); } catch (e2) {}
+      removeRecentFileByPath(p);
+    };
+  }
+
   function showModal(id) {
     if (id === 'revertFileModal') showRevertFileModal();
     if (id === 'revertAllModal') updateRevertAllTexts();
@@ -10866,12 +10892,14 @@
        <span class="line-count">${totalLines}行</span>
        <span style="color:var(--text3);font-size:10px">编辑器模式</span>
        ${externalLabel}
-       <button class="editor-close-btn" onclick="closeEditorFile()" title="关闭文件 (Ctrl+W)">
+       <button class="editor-close-btn" id="diffLabelCloseBtn" title="从最近列表移除并切换下一个 (Ctrl+W)">
          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
            <line x1="18" y1="6" x2="6" y2="18"/>
            <line x1="6" y1="6" x2="18" y2="18"/>
          </svg>
        </button>`;
+
+    try { bindDiffLabelCloseBtn(String(filename || '')); } catch (e) {}
     
     // 隐藏撤回按钮
     document.getElementById('revertFileBtn').style.display = 'none';
