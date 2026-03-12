@@ -493,31 +493,37 @@ def get_file_content(filepath: str, return_encoding=False):
             return ("", "utf-8") if return_encoding else ""
         
         detected_encoding = None
-        
-        # 首先尝试UTF-8（最常见的编码）
+
+        # 首先尝试 UTF-8 / UTF-8-BOM（最快路径）
         try:
-            # 先尝试纯UTF-8解码
-            result = data.decode('utf-8')
+            result = data.decode("utf-8")
             detected_encoding = "utf-8"
             logger.debug(f"文件 {filepath} 使用 UTF-8 编码")
             return (result, detected_encoding) if return_encoding else result
         except UnicodeDecodeError:
             pass
-        
-        # 尝试UTF-8 with BOM
+
         try:
-            result = data.decode('utf-8-sig')
+            result = data.decode("utf-8-sig")
             detected_encoding = "utf-8-sig"
             logger.debug(f"文件 {filepath} 使用 UTF-8-BOM 编码")
             return (result, detected_encoding) if return_encoding else result
         except UnicodeDecodeError:
             pass
-        
-        # UTF-8 严格解码失败：仍使用 UTF-8+replace 返回。
-        # 目标：避免把 UTF-8 文件误按 GBK/GB2312 解码导致典型乱码（并在保存后写回扩大损害）。
+
+        # UTF-8 严格解码失败：探测编码（gbk/gb2312/gb18030 等），用于前端显示。
+        # 注意：这里仅用于“读取展示”，保存仍由 save_file_content() 决定编码，避免扩大损害。
+        try:
+            enc = _detect_text_encoding_from_bytes(data)
+            detected_encoding = enc
+            result = data.decode(enc, errors="replace")
+            logger.debug(f"文件 {filepath} 使用检测编码读取: {enc}")
+            return (result, detected_encoding) if return_encoding else result
+        except Exception as e:
+            logger.warning(f"文件 {filepath} 编码探测/解码失败: {e}，回退 UTF-8+replace")
+
         result = data.decode("utf-8", errors="replace")
         detected_encoding = "utf-8"
-        logger.warning(f"文件 {filepath} UTF-8 严格解码失败，已使用 UTF-8+replace 读取")
         return (result, detected_encoding) if return_encoding else result
     except Exception as e:
         logger.error(f"读取文件内容失败: {filepath} - {e}")
@@ -2859,6 +2865,254 @@ class Handler(BaseHTTPRequestHandler):
                     "conflict_files": conflict_files,
                     "message": "成功提交并更新" if ok else "提交成功但更新时发生冲突"
                 })
+
+            elif p == "/api/switch_branch":
+                logger.info("处理 /api/switch_branch 请求")
+                if not REPO_PATH:
+                    self.send_json({"error":"未打开仓库"}, 400)
+                    return
+
+                target_branch = (data.get("branch") or "").strip()
+                if not target_branch:
+                    self.send_json({"error": "未指定目标分支"}, 400)
+                    return
+
+                # 获取当前分支
+                current_out, _, current_code = run_git(["branch", "--show-current"], timeout=30)
+                current_branch = (current_out or "").strip()
+                
+                if current_code != 0:
+                    logger.error("获取当前分支失败")
+                    self.send_json({"error": "获取当前分支失败"}, 500)
+                    return
+
+                # 如果目标分支就是当前分支，直接返回成功
+                if target_branch == current_branch:
+                    self.send_json({
+                        "ok": True,
+                        "current": current_branch,
+                        "message": "已在目标分支上"
+                    })
+                    return
+
+                # 检查工作区是否有未提交的修改
+                status_out, _, status_code = run_git(["status", "--porcelain"], timeout=30)
+                has_changes = bool((status_out or "").strip())
+
+                if not has_changes:
+                    # 工作区干净，直接切换分支
+                    logger.info(f"工作区干净，直接切换到分支: {target_branch}")
+                    switch_out, switch_err, switch_code = run_git(["checkout", target_branch], timeout=60)
+                    
+                    if switch_code == 0:
+                        logger.info(f"成功切换到分支: {target_branch}")
+                        self.send_json({
+                            "ok": True,
+                            "current": target_branch,
+                            "message": f"成功切换到分支 {target_branch}"
+                        })
+                    else:
+                        logger.error(f"切换分支失败: {switch_err}")
+                        self.send_json({
+                            "ok": False,
+                            "error": switch_err or "切换分支失败",
+                            "output": switch_out or ""
+                        })
+                    return
+
+                # 工作区有未提交的修改，检查是否会被覆盖
+                logger.info(f"工作区有未提交修改，检查是否会被覆盖...")
+                
+                # 使用 git checkout --dry-run 来检测是否会有冲突
+                # 注意：git checkout 本身没有 --dry-run 选项，我们用其他方式检测
+                # 方法：直接尝试切换，如果失败则说明会覆盖
+                test_out, test_err, test_code = run_git(["checkout", target_branch], timeout=60)
+                
+                if test_code == 0:
+                    # 切换成功，说明修改不会被覆盖
+                    logger.info(f"修改不会被覆盖，成功切换到分支: {target_branch}")
+                    self.send_json({
+                        "ok": True,
+                        "current": target_branch,
+                        "has_uncommitted_changes": True,
+                        "message": f"成功切换到分支 {target_branch}，未提交的修改已保留"
+                    })
+                    return
+
+                # 切换失败，检查是否是因为会覆盖文件
+                error_msg = (test_err or "").lower()
+                if "would be overwritten" in error_msg or "overwritten by checkout" in error_msg:
+                    # 修改会被覆盖，需要用户处理
+                    logger.warning(f"切换分支会覆盖未提交的修改")
+                    
+                    # 提取受影响的文件列表
+                    affected_files = []
+                    lines = (test_err or "").split('\n')
+                    in_file_list = False
+                    for line in lines:
+                        line = line.strip()
+                        if 'would be overwritten' in line.lower() or 'overwritten by checkout' in line.lower():
+                            in_file_list = True
+                            continue
+                        if in_file_list:
+                            if line.startswith('Please') or line.startswith('Aborting') or not line:
+                                break
+                            if line and not line.startswith('error:') and not line.startswith('hint:'):
+                                affected_files.append(line.strip())
+                    
+                    self.send_json({
+                        "ok": False,
+                        "needs_handling": True,
+                        "has_uncommitted_changes": True,
+                        "affected_files": affected_files,
+                        "error": "工作区有未提交的修改会被覆盖",
+                        "message": "切换分支会覆盖当前未提交的修改，请先处理这些修改"
+                    })
+                    return
+
+                # 其他错误
+                logger.error(f"切换分支失败: {test_err}")
+                self.send_json({
+                    "ok": False,
+                    "error": test_err or "切换分支失败",
+                    "output": test_out or ""
+                })
+
+            elif p == "/api/stash_and_switch":
+                logger.info("处理 /api/stash_and_switch 请求 (暂存修改并切换分支)")
+                if not REPO_PATH:
+                    self.send_json({"error":"未打开仓库"}, 400)
+                    return
+
+                target_branch = (data.get("branch") or "").strip()
+                if not target_branch:
+                    self.send_json({"error": "未指定目标分支"}, 400)
+                    return
+
+                # 1. git stash
+                stash_out, stash_err, stash_code = run_git(
+                    ["stash", "push", "-m", f"Auto stash before switching to {target_branch}"], 
+                    timeout=60
+                )
+                if stash_code != 0:
+                    logger.error(f"暂存失败: {stash_err}")
+                    self.send_json({"error": f"暂存失败: {stash_err}"}, 400)
+                    return
+                
+                # 检查是否真的有内容被暂存
+                stashed = "No local changes to save" not in (stash_out or "")
+                
+                # 2. git checkout
+                switch_out, switch_err, switch_code = run_git(["checkout", target_branch], timeout=60)
+                
+                if switch_code != 0:
+                    logger.error(f"切换分支失败: {switch_err}")
+                    # 切换失败，尝试恢复暂存
+                    if stashed:
+                        run_git(["stash", "pop"], timeout=60)
+                    self.send_json({
+                        "ok": False,
+                        "error": f"切换分支失败: {switch_err}",
+                        "output": switch_out or ""
+                    })
+                    return
+                
+                logger.info(f"成功切换到分支: {target_branch}")
+                
+                response = {
+                    "ok": True,
+                    "current": target_branch,
+                    "stashed": stashed,
+                    "message": f"成功切换到分支 {target_branch}"
+                }
+                
+                if stashed:
+                    response["has_stash"] = True
+                    response["message"] += "，修改已暂存"
+                
+                self.send_json(response)
+
+            elif p == "/api/commit_and_switch":
+                logger.info("处理 /api/commit_and_switch 请求 (提交并切换分支)")
+                if not REPO_PATH:
+                    self.send_json({"error":"未打开仓库"}, 400)
+                    return
+
+                target_branch = (data.get("branch") or "").strip()
+                commit_msg = (data.get("message") or "").strip()
+                
+                if not target_branch:
+                    self.send_json({"error": "未指定目标分支"}, 400)
+                    return
+                if not commit_msg:
+                    self.send_json({"error": "提交信息不能为空"}, 400)
+                    return
+
+                # 1. git add -A
+                add_out, add_err, add_code = run_git(["add", "-A"], timeout=60)
+                if add_code != 0:
+                    logger.error(f"暂存文件失败: {add_err}")
+                    self.send_json({"error": f"暂存文件失败: {add_err}"}, 400)
+                    return
+
+                # 2. git commit
+                commit_out, commit_err, commit_code = run_git(["commit", "-m", commit_msg], timeout=60)
+                if commit_code != 0:
+                    logger.error(f"提交失败: {commit_err}")
+                    self.send_json({"error": f"提交失败: {commit_err}"}, 400)
+                    return
+
+                # 3. git checkout
+                switch_out, switch_err, switch_code = run_git(["checkout", target_branch], timeout=60)
+                
+                if switch_code != 0:
+                    logger.error(f"切换分支失败: {switch_err}")
+                    self.send_json({
+                        "ok": False,
+                        "committed": True,
+                        "error": f"提交成功但切换分支失败: {switch_err}",
+                        "output": switch_out or ""
+                    })
+                    return
+                
+                logger.info(f"成功提交并切换到分支: {target_branch}")
+                self.send_json({
+                    "ok": True,
+                    "current": target_branch,
+                    "committed": True,
+                    "message": f"成功提交并切换到分支 {target_branch}"
+                })
+
+            elif p == "/api/stash_pop":
+                logger.info("处理 /api/stash_pop 请求 (恢复暂存的修改)")
+                if not REPO_PATH:
+                    self.send_json({"error":"未打开仓库"}, 400)
+                    return
+
+                # git stash pop
+                pop_out, pop_err, pop_code = run_git(["stash", "pop"], timeout=60)
+                
+                # 检测是否有冲突
+                has_conflict = (pop_code != 0) or "CONFLICT" in (pop_out or "") or "CONFLICT" in (pop_err or "")
+                
+                if has_conflict:
+                    logger.warning("恢复暂存的修改时发生冲突")
+                    conflict_files, _ = get_unmerged_files()
+                    self.send_json({
+                        "ok": False,
+                        "has_conflict": True,
+                        "conflict_files": conflict_files,
+                        "error": "恢复暂存的修改时发生冲突，请手动解决",
+                        "output": (pop_out or "").strip(),
+                        "error_detail": (pop_err or "").strip()
+                    })
+                else:
+                    logger.info("成功恢复暂存的修改")
+                    self.send_json({
+                        "ok": True,
+                        "message": "成功恢复暂存的修改",
+                        "output": (pop_out or "").strip()
+                    })
 
             else:
                 logger.warning(f"未知的 POST 请求路径: {p}")

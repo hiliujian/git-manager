@@ -1140,7 +1140,8 @@
     .modal{background:var(--bg2);border:1px solid var(--border);border-radius:9px;
       padding:22px;width:390px;box-shadow:0 24px 64px #00000099;}
     .modal h3{font-size:14px;margin-bottom:7px;}
-    .modal p{color:var(--text2);font-size:12px;line-height:1.7;margin-bottom:18px;}
+    .modal p{color:var(--text2);font-size:12px;line-height:1.7;margin-bottom:18px;
+      word-break:break-word;overflow-wrap:break-word;}
     .modal-btns{display:flex;gap:7px;justify-content:flex-end;}
 
     /* ── TOAST ── */
@@ -1495,6 +1496,26 @@
     <div class="modal-btns">
       <button class="btn" id="confirmCancelBtn" onclick="closeModal('confirmModal')">取消</button>
       <button class="btn blue" id="confirmOkBtn">确定</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="customModal">
+  <div class="modal">
+    <h3 id="customTitle">提示</h3>
+    <p id="customMessage"></p>
+    <div class="modal-btns" id="customButtons"></div>
+  </div>
+</div>
+
+<div class="overlay" id="promptModal">
+  <div class="modal">
+    <h3 id="promptTitle">输入</h3>
+    <p id="promptMessage"></p>
+    <input type="text" id="promptInput" class="form-input" style="width:100%; margin:10px 0; padding:8px; background:var(--bg2); border:1px solid var(--border); color:var(--text); border-radius:4px;">
+    <div class="modal-btns">
+      <button class="btn" id="promptCancelBtn">取消</button>
+      <button class="btn blue" id="promptOkBtn">确定</button>
     </div>
   </div>
 </div>
@@ -5657,10 +5678,39 @@
   // ── File List ─────────────────────────────────────────────────────────────────
   function renderFileList() {
     const el = document.getElementById('fileList');
+    // 事件委托：避免频繁重渲染导致监听丢失/叠加，并保证在 diff/编辑模式下 checkbox 始终可点
+    try {
+      if (el && !el.__gmDelegated) {
+        el.__gmDelegated = true;
+        el.addEventListener('click', (e) => {
+          try {
+            const t = e && e.target;
+            if (!t) return;
+
+            const cb = (t.closest ? t.closest('input.fi-cb') : null);
+            if (cb && el.contains(cb)) {
+              e.preventDefault();
+              try { e.stopPropagation(); } catch (e2) {}
+              const idx = Number(cb.dataset && cb.dataset.idx);
+              if (Number.isFinite(idx)) toggleCheck(idx);
+              return;
+            }
+
+            const row = (t.closest ? t.closest('.fi') : null);
+            if (row && el.contains(row)) {
+              const cb2 = (t.closest ? t.closest('input.fi-cb') : null);
+              if (cb2) return;
+              const cbEl = row.querySelector ? row.querySelector('input.fi-cb') : null;
+              const idx2 = Number((cbEl && cbEl.dataset && cbEl.dataset.idx) || NaN);
+              if (Number.isFinite(idx2)) selectFile(idx2);
+            }
+          } catch (e2) {}
+        });
+      }
+    } catch (e) {}
     const q  = fileFilter.toLowerCase();
     const vis = files.filter(f => !q || f.path.toLowerCase().includes(q));
     document.getElementById('fileCount').textContent = files.length;
-    el.innerHTML = '';
     // Use DocumentFragment for better performance with large lists
     const fragment = document.createDocumentFragment();
 
@@ -5680,7 +5730,6 @@
         ${f.removed > 0 ? `<span class="r">-${f.removed}</span>`: ''}
         ${f.modified > 0 ? `<span class="m">~${f.modified}</span>`: ''}
       </span>`;
-      div.onclick = () => selectFile(i);
       fragment.appendChild(div);
 
       // 文件级 checkbox 半选态：根据行级勾选状态计算
@@ -5693,7 +5742,11 @@
 
         // 计算半选状态（对所有文件，不仅仅是当前文件）
         const total = commitLinesTotalByPath.get(f.path);
-        if (Number.isFinite(total) && total > 0) {
+        const isInitialized = commitLinesInitByPath.get(f.path);
+        const desired = commitLinesDesiredByPath.get(f.path);
+        
+        // 只有在已初始化的文件上才计算半选状态和自动同步
+        if (isInitialized && Number.isFinite(total) && total > 0) {
           const set = getSelectedCommitLinesSet(f.path);
           const isAll = set.size === total;
           const isNone = set.size === 0;
@@ -5706,37 +5759,17 @@
             cb.checked = true;  // 半选状态视觉上显示为已勾选
           } else {
             cb.classList.remove('indet');
-            // 全选或全不选时，根据实际行勾选状态设置
-            cb.checked = !isNone;
-            // 同步到 checkedSet
-            if (!isNone) {
-              checkedSet.add(i);
-            } else {
-              checkedSet.delete(i);
-            }
+            // 全选或全不选时：勾选展示以“用户意图 desired”和文件级 checkedSet 为准。
+            // 行级 set 只用于 indeterminate，不应在渲染阶段反向决定文件级是否选中。
+            if (desired === true) cb.checked = true;
+            else if (desired === false) cb.checked = false;
+            else cb.checked = checkedSet.has(i);
           }
         }
+        // 对于未初始化的文件，保持用户设置的 checkedSet 状态不变
 
-        cb.addEventListener('click', (e) => {
-          e.stopPropagation();
-          // If currently indeterminate (partial), treat click as explicit toggle to none/all.
-          // Default browser behavior sets checked=true on first click; we override to a predictable toggle.
-          const hunksKnown = (curFile === i) && Array.isArray(curHunks);
-          if (cb.indeterminate && hunksKnown) {
-            const set = getSelectedCommitLinesSet(f.path);
-            const total = commitLinesTotalByPath.get(f.path);
-            const isPart = Number.isFinite(total) && total > 0 && set.size > 0 && set.size < total;
-            if (isPart) {
-              // Prefer turning off when partial (current file only)
-              checkedSet.delete(i);
-              setAllCommitLines(f.path, curHunks, false);
-              updateStats();
-              renderFileList();
-              return;
-            }
-          }
-          toggleCheck(i);
-        });
+
+        // checkbox 的点击由 #fileList 事件委托统一处理
       }
     });
 
@@ -5761,12 +5794,19 @@
         if (checkedSet.has(i)) {
           // 勾选：先记录期望，进入 diff 时应用
           commitLinesDesiredByPath.set(f.path, true);
+          // 如果文件尚未初始化，也清除旧的行级选择（避免残留数据）
+          if (!commitLinesInitByPath.get(f.path)) {
+            const set = getSelectedCommitLinesSet(f.path);
+            set.clear();
+          }
         } else {
           // 取消勾选：立即清除该文件的所有代码行勾选状态
           commitLinesDesiredByPath.set(f.path, false);
           const set = getSelectedCommitLinesSet(f.path);
           set.clear();
           commitLinesInitByPath.set(f.path, true);
+          // 更新 total 为 0，确保下次计算时不会误判
+          commitLinesTotalByPath.set(f.path, 0);
         }
       }
     }
@@ -5787,6 +5827,19 @@
         setAllCommitLines(f.path, curHunks, v);
       } else {
         commitLinesDesiredByPath.set(f.path, !!v);
+        // 全不选时，立即清除未初始化文件的行级选择
+        if (!v) {
+          const set = getSelectedCommitLinesSet(f.path);
+          set.clear();
+          commitLinesInitByPath.set(f.path, true);
+          commitLinesTotalByPath.set(f.path, 0);
+        } else {
+          // 全选时，如果文件尚未初始化，清除旧的行级选择（避免残留数据）
+          if (!commitLinesInitByPath.get(f.path)) {
+            const set = getSelectedCommitLinesSet(f.path);
+            set.clear();
+          }
+        }
       }
     });
 
@@ -6300,8 +6353,9 @@
         }
       }
       commitHunksInitByPath.set(filepath, true);
-      // 初始化完成后同步该文件的文件级勾选状态（仅此文件）
-      syncCheckedSetForFile(filepath);
+      // 只有在该文件已完成行级选择初始化时才同步文件级勾选。
+      // 否则首次进入时会在 ensureDefaultLineSelection() 之前误把文件从 checkedSet 移除。
+      if (commitLinesInitByPath.get(filepath)) syncCheckedSetForFile(filepath);
     }
     return set;
   }
@@ -6329,6 +6383,19 @@
 
       const prevTotal = commitLinesTotalByPath.get(filepath);
       commitLinesTotalByPath.set(filepath, total);
+
+      // Sync line-level selection with explicit file-level intent.
+      // - desired=true + file checked => ensure all changed lines are selected
+      // - desired=false => ensure none are selected
+      if (desired === false) {
+        set.clear();
+      } else if (desired === true && fileChecked === true) {
+        // When user expects the whole file to be selected, but line set is empty/partial,
+        // make it consistent by selecting all current changed lines.
+        if (total > 0 && set.size < total) {
+          changeKeys.forEach(k => set.add(k));
+        }
+      }
 
       // Only auto-select new change lines when:
       // - file is checked (not half checked)
@@ -6393,11 +6460,18 @@
     const idx = files.findIndex(f => f && f.path === filepath);
     if (idx < 0) return;
     const set = getSelectedCommitLinesSet(filepath);
+    const desired = commitLinesDesiredByPath.get(filepath);
 
     // Keep file-level checkbox state aligned with line-level selection.
     // Do NOT require total to be known; total is only used for indeterminate UI.
-    if (set.size === 0) checkedSet.delete(idx);
-    else checkedSet.add(idx);
+    // But: user can explicitly request file-level selection via desired.
+    // When desired is set, do NOT override it based on current set.size (it may lag during async render/update).
+    if (desired === true) checkedSet.add(idx);
+    else if (desired === false) checkedSet.delete(idx);
+    else {
+      if (set.size === 0) checkedSet.delete(idx);
+      else checkedSet.add(idx);
+    }
 
     // If current file hunks are known, update total for indeterminate calculations.
     // This prevents line-level selection from being ignored when total wasn't initialized yet.
@@ -9834,6 +9908,108 @@
     });
   }
 
+  function showCustomDialog({title='提示', message='', buttons=[]}={}) {
+    return new Promise(resolve => {
+      const m = document.getElementById('customModal');
+      const t = document.getElementById('customTitle');
+      const msg = document.getElementById('customMessage');
+      const btnsContainer = document.getElementById('customButtons');
+
+      t.textContent = title;
+      msg.textContent = message;
+
+      // 创建按钮
+      btnsContainer.innerHTML = '';
+      const cleanup = () => {
+        btnsContainer.innerHTML = '';
+        m.onclick = null;
+      };
+
+      buttons.forEach(btn => {
+        const button = document.createElement('button');
+        button.className = 'btn ' + (btn.class || '');
+        button.textContent = btn.text || '按钮';
+        button.onclick = () => {
+          cleanup();
+          closeModal('customModal');
+          resolve(btn.value);
+        };
+        btnsContainer.appendChild(button);
+      });
+
+      m.onclick = (e) => {
+        if (e.target === m) {
+          cleanup();
+          closeModal('customModal');
+          resolve(null);
+        }
+      };
+
+      m.classList.add('show');
+    });
+  }
+
+  function showPrompt({title='输入', message='', defaultValue='', okText='确定', cancelText='取消'}={}) {
+    return new Promise(resolve => {
+      const m = document.getElementById('promptModal');
+      const t = document.getElementById('promptTitle');
+      const msg = document.getElementById('promptMessage');
+      const input = document.getElementById('promptInput');
+      const ok = document.getElementById('promptOkBtn');
+      const cancel = document.getElementById('promptCancelBtn');
+
+      t.textContent = title;
+      msg.textContent = message;
+      input.value = defaultValue;
+      ok.textContent = okText;
+      cancel.textContent = cancelText;
+
+      const cleanup = () => {
+        ok.onclick = null;
+        cancel.onclick = null;
+        m.onclick = null;
+        input.onkeydown = null;
+      };
+
+      const handleOk = () => {
+        const value = input.value.trim();
+        cleanup();
+        closeModal('promptModal');
+        resolve(value || null);
+      };
+
+      const handleCancel = () => {
+        cleanup();
+        closeModal('promptModal');
+        resolve(null);
+      };
+
+      ok.onclick = handleOk;
+      cancel.onclick = handleCancel;
+      input.onkeydown = (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          handleOk();
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          handleCancel();
+        }
+      };
+
+      m.onclick = (e) => {
+        if (e.target === m) {
+          handleCancel();
+        }
+      };
+
+      m.classList.add('show');
+      setTimeout(() => {
+        input.focus();
+        input.select();
+      }, 100);
+    });
+  }
+
   function setButtonBusy(btn, busy, busyText=null) {
     if (!btn) return;
     const b = btn;
@@ -9925,24 +10101,150 @@
       return;
     }
 
-    const ok = await showConfirm({
-      title: '切换分支',
-      message: `确认切换到分支：${branch} ?\n\n若工作区有未提交修改，将拒绝切换。`,
-      okText: '切换',
-      cancelText: '取消',
-    });
-    if (!ok) return;
-
     toast('切换中...','info');
     const res = await POST('/api/switch_branch', {branch});
+    
+    // 情况1: 切换成功（工作区干净或修改不会被覆盖）
     if (res && res.ok) {
       if (res.current) document.getElementById('branchName').textContent = res.current;
-      toast('✓ 已切换分支','ok');
+      const msg = res.has_uncommitted_changes 
+        ? '✓ 已切换分支（未提交的修改已保留）' 
+        : '✓ 已切换分支';
+      toast(msg, 'ok');
       closeBranchMenu();
       await refresh();
       return;
     }
 
+    // 情况2: 需要处理未提交的修改（会被覆盖）
+    if (res && res.needs_handling && res.has_uncommitted_changes) {
+      closeBranchMenu();
+      
+      let affectedFilesMsg = '';
+      if (res.affected_files && res.affected_files.length > 0) {
+        const fileList = res.affected_files.slice(0, 5).join('\n  • ');
+        const moreMsg = res.affected_files.length > 5 ? `\n  ... 还有 ${res.affected_files.length - 5} 个文件` : '';
+        affectedFilesMsg = `\n\n以下文件的修改会被覆盖:\n  • ${fileList}${moreMsg}`;
+      }
+
+      const choice = await showCustomDialog({
+        title: '⚠️ 工作区有未提交的修改',
+        message: `切换到分支 "${branch}" 会覆盖当前未提交的修改。${affectedFilesMsg}\n\n请选择如何处理:`,
+        buttons: [
+          { text: '提交后切换', value: 'commit', class: 'blue' },
+          { text: '暂存后切换', value: 'stash', class: 'blue' },
+          { text: '取消', value: 'cancel', class: '' }
+        ]
+      });
+
+      if (choice === 'commit') {
+        // 选择提交后切换
+        const commitMsg = await showPrompt({
+          title: '提交修改',
+          message: '请输入提交信息:',
+          defaultValue: `保存修改以切换到 ${branch}`,
+          okText: '提交并切换',
+          cancelText: '取消'
+        });
+        
+        if (!commitMsg) {
+          toast('已取消切换', 'info');
+          return;
+        }
+
+        toast('提交并切换中...', 'info');
+        const commitRes = await POST('/api/commit_and_switch', {
+          branch: branch,
+          message: commitMsg
+        });
+
+        if (commitRes && commitRes.ok) {
+          if (commitRes.current) document.getElementById('branchName').textContent = commitRes.current;
+          toast('✓ 已提交并切换分支', 'ok');
+          await refresh();
+        } else {
+          const errMsg = (commitRes && commitRes.error) || '提交并切换失败';
+          await showConfirm({
+            title: '操作失败',
+            message: errMsg,
+            okText: '知道了',
+            hideCancel: true,
+            danger: true
+          });
+        }
+        return;
+      }
+
+      if (choice === 'stash') {
+        // 选择暂存后切换
+        toast('暂存并切换中...', 'info');
+        const stashRes = await POST('/api/stash_and_switch', {branch: branch});
+
+        if (stashRes && stashRes.ok) {
+          if (stashRes.current) document.getElementById('branchName').textContent = stashRes.current;
+          
+          if (stashRes.stashed && stashRes.has_stash) {
+            // 有暂存内容，询问是否恢复
+            const shouldPop = await showConfirm({
+              title: '✓ 已切换分支',
+              message: `已成功切换到分支 "${branch}"。\n\n您的修改已暂存，是否要恢复这些修改？`,
+              okText: '恢复修改',
+              cancelText: '稍后手动恢复'
+            });
+
+            if (shouldPop) {
+              toast('恢复修改中...', 'info');
+              const popRes = await POST('/api/stash_pop', {});
+              
+              if (popRes && popRes.ok) {
+                toast('✓ 已恢复暂存的修改', 'ok');
+                await refresh();
+              } else if (popRes && popRes.has_conflict) {
+                await showConfirm({
+                  title: '⚠️ 恢复时发生冲突',
+                  message: '恢复暂存的修改时发生冲突，请手动解决冲突。\n\n冲突文件:\n  • ' + 
+                    (popRes.conflict_files || []).join('\n  • '),
+                  okText: '知道了',
+                  hideCancel: true,
+                  danger: true
+                });
+                await refresh();
+              } else {
+                await showConfirm({
+                  title: '恢复失败',
+                  message: (popRes && popRes.error) || '恢复暂存的修改失败',
+                  okText: '知道了',
+                  hideCancel: true,
+                  danger: true
+                });
+              }
+            } else {
+              toast('✓ 已切换分支（修改已暂存）', 'ok');
+              await refresh();
+            }
+          } else {
+            toast('✓ 已切换分支', 'ok');
+            await refresh();
+          }
+        } else {
+          const errMsg = (stashRes && stashRes.error) || '暂存并切换失败';
+          await showConfirm({
+            title: '操作失败',
+            message: errMsg,
+            okText: '知道了',
+            hideCancel: true,
+            danger: true
+          });
+        }
+        return;
+      }
+
+      // choice === 'cancel' 或其他情况
+      toast('已取消切换', 'info');
+      return;
+    }
+
+    // 情况3: 其他错误
     const msg = (res && (res.error || res.msg)) ? (res.error || res.msg) : '切换分支失败';
     await showConfirm({
       title: '切换失败',
