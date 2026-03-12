@@ -678,7 +678,13 @@
     
     /* 拖拽导入提示 */
     .drag-drop-overlay{
-      position:absolute;top:0;left:0;right:0;bottom:0;
+      position:sticky;
+      top:0;
+      bottom:10px; /* 确保底部有足够空间显示边框 */
+      left:0;
+      right:0;
+      height:calc(100vh - 20px); /* 减去上下各10px的空间 */
+      margin-bottom:calc(-100vh + 20px); /* 负margin抵消高度 */
       background:rgba(110,180,247,.12);
       border:3px dashed var(--accent);
       border-radius:12px;
