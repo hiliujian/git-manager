@@ -892,6 +892,46 @@
     }
     .sp{flex:1;min-width:400px;overflow-x:auto;}
 
+    .fold-toggle{
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      width:14px;
+      height:14px;
+      border-radius:3px;
+      margin-right:2px;
+      color:var(--text2);
+      background:rgba(255,255,255,0.08);
+      border:1px solid rgba(255,255,255,0.14);
+      cursor:pointer;
+      user-select:none;
+      opacity:.85;
+    }
+    .fold-toggle:hover{background:rgba(255,255,255,0.06);color:var(--text2);}
+    [data-theme="light"] .fold-toggle:hover{background:rgba(0,0,0,0.06);}
+    [data-theme="light"] .fold-toggle{background:rgba(0,0,0,0.06);border:1px solid rgba(0,0,0,0.12);}
+
+    .gm-fold-hint{opacity:.9;}
+    .gm-fold-hint .lc{color:var(--text3);}
+
+    .gm-fold-inline{
+      display:inline-block;
+      margin-left:2px;
+      padding:0 6px;
+      border-radius:10px;
+      font-size:11px;
+      line-height:16px;
+      color:var(--text3);
+      background:rgba(255,255,255,0.06);
+      cursor:pointer;
+      user-select:none;
+      vertical-align:baseline;
+      white-space:nowrap;
+    }
+    [data-theme="light"] .gm-fold-inline{background:rgba(0,0,0,0.06);}
+    .gm-fold-inline:hover{color:var(--text2);background:rgba(255,255,255,0.10);}
+    [data-theme="light"] .gm-fold-inline:hover{background:rgba(0,0,0,0.10);}
+
     /* ── DIFF CONTENT ── */
     .empty-state{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;
       gap:12px;color:var(--text3);}
@@ -2906,7 +2946,7 @@
             leftLines.forEach(dl => {
               const lnEl = dl.querySelector('.ln');
               // 跳过空行和提示行
-              if (!lnEl || dl.classList.contains('empty') || dl.classList.contains('revert-block-hint') || dl.classList.contains('gm-gap-hint')) {
+              if (!lnEl || dl.classList.contains('empty') || dl.classList.contains('revert-block-hint') || dl.classList.contains('gm-gap-hint') || dl.classList.contains('gm-fold-hint')) {
                 return;
               }
               
@@ -2929,7 +2969,7 @@
             rightLines.forEach(dl => {
               const lnEl = dl.querySelector('.ln');
               // 跳过空行和提示行
-              if (!lnEl || dl.classList.contains('empty') || dl.classList.contains('revert-block-hint') || dl.classList.contains('gm-gap-hint')) {
+              if (!lnEl || dl.classList.contains('empty') || dl.classList.contains('revert-block-hint') || dl.classList.contains('gm-gap-hint') || dl.classList.contains('gm-fold-hint')) {
                 return;
               }
               
@@ -2952,7 +2992,7 @@
           allLines.forEach(dl => {
             const lnEl = dl.querySelector('.ln');
             // 跳过空行、提示行和折叠提示行
-            if (!lnEl || dl.classList.contains('empty') || dl.classList.contains('revert-block-hint') || dl.classList.contains('gm-gap-hint')) {
+            if (!lnEl || dl.classList.contains('empty') || dl.classList.contains('revert-block-hint') || dl.classList.contains('gm-gap-hint') || dl.classList.contains('gm-fold-hint')) {
               return;
             }
             
@@ -3068,6 +3108,300 @@
     try { window.scheduleAutoSave = scheduleAutoSave; } catch (e) {}
     try { window.setEditStatus = setEditStatus; } catch (e) {}
 
+    const __gmEnsureFoldState = () => {
+      try {
+        if (!window.__gmFoldStateByPath) window.__gmFoldStateByPath = new Map();
+      } catch (e) {}
+    };
+
+    const __gmGetFoldStateSet = (path) => {
+      try {
+        __gmEnsureFoldState();
+        const key = String(path || '');
+        let set = window.__gmFoldStateByPath.get(key);
+        if (!set) {
+          set = new Set();
+          window.__gmFoldStateByPath.set(key, set);
+        }
+        return set;
+      } catch (e) {
+        return null;
+      }
+    };
+
+    const __gmGetFoldScope = (host) => {
+      try {
+        const wrap = host ? host.querySelector('.split-wrap') : null;
+        if (wrap) {
+          const right = wrap.querySelector('.sp:last-child');
+          return right || host;
+        }
+        return host;
+      } catch (e) {
+        return host;
+      }
+    };
+
+    const __gmComputeFoldRanges = (scope) => {
+      try {
+        const dls = Array.from(scope.querySelectorAll('.dl'));
+        const ranges = [];
+        const getLineText = (dl) => {
+          const lc = dl && dl.querySelector ? dl.querySelector('.lc.editable-line') : null;
+          const t = lc ? String(lc.textContent || '') : '';
+          return t.replace(/[\r\n\u2028\u2029]/g, '');
+        };
+
+        const stack = [];
+        for (let i = 0; i < dls.length; i++) {
+          const dl = dls[i];
+          if (!dl || !dl.classList) continue;
+          if (dl.classList.contains('revert-block-hint') || dl.classList.contains('gm-gap-hint') || dl.classList.contains('gm-fold-hint')) continue;
+          const txt = getLineText(dl);
+          if (!txt) continue;
+          const opens = (txt.match(/\{/g) || []).length;
+          const closes = (txt.match(/\}/g) || []).length;
+          for (let k = 0; k < opens; k++) stack.push(i);
+          for (let k = 0; k < closes; k++) {
+            const start = stack.pop();
+            if (start === undefined || start === null) continue;
+            const end = i;
+            if (end - start >= 2) ranges.push({ start, end });
+          }
+        }
+
+        if (ranges.length) return ranges;
+
+        const ind = (s) => {
+          const m = String(s || '').match(/^[\t ]*/);
+          const ws = m ? String(m[0] || '') : '';
+          let n = 0;
+          for (const ch of ws) n += (ch === '\t') ? 4 : 1;
+          return { ws, n };
+        };
+
+        for (let i = 0; i < dls.length - 1; i++) {
+          const a = dls[i];
+          const b = dls[i + 1];
+          if (!a || !b) continue;
+          if (a.classList.contains('revert-block-hint') || a.classList.contains('gm-gap-hint') || a.classList.contains('gm-fold-hint')) continue;
+          if (b.classList.contains('revert-block-hint') || b.classList.contains('gm-gap-hint') || b.classList.contains('gm-fold-hint')) continue;
+          const at = getLineText(a);
+          const bt = getLineText(b);
+          if (!at.trim() || !bt.trim()) continue;
+          const ai = ind(at);
+          const bi = ind(bt);
+          if (bi.n <= ai.n) continue;
+          let end = i + 1;
+          for (let j = i + 1; j < dls.length; j++) {
+            const x = dls[j];
+            if (!x || x.classList.contains('revert-block-hint') || x.classList.contains('gm-gap-hint') || x.classList.contains('gm-fold-hint')) break;
+            const xt = getLineText(x);
+            if (!xt.trim()) { end = j; continue; }
+            const xi = ind(xt);
+            if (xi.n <= ai.n) break;
+            end = j;
+          }
+          if (end - i >= 2) {
+            ranges.push({ start: i, end });
+            i = end - 1;
+          }
+        }
+        return ranges;
+      } catch (e) {
+        return [];
+      }
+    };
+
+    const __gmClearFoldsInScope = (scope) => {
+      try {
+        if (!scope) return;
+        scope.querySelectorAll('.gm-fold-hint').forEach(el => { try { el.remove(); } catch (e) {} });
+        scope.querySelectorAll('.gm-fold-inline').forEach(el => { try { el.remove(); } catch (e) {} });
+        scope.querySelectorAll('.dl[data-gm-fold-id]').forEach(dl => {
+          try { dl.style.display = ''; } catch (e) {}
+        });
+        scope.querySelectorAll('.dl[data-gm-fold-start]').forEach(dl => {
+          try {
+            const lc = dl.querySelector ? dl.querySelector('.lc.editable-line') : null;
+            if (lc) {
+              try { lc.setAttribute('contenteditable', 'true'); } catch (e) {}
+            }
+            dl.removeAttribute('data-gm-fold-start');
+          } catch (e) {}
+        });
+        scope.querySelectorAll('.fold-toggle').forEach(btn => {
+          try { btn.remove(); } catch (e) {}
+        });
+      } catch (e) {}
+    };
+
+    const __gmExtractPureTextFromLc = (lc) => {
+      try {
+        if (!lc) return '';
+        const parts = [];
+        const walk = (node) => {
+          if (!node) return;
+          if (node.nodeType === Node.TEXT_NODE) {
+            parts.push(String(node.textContent || ''));
+            return;
+          }
+          if (node.nodeType !== Node.ELEMENT_NODE) return;
+          const el = node;
+          if (el.classList && (el.classList.contains('gm-fold-inline') || el.classList.contains('fold-toggle'))) return;
+          const cn = el.childNodes;
+          if (!cn || !cn.length) return;
+          for (let i = 0; i < cn.length; i++) walk(cn[i]);
+        };
+        walk(lc);
+        return parts.join('');
+      } catch (e) {
+        return String((lc && lc.textContent) || '');
+      }
+    };
+
+    const __gmApplyFoldToRange = (scope, dls, range, isFolded, foldId) => {
+      try {
+        const startDl = dls[range.start];
+        if (!startDl) return;
+        const ls = startDl.querySelector ? startDl.querySelector('.ls') : null;
+        if (!ls) return;
+
+        const lc = startDl.querySelector ? startDl.querySelector('.lc') : null;
+
+        const toggle = document.createElement('span');
+        toggle.className = 'fold-toggle';
+        toggle.textContent = isFolded ? '▸' : '▾';
+        toggle.setAttribute('contenteditable', 'false');
+        toggle.onmousedown = (ev) => { try { ev.preventDefault(); ev.stopPropagation(); } catch (e) {} };
+        toggle.onclick = (ev) => {
+          try { ev.preventDefault(); ev.stopPropagation(); } catch (e) {}
+          try { window.__gmToggleFoldById(foldId); } catch (e) {}
+          return false;
+        };
+
+        // Toggle button should sit next to '{' (IDEA-like). Insert into code cell at '{' position.
+        if (lc) {
+          try {
+            const rawText = __gmExtractPureTextFromLc(lc);
+            const bracePos = rawText.indexOf('{');
+            const textNode = lc.firstChild && lc.firstChild.nodeType === Node.TEXT_NODE ? lc.firstChild : null;
+            if (textNode && bracePos >= 0 && bracePos + 1 <= (textNode.textContent || '').length) {
+              const r = document.createRange();
+              r.setStart(textNode, bracePos + 1);
+              r.collapse(true);
+              r.insertNode(toggle);
+            } else {
+              lc.appendChild(toggle);
+            }
+          } catch (e) {
+            try { lc.appendChild(toggle); } catch (e2) {}
+          }
+        } else {
+          ls.insertBefore(toggle, ls.firstChild);
+        }
+
+        if (!isFolded) return;
+
+        const hiddenCount = Math.max(0, range.end - range.start);
+        for (let i = range.start + 1; i <= range.end; i++) {
+          const dl = dls[i];
+          if (!dl) continue;
+          dl.setAttribute('data-gm-fold-id', foldId);
+          dl.style.display = 'none';
+        }
+
+        if (lc) {
+          try {
+            startDl.setAttribute('data-gm-fold-start', foldId);
+            // Avoid editing inside folded line; expand first to edit.
+            if (lc.classList && lc.classList.contains('editable-line')) {
+              lc.setAttribute('contenteditable', 'false');
+            }
+          } catch (e) {}
+
+          const inline = document.createElement('span');
+          inline.className = 'gm-fold-inline';
+          inline.textContent = '{...}';
+          inline.setAttribute('contenteditable', 'false');
+          inline.setAttribute('data-gm-fold-id', foldId);
+          inline.title = `已折叠 ${hiddenCount} 行`;
+          inline.onmousedown = (ev) => { try { ev.preventDefault(); ev.stopPropagation(); } catch (e) {} };
+          inline.onclick = (ev) => {
+            try { ev.preventDefault(); ev.stopPropagation(); } catch (e) {}
+            try { window.__gmToggleFoldById(foldId); } catch (e) {}
+            return false;
+          };
+          try {
+            const rawText = __gmExtractPureTextFromLc(lc);
+            const bracePos = rawText.indexOf('{');
+            const textNode = lc.firstChild && lc.firstChild.nodeType === Node.TEXT_NODE ? lc.firstChild : null;
+            if (textNode && bracePos >= 0 && bracePos + 1 <= (textNode.textContent || '').length) {
+              inline.textContent = '...}';
+              const r2 = document.createRange();
+              r2.setStart(textNode, bracePos + 1);
+              r2.collapse(true);
+              r2.insertNode(inline);
+            } else {
+              lc.appendChild(inline);
+            }
+          } catch (e) {
+            try { lc.appendChild(inline); } catch (e2) {}
+          }
+        }
+      } catch (e) {}
+    };
+
+    const __gmApplyCodeFolding = () => {
+      try {
+        if (window.__plainEditorFilename) return;
+        if (curFile === null || !files || !files[curFile] || !files[curFile].path) return;
+        const host = document.getElementById('diffView');
+        if (!host) return;
+        const scope = __gmGetFoldScope(host);
+        if (!scope) return;
+
+        __gmClearFoldsInScope(scope);
+
+        const dls = Array.from(scope.querySelectorAll('.dl'));
+        if (!dls.length) return;
+
+        const ranges = __gmComputeFoldRanges(scope);
+        if (!ranges || !ranges.length) return;
+
+        const state = __gmGetFoldStateSet(files[curFile].path);
+        if (!state) return;
+
+        window.__gmFoldIndexById = new Map();
+        ranges.forEach((r, idx) => {
+          const foldId = `gmfold_${idx}_${r.start}_${r.end}`;
+          const folded = state.has(foldId);
+          window.__gmFoldIndexById.set(foldId, r);
+          __gmApplyFoldToRange(scope, dls, r, folded, foldId);
+        });
+
+        try {
+          window.__gmToggleFoldById = (foldId) => {
+            try {
+              if (curFile === null || !files || !files[curFile] || !files[curFile].path) return;
+              const host = document.getElementById('diffView');
+              if (!host) return;
+              const scope = __gmGetFoldScope(host);
+              if (!scope) return;
+              const state = __gmGetFoldStateSet(files[curFile].path);
+              if (!state) return;
+              if (state.has(foldId)) state.delete(foldId);
+              else state.add(foldId);
+              __gmApplyCodeFolding();
+              if (typeof window.updateLineNumbers === 'function') window.updateLineNumbers();
+            } catch (e) {}
+          };
+        } catch (e) {}
+      } catch (e) {}
+    };
+
+    try { window.__gmApplyCodeFolding = __gmApplyCodeFolding; } catch (e) {}
+
     const __gmSplitLineOnEnter = (lineEl) => {
       try {
         const host = document.getElementById('diffView');
@@ -3096,6 +3430,14 @@
         const raw = String(lineEl.textContent || '');
         const clean = (s) => String(s || '').replace(/[\r\n\u2028\u2029]/g, '');
         const text = clean(raw);
+        const indent = (() => {
+          try {
+            const m = text.match(/^[\t ]*/);
+            return m ? String(m[0] || '') : '';
+          } catch (e2) {
+            return '';
+          }
+        })();
         const pos = Math.max(0, Math.min(col, text.length));
         const left = text.slice(0, pos);
         const right = text.slice(pos);
@@ -3107,6 +3449,30 @@
           return false;
         }
         if (!newDl) return false;
+
+        try {
+          // 新增行不应继承任何差异标记和UI元素
+          newDl.classList.remove('added', 'modified', 'removed', 'find-hit');
+          if (!newDl.classList.contains('context')) newDl.classList.add('context');
+        } catch (e2) {}
+        
+        try {
+          newDl.removeAttribute('data-gm-fold-id');
+          newDl.removeAttribute('data-gm-fold-start');
+        } catch (e2) {}
+        
+        // 彻底清除克隆行中的所有差异UI元素（但保留占位符）
+        try {
+          // 清空 dl-actions 内容（移除勾选框和撤回按钮），但保留元素本身作为占位符
+          const actions = newDl.querySelector('.dl-actions');
+          if (actions) actions.innerHTML = '';
+        } catch (e2) {}
+        
+        try {
+          // 重置 ls 符号为空格（普通行）
+          const ls = newDl.querySelector('.ls');
+          if (ls) ls.textContent = ' ';
+        } catch (e2) {}
 
         const newLine = newDl.querySelector ? newDl.querySelector('.editable-line') : null;
         if (!newLine) return false;
@@ -3123,7 +3489,7 @@
         } catch (e2) {}
 
         lineEl.textContent = left;
-        newLine.textContent = right;
+        newLine.textContent = indent + right;
         try { lineEl.dataset.dirty = '1'; } catch (e2) {}
         try { newLine.dataset.dirty = '1'; } catch (e2) {}
         try { lineEl.dispatchEvent(new Event('input', { bubbles: true })); } catch (e2) {}
@@ -3138,14 +3504,16 @@
         window.__dirtyEdits = true;
         scheduleAutoSave();
         
-        // 更新行号
-        if (typeof window.updateLineNumbers === 'function') {
-          window.updateLineNumbers();
-        }
+        // 更新行号 - 使用 setTimeout 确保 DOM 完全更新后再计算
+        setTimeout(() => {
+          if (typeof window.updateLineNumbers === 'function') {
+            window.updateLineNumbers();
+          }
+        }, 0);
 
         try {
           newLine.focus();
-          setCaretOffset(newLine, 0);
+          setCaretOffset(newLine, indent.length);
         } catch (e2) {}
         return true;
       } catch (e) {
@@ -3168,6 +3536,15 @@
           if (snap.wholeDirty !== undefined) window.__gmWholeContentDirty = !!snap.wholeDirty;
         } catch (e2) {}
         host.innerHTML = String(snap.html || '');
+        
+        // 清除所有定位高亮状态，避免撤销/重做时触发高亮
+        // 行号定位高亮应仅在用户主动点击行号时触发，不应在编辑操作中被恢复
+        try {
+          host.querySelectorAll('.find-hit').forEach(el => {
+            try { el.classList.remove('find-hit'); } catch (e3) {}
+          });
+        } catch (e2) {}
+        
         try { setupEditableLineEditing(); } catch (e2) {}
         
         // 更新行号
@@ -3373,12 +3750,12 @@
               }
               
               // 移除所有UI元素
-              dl.querySelectorAll('.ln, .ls, .dl-actions, .line-revert, .hunk-revert, .commit-cb, .hint-tag, .hint-text, .hint-btn, .hint-actions').forEach(el => el.remove());
+              dl.querySelectorAll('.ln, .ls, .dl-actions, .line-revert, .hunk-revert, .commit-cb, .hint-tag, .hint-text, .hint-btn, .hint-actions, .gm-fold-inline, .fold-toggle').forEach(el => el.remove());
               
               // 提取 .lc 元素的文本
               const lc = dl.querySelector('.lc');
               if (lc) {
-                const rawText = lc.textContent || '';
+                const rawText = (typeof __gmExtractPureTextFromLc === 'function') ? __gmExtractPureTextFromLc(lc) : (lc.textContent || '');
                 const cleanText = __gmNormalizeLineText(rawText);
                 if (cleanText) lines.push(cleanText);
               }
@@ -3395,7 +3772,7 @@
                   return;
                 }
                 
-                const rawText = lc.textContent || '';
+                const rawText = (typeof __gmExtractPureTextFromLc === 'function') ? __gmExtractPureTextFromLc(lc) : (lc.textContent || '');
                 const cleanText = __gmNormalizeLineText(rawText);
                 if (cleanText) lines.push(cleanText);
               });
@@ -3407,8 +3784,20 @@
               const isInLc = startEl && startEl.closest('.lc');
               
               if (isInLc) {
-                // 允许纯文本复制（用户在代码内容中选择）
-                return false; // 让浏览器默认处理
+                // 选择范围可能包含折叠UI（...}/▾），这里手动清洗再写入剪贴板
+                try {
+                  const frag2 = originalRange.cloneContents();
+                  const tmp2 = document.createElement('div');
+                  tmp2.appendChild(frag2);
+                  tmp2.querySelectorAll('.gm-fold-inline, .fold-toggle').forEach(el => { try { el.remove(); } catch (e) {} });
+                  const raw2 = String(tmp2.textContent || '');
+                  const clean2 = __gmNormalizeLineText(raw2);
+                  e.preventDefault();
+                  e.clipboardData.setData('text/plain', clean2);
+                  return true;
+                } catch (e3) {
+                  return false;
+                }
               } else {
                 // 不在代码区域，阻止复制
                 e.preventDefault();
@@ -3677,6 +4066,34 @@
               try { e.stopPropagation(); } catch (e) {}
               return;
             }
+          }
+        } catch (e2) {}
+      }, true);
+
+      document.addEventListener('beforeinput', (e) => {
+        try {
+          if (!__isCeHost()) return;
+          if (!e) return;
+          const it = String(e.inputType || '');
+          if (!it || !it.startsWith('insert')) return;
+
+          const host = document.getElementById('diffView');
+          if (!host) return;
+
+          const sel = window.getSelection ? window.getSelection() : null;
+          if (!sel || sel.rangeCount === 0) return;
+          const r = sel.getRangeAt(0);
+          const node = sel.focusNode || r.startContainer;
+          const el = node ? ((node.nodeType === Node.ELEMENT_NODE) ? node : (node.parentElement || null)) : null;
+          const line = (el && el.closest) ? el.closest('.editable-line') : null;
+          if (!line || !host.contains(line)) return;
+
+          const caret = getCaretOffset(line);
+          const txt = String(line.textContent || '').replace(/[\r\n\u2028\u2029]/g, '');
+          const needNormalize = !line.firstChild || line.firstChild.nodeType !== Node.TEXT_NODE || (line.childNodes && line.childNodes.length !== 1);
+          if (needNormalize) {
+            line.textContent = txt;
+            setCaretOffsetNoFocus(line, Math.max(0, Math.min(caret, (line.textContent || '').length)));
           }
         } catch (e2) {}
       }, true);
@@ -4433,12 +4850,32 @@
         const endContainer = r.endContainer;
         const endContainerOffset = r.endOffset;
 
-        const startOffset = first.contains(startContainer)
-          ? __getTextOffsetInLine(first, startContainer, startContainerOffset)
-          : 0;
-        const endOffset = last.contains(endContainer)
-          ? __getTextOffsetInLine(last, endContainer, endContainerOffset)
-          : (lastText.length);
+        const hasFoldUi = (el) => {
+          try {
+            return !!(el && el.querySelector && el.querySelector('.gm-fold-inline, .fold-toggle'));
+          } catch (e) {
+            return false;
+          }
+        };
+
+        const startEl = startContainer && (startContainer.nodeType === Node.ELEMENT_NODE ? startContainer : startContainer.parentElement);
+        const endEl = endContainer && (endContainer.nodeType === Node.ELEMENT_NODE ? endContainer : endContainer.parentElement);
+        const startInFoldUi = !!(startEl && startEl.closest && startEl.closest('.gm-fold-inline, .fold-toggle'));
+        const endInFoldUi = !!(endEl && endEl.closest && endEl.closest('.gm-fold-inline, .fold-toggle'));
+
+        // When fold UI is involved, copy whole lines to avoid leaking UI text into clipboard.
+        const forceWholeLines = startInFoldUi || endInFoldUi || hasFoldUi(first) || hasFoldUi(last);
+
+        const startOffset = forceWholeLines
+          ? 0
+          : (first.contains(startContainer)
+            ? __getTextOffsetInLine(first, startContainer, startContainerOffset)
+            : 0);
+        const endOffset = forceWholeLines
+          ? lastText.length
+          : (last.contains(endContainer)
+            ? __getTextOffsetInLine(last, endContainer, endContainerOffset)
+            : (lastText.length));
         const left = firstText.slice(0, Math.max(0, Math.min(startOffset, firstText.length)));
         const right = lastText.slice(Math.max(0, Math.min(endOffset, lastText.length)));
         const mid = (insertText !== null && insertText !== undefined) ? String(insertText) : '';
@@ -4677,6 +5114,14 @@
           try { __recordAndRemoveDl(t); } catch (e) {}
           window.__dirtyEdits = true;
           scheduleAutoSave();
+          
+          // 更新行号
+          setTimeout(() => {
+            if (typeof window.updateLineNumbers === 'function') {
+              window.updateLineNumbers();
+            }
+          }, 0);
+          
           prev.focus();
           setCaretOffset(prev, prevTextClean.length);
           return;
@@ -4694,6 +5139,13 @@
           try { __recordAndRemoveDl(t); } catch (e) {}
           window.__dirtyEdits = true;
           scheduleAutoSave();
+
+          // 更新行号
+          setTimeout(() => {
+            if (typeof window.updateLineNumbers === 'function') {
+              window.updateLineNumbers();
+            }
+          }, 0);
 
           if (prev) {
             prev.focus();
@@ -4909,6 +5361,30 @@
           try { newDl = dl.cloneNode(true); } catch (e2) { newDl = null; }
           if (!newDl) break;
 
+          try {
+            // 新增行不应继承任何差异标记和UI元素
+            newDl.classList.remove('added', 'modified', 'removed', 'find-hit');
+            if (!newDl.classList.contains('context')) newDl.classList.add('context');
+          } catch (e2) {}
+          
+          try {
+            newDl.removeAttribute('data-gm-fold-id');
+            newDl.removeAttribute('data-gm-fold-start');
+          } catch (e2) {}
+          
+          // 彻底清除克隆行中的所有差异UI元素（但保留占位符）
+          try {
+            // 清空 dl-actions 内容（移除勾选框和撤回按钮），但保留元素本身作为占位符
+            const actions = newDl.querySelector('.dl-actions');
+            if (actions) actions.innerHTML = '';
+          } catch (e2) {}
+          
+          try {
+            // 重置 ls 符号为空格（普通行）
+            const ls = newDl.querySelector('.ls');
+            if (ls) ls.textContent = ' ';
+          } catch (e2) {}
+
           const newLine = newDl.querySelector ? newDl.querySelector('.editable-line') : null;
           if (!newLine) break;
 
@@ -4944,10 +5420,12 @@
         window.__dirtyEdits = true;
         scheduleAutoSave();
 
-        // 更新行号
-        if (typeof window.updateLineNumbers === 'function') {
-          window.updateLineNumbers();
-        }
+        // 更新行号 - 使用 setTimeout 确保 DOM 完全更新后再计算
+        setTimeout(() => {
+          if (typeof window.updateLineNumbers === 'function') {
+            window.updateLineNumbers();
+          }
+        }, 0);
 
         // Focus last inserted line at end of inserted content
         try {
@@ -5070,26 +5548,44 @@
         const from = Math.min(sIdx, eIdx);
         const to = Math.max(sIdx, eIdx);
 
-        const firstText = __gmNormalizeLineText(first.textContent || '');
-        const lastText = __gmNormalizeLineText(last.textContent || '');
+        const firstText = __gmNormalizeLineText((typeof __gmExtractPureTextFromLc === 'function') ? __gmExtractPureTextFromLc(first) : (first.textContent || ''));
+        const lastText = __gmNormalizeLineText((typeof __gmExtractPureTextFromLc === 'function') ? __gmExtractPureTextFromLc(last) : (last.textContent || ''));
 
         const startContainer = r.startContainer;
         const startContainerOffset = r.startOffset;
         const endContainer = r.endContainer;
         const endContainerOffset = r.endOffset;
 
-        const startOffset = first.contains(startContainer)
-          ? __getTextOffsetInLine(first, startContainer, startContainerOffset)
-          : 0;
-        const endOffset = last.contains(endContainer)
-          ? __getTextOffsetInLine(last, endContainer, endContainerOffset)
-          : (lastText.length);
+        const hasFoldUi = (el) => {
+          try {
+            return !!(el && el.querySelector && el.querySelector('.gm-fold-inline, .fold-toggle'));
+          } catch (e) {
+            return false;
+          }
+        };
+
+        const startEl = startContainer && (startContainer.nodeType === Node.ELEMENT_NODE ? startContainer : startContainer.parentElement);
+        const endEl = endContainer && (endContainer.nodeType === Node.ELEMENT_NODE ? endContainer : endContainer.parentElement);
+        const startInFoldUi = !!(startEl && startEl.closest && startEl.closest('.gm-fold-inline, .fold-toggle'));
+        const endInFoldUi = !!(endEl && endEl.closest && endEl.closest('.gm-fold-inline, .fold-toggle'));
+        const forceWholeLines = startInFoldUi || endInFoldUi || hasFoldUi(first) || hasFoldUi(last);
+
+        const startOffset = forceWholeLines
+          ? 0
+          : (first.contains(startContainer)
+            ? __getTextOffsetInLine(first, startContainer, startContainerOffset)
+            : 0);
+        const endOffset = forceWholeLines
+          ? lastText.length
+          : (last.contains(endContainer)
+            ? __getTextOffsetInLine(last, endContainer, endContainerOffset)
+            : (lastText.length));
 
         const parts = [];
         for (let i = from; i <= to; i++) {
           const el = lines[i];
           if (!el) continue;
-          const rawText = el.textContent || '';
+          const rawText = (typeof __gmExtractPureTextFromLc === 'function') ? __gmExtractPureTextFromLc(el) : (el.textContent || '');
           const txt = __gmNormalizeLineText(rawText);
           if (i === from && i === to) {
             parts.push(txt.slice(Math.max(0, Math.min(startOffset, txt.length)), Math.max(0, Math.min(endOffset, txt.length))));
@@ -6257,6 +6753,33 @@
       // Find the line with the specified line number
       const lines = diffView.querySelectorAll('.dl');
       let targetLine = null;
+
+      // If the target is currently folded (display:none), expand the fold first.
+      try {
+        let hiddenFoldId = null;
+        lines.forEach(line => {
+          if (hiddenFoldId) return;
+          if (!line || !line.querySelectorAll) return;
+          if (String(line.style && line.style.display) !== 'none') return;
+          const lineNumbers = line.querySelectorAll('.ln');
+          lineNumbers.forEach(ln => {
+            if (hiddenFoldId) return;
+            if (ln.textContent.trim() === lineNumber.toString()) {
+              try { hiddenFoldId = line.getAttribute('data-gm-fold-id'); } catch (e) {}
+            }
+          });
+        });
+        if (hiddenFoldId && typeof window.__gmToggleFoldById === 'function') {
+          window.__gmToggleFoldById(hiddenFoldId);
+          setTimeout(() => {
+            try {
+              window.__gmSuppressNextFlashHighlight = true;
+              scrollToLine(lineNumber);
+            } catch (e) {}
+          }, 0);
+          return;
+        }
+      } catch (e) {}
 
       lines.forEach(line => {
         const lineNumbers = line.querySelectorAll('.ln');
@@ -7716,6 +8239,7 @@
       applyIndeterminateCheckboxes(view);
       updateAllBlockCheckboxes(view, file.path, hunks);
       setupEditableLineEditing();
+      try { if (typeof window.__gmApplyCodeFolding === 'function') window.__gmApplyCodeFolding(); } catch (e) {}
     } else if (effectiveMode === 'single') {
       // 状态 U/D：单列显示（U 仅当前；D 仅原始）
       const leftLines = [];
@@ -7972,6 +8496,7 @@
       applyIndeterminateCheckboxes(view);
       updateAllBlockCheckboxes(view, file.path, hunks);
       setupEditableLineEditing();
+      try { if (typeof window.__gmApplyCodeFolding === 'function') window.__gmApplyCodeFolding(); } catch (e) {}
       try {
         const first = view.querySelector('.editable-line');
         if (first && typeof first.focus === 'function') first.focus({ preventScroll: true });
@@ -8144,6 +8669,7 @@
       applyIndeterminateCheckboxes(view);
       updateAllBlockCheckboxes(view, file.path, hunks);
       setupEditableLineEditing();
+      try { if (typeof window.__gmApplyCodeFolding === 'function') window.__gmApplyCodeFolding(); } catch (e) {}
     }
   }
 
@@ -8306,22 +8832,22 @@
               if (!dl || !dl.classList) continue;
               if (dl.classList.contains('revert-block-hint')) continue;
               if (dl.classList.contains('gm-gap-hint')) continue; // 跳过折叠提示行
+              if (dl.classList.contains('gm-fold-hint')) continue; // 跳过代码折叠占位行
 
               // Skip placeholder rows that are not part of working content
               if (dl.classList.contains('removed')) continue;
               
-              // Only serialize real editable lines. UI rows (collapsed hint, hunk header, etc.)
-              // may also contain a .lc but are not .editable-line.
-              const lc = dl.querySelector ? dl.querySelector('.lc.editable-line') : null;
+              // Serialize working lines from .lc (code cell). Do NOT require .editable-line,
+              // otherwise readonly/context lines and folded-start line (temporarily non-editable)
+              // would be skipped, causing save to fallback to old curFileContent.
+              const lc = dl.querySelector ? dl.querySelector('.lc') : null;
               if (!lc) {
-                // 如果没有可编辑行但有 .empty 类，这是一个空行
-                if (dl.classList.contains('empty')) {
-                  out.push('');
-                }
+                if (dl.classList.contains('empty')) out.push('');
                 continue;
               }
-              
-              const txt = lc ? normalizeEditableText(lc.textContent) : '';
+
+              const raw = (typeof __gmExtractPureTextFromLc === 'function') ? __gmExtractPureTextFromLc(lc) : (lc.textContent || '');
+              const txt = normalizeEditableText(raw);
               out.push(txt);
             }
             return out;
@@ -8414,7 +8940,7 @@
         // - WS 未连接：手动刷新文件列表，但同样跳过自动 loadDiff
         skipNextAutoDiffRefresh = true;
         if (!wsConnected) {
-          await refreshFilesOnly(true);
+          await refreshFilesOnly(false);
         }
         await refreshCurrentDiffNoFlicker(f.path, files[curFile] ? files[curFile].status : undefined);
       } else {
@@ -12100,6 +12626,32 @@
           e.preventDefault();
           insertTextAtSelection('  ');
           // 手动触发一次 input 逻辑
+          window.__dirtyEdits = true;
+          renderGutter();
+          syncScroll();
+          if (window.__autoSaveEnabled) {
+            if (typeof window.scheduleAutoSave === 'function') window.scheduleAutoSave();
+          } else {
+            if (typeof window.setEditStatus === 'function') window.setEditStatus('已修改：自动保存已关闭（Ctrl+S 立即保存）');
+          }
+        }
+
+        if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
+          e.preventDefault();
+          try {
+            const v = String(ta.value || '');
+            const start = Number(ta.selectionStart || 0);
+            const ls = v.lastIndexOf('\n', Math.max(0, start - 1));
+            const lineStart = (ls < 0) ? 0 : (ls + 1);
+            const line = v.slice(lineStart, start);
+            const m = line.match(/^[\t ]*/);
+            const indent = m ? String(m[0] || '') : '';
+            insertTextAtSelection('\n' + indent);
+          } catch (e2) {
+            insertTextAtSelection('\n');
+          }
+
+          // 手动触发一次 input 逻辑（与 Tab 一致）
           window.__dirtyEdits = true;
           renderGutter();
           syncScroll();
