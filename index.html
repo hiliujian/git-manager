@@ -4427,7 +4427,8 @@
       if (!t || !t.classList || !t.classList.contains('editable-line')) return;
       try {
         __enableLineEditing(t);
-        setCaretOffset(t, (t.textContent || '').length);
+        // 移除 setCaretOffset 调用，保留浏览器默认的双击选中行为
+        // 浏览器会自动选中双击的单词，无需手动设置光标位置
       } catch (e) {}
     }, true);
 
