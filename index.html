@@ -903,6 +903,13 @@
     .sp{overflow:auto;border-right:2px solid var(--border);}
     .sp:last-child{border-right:none;}
     .sp-hdr{padding:4px 10px;background:var(--bg3);border-bottom:1px solid var(--border);font-size:11px;position:sticky;top:0;z-index:1;font-family:'JetBrains Mono',monospace;}
+    
+    /* 只读面板及其所有子元素不可选 */
+    .sp-readonly,
+    .sp-readonly *{user-select:none;-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;cursor:default;}
+    
+    /* 可编辑面板的标题也不可选 */
+    .sp-editable > .sp-hdr{user-select:none;-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;cursor:default;}
 
     .change-navigation{padding:8px 10px;background:var(--bg2);border-bottom:1px solid var(--border);margin-bottom:10px;overflow-x:auto;white-space:nowrap;position:sticky;top:0;z-index:100;}
 
@@ -2899,7 +2906,7 @@
             leftLines.forEach(dl => {
               const lnEl = dl.querySelector('.ln');
               // 跳过空行和提示行
-              if (!lnEl || dl.classList.contains('empty') || dl.classList.contains('revert-block-hint')) {
+              if (!lnEl || dl.classList.contains('empty') || dl.classList.contains('revert-block-hint') || dl.classList.contains('gm-gap-hint')) {
                 return;
               }
               
@@ -2922,7 +2929,7 @@
             rightLines.forEach(dl => {
               const lnEl = dl.querySelector('.ln');
               // 跳过空行和提示行
-              if (!lnEl || dl.classList.contains('empty') || dl.classList.contains('revert-block-hint')) {
+              if (!lnEl || dl.classList.contains('empty') || dl.classList.contains('revert-block-hint') || dl.classList.contains('gm-gap-hint')) {
                 return;
               }
               
@@ -2954,11 +2961,8 @@
               lnEl.textContent = currentLineNum;
               currentLineNum++;
             } else if (dl.classList.contains('removed')) {
-              // 删除行保持其原始行号,不递增
-              // 如果行号为空,则设置为当前值(但不递增)
-              if (!lnEl.textContent || lnEl.textContent === '') {
-                lnEl.textContent = currentLineNum;
-              }
+              // 删除行不显示行号
+              lnEl.textContent = '';
             }
           });
         }
@@ -3165,6 +3169,12 @@
         } catch (e2) {}
         host.innerHTML = String(snap.html || '');
         try { setupEditableLineEditing(); } catch (e2) {}
+        
+        // 更新行号
+        if (typeof window.updateLineNumbers === 'function') {
+          window.updateLineNumbers();
+        }
+        
         try { __gmRestoreDiffScrollState(prevScroll); } catch (e2) {}
         const lines = Array.from(host.querySelectorAll('.editable-line'));
         const line = (snap.idx >= 0 && snap.idx < lines.length) ? lines[snap.idx] : (lines[0] || null);
@@ -3302,6 +3312,31 @@
       window.__gmDiffUiUnselectableInited = true;
       
       // 复制事件过滤 - 确保复制时只包含代码内容
+      // 文本清理函数：规范化从 contenteditable 元素获取的文本
+      const __gmNormalizeLineText = (text) => {
+        if (!text) return '';
+        // 1. 统一换行符为 \n
+        let normalized = String(text).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+        // 2. 移除 contenteditable 可能添加的前后换行符
+        // contenteditable 元素在单行时可能会在开头或结尾添加 \n
+        if (normalized.length >= 2 && normalized[0] === '\n' && normalized[normalized.length - 1] === '\n' && normalized.slice(1, -1).indexOf('\n') === -1) {
+          // 前后都有 \n，且中间没有 \n，去掉前后的
+          normalized = normalized.slice(1, -1);
+        } else if (normalized[0] === '\n' && normalized.slice(1).indexOf('\n') === -1) {
+          // 只有开头有 \n，去掉
+          normalized = normalized.slice(1);
+        } else if (normalized[normalized.length - 1] === '\n' && normalized.slice(0, -1).indexOf('\n') === -1) {
+          // 只有结尾有 \n，去掉
+          normalized = normalized.slice(0, -1);
+        }
+        // 3. 移除零宽字符和不间断空格（这些可能是编辑器添加的）
+        normalized = normalized.replace(/\u200b/g, '').replace(/\u00a0/g, ' ');
+        return normalized;
+      };
+      
+      // 暴露为全局函数供其他地方使用
+      window.__gmNormalizeLineText = __gmNormalizeLineText;
+
       const __gmCopyFromSelectionClean = (e) => {
         try {
           const host = document.getElementById('diffView');
@@ -3330,14 +3365,22 @@
           if (dlElements.length > 0) {
             // 有完整的 .dl 行结构
             dlElements.forEach(dl => {
+              // 跳过UI提示行（不是真实代码内容）
+              if (dl.classList.contains('revert-block-hint') || 
+                  dl.classList.contains('gm-gap-hint') || 
+                  dl.classList.contains('empty')) {
+                return;
+              }
+              
               // 移除所有UI元素
               dl.querySelectorAll('.ln, .ls, .dl-actions, .line-revert, .hunk-revert, .commit-cb, .hint-tag, .hint-text, .hint-btn, .hint-actions').forEach(el => el.remove());
               
               // 提取 .lc 元素的文本
               const lc = dl.querySelector('.lc');
               if (lc) {
-                const text = lc.textContent || '';
-                lines.push(text);
+                const rawText = lc.textContent || '';
+                const cleanText = __gmNormalizeLineText(rawText);
+                if (cleanText) lines.push(cleanText);
               }
             });
           } else {
@@ -3345,8 +3388,16 @@
             const lcElements = tempDiv.querySelectorAll('.lc');
             if (lcElements.length > 0) {
               lcElements.forEach(lc => {
-                const text = lc.textContent || '';
-                if (text) lines.push(text);
+                // 跳过提示行中的 .lc 元素
+                const parentDl = lc.closest('.dl');
+                if (parentDl && (parentDl.classList.contains('revert-block-hint') || 
+                                 parentDl.classList.contains('gm-gap-hint'))) {
+                  return;
+                }
+                
+                const rawText = lc.textContent || '';
+                const cleanText = __gmNormalizeLineText(rawText);
+                if (cleanText) lines.push(cleanText);
               });
             } else {
               // 没有找到结构化元素，可能是纯文本选择
@@ -3410,6 +3461,42 @@
           try { line.dataset.dirty = '1'; } catch (e) {}
           window.__dirtyEdits = true;
           scheduleAutoSave();
+        } catch (e2) {}
+      }, true);
+
+      // 剪切事件处理（与复制类似，但还会删除内容）
+      document.addEventListener('cut', (e) => {
+        try {
+          if (typeof __gmCopyFromLcCells === 'function') {
+            const ok = __gmCopyFromLcCells(e);
+            if (ok) {
+              // 复制成功后删除选中内容
+              setTimeout(() => {
+                try {
+                  const sel = window.getSelection ? window.getSelection() : null;
+                  if (sel && !sel.isCollapsed && __selectionWithinEditableLines()) {
+                    __handleMultiLineSelectionReplace('');
+                  }
+                } catch (e2) {}
+              }, 0);
+              return;
+            }
+          }
+          if (typeof __gmCopyFromSelectionClean === 'function') {
+            const ok2 = __gmCopyFromSelectionClean(e);
+            if (ok2) {
+              // 复制成功后删除选中内容
+              setTimeout(() => {
+                try {
+                  const sel = window.getSelection ? window.getSelection() : null;
+                  if (sel && !sel.isCollapsed && __selectionWithinEditableLines()) {
+                    __handleMultiLineSelectionReplace('');
+                  }
+                } catch (e2) {}
+              }, 0);
+              return;
+            }
+          }
         } catch (e2) {}
       }, true);
     }
@@ -4371,6 +4458,11 @@
           if (el) __recordAndRemoveDl(el);
         }
 
+        // 更新行号
+        if (typeof window.updateLineNumbers === 'function') {
+          window.updateLineNumbers();
+        }
+
         sel.removeAllRanges();
         setCaretOffset(first, (left + mid).length);
         return true;
@@ -4716,12 +4808,21 @@
           })();
           if (!hasSelInHost) return;
 
-          // Choose scope: in split view, select within the panel where the event happens
+          // Choose scope: in split view, ALWAYS select only the editable (right) panel
           let scope = host;
           try {
             if (diffMode === 'split') {
-              const sp = t && t.closest ? t.closest('.sp') : null;
-              if (sp && host.contains(sp)) scope = sp;
+              // 在并排视图中，总是选中右侧可编辑面板
+              const editablePanel = host.querySelector('.sp.sp-editable');
+              if (editablePanel) {
+                scope = editablePanel;
+              } else {
+                // 降级方案：如果没有找到 sp-editable 类，找最后一个 .sp（通常是右侧）
+                const panels = host.querySelectorAll('.sp');
+                if (panels.length >= 2) {
+                  scope = panels[panels.length - 1];
+                }
+              }
             }
           } catch (e2) {}
 
@@ -4843,6 +4944,11 @@
         window.__dirtyEdits = true;
         scheduleAutoSave();
 
+        // 更新行号
+        if (typeof window.updateLineNumbers === 'function') {
+          window.updateLineNumbers();
+        }
+
         // Focus last inserted line at end of inserted content
         try {
           const lastDl = insertAfter;
@@ -4944,7 +5050,8 @@
 
         // In unified change view, many lines are readonly and are not .editable-line.
         // Use .lc (code cell) as the authoritative copy unit so UI columns won't be copied.
-        const allCells = Array.from(host.querySelectorAll('.dl .lc'));
+        // 但要排除提示行（revert-block-hint、gm-gap-hint）
+        const allCells = Array.from(host.querySelectorAll('.dl:not(.revert-block-hint):not(.gm-gap-hint) .lc'));
         if (!allCells.length) return false;
         const covered = [];
         for (const el of allCells) {
@@ -4963,8 +5070,8 @@
         const from = Math.min(sIdx, eIdx);
         const to = Math.max(sIdx, eIdx);
 
-        const firstText = first.textContent || '';
-        const lastText = last.textContent || '';
+        const firstText = __gmNormalizeLineText(first.textContent || '');
+        const lastText = __gmNormalizeLineText(last.textContent || '');
 
         const startContainer = r.startContainer;
         const startContainerOffset = r.startOffset;
@@ -4982,7 +5089,8 @@
         for (let i = from; i <= to; i++) {
           const el = lines[i];
           if (!el) continue;
-          const txt = el.textContent || '';
+          const rawText = el.textContent || '';
+          const txt = __gmNormalizeLineText(rawText);
           if (i === from && i === to) {
             parts.push(txt.slice(Math.max(0, Math.min(startOffset, txt.length)), Math.max(0, Math.min(endOffset, txt.length))));
           } else if (i === from) {
@@ -7593,13 +7701,13 @@
 
       view.innerHTML = `${navigationHtml}
     <div class="split-wrap">
-      <div class="sp" contenteditable="false">
-        <div class="sp-hdr" style="color:var(--danger)">原始版本
+      <div class="sp sp-readonly" contenteditable="false">
+        <div class="sp-hdr" style="color:var(--danger)" contenteditable="false">原始版本
           &nbsp;<span style="color:var(--text3);font-size:10px">${esc(file.path)}</span>
         </div>${leftHtml}
       </div>
-      <div class="sp">
-        <div class="sp-hdr" style="color:var(--accent2)">当前版本
+      <div class="sp sp-editable">
+        <div class="sp-hdr" style="color:var(--accent2)" contenteditable="false">当前版本
           &nbsp;<span style="color:var(--text3);font-size:10px">${esc(file.path)}</span>
         </div>${rightHtml}
       </div>
@@ -8197,20 +8305,22 @@
             for (const dl of dls) {
               if (!dl || !dl.classList) continue;
               if (dl.classList.contains('revert-block-hint')) continue;
+              if (dl.classList.contains('gm-gap-hint')) continue; // 跳过折叠提示行
 
               // Skip placeholder rows that are not part of working content
               if (dl.classList.contains('removed')) continue;
-              if (dl.classList.contains('empty')) {
-                // Empty line is a valid part of the working content (including trailing empty line).
-                // Serialize it explicitly so join(EOL) preserves the final newline.
-                out.push('');
-                continue;
-              }
-
+              
               // Only serialize real editable lines. UI rows (collapsed hint, hunk header, etc.)
               // may also contain a .lc but are not .editable-line.
               const lc = dl.querySelector ? dl.querySelector('.lc.editable-line') : null;
-              if (!lc) continue;
+              if (!lc) {
+                // 如果没有可编辑行但有 .empty 类，这是一个空行
+                if (dl.classList.contains('empty')) {
+                  out.push('');
+                }
+                continue;
+              }
+              
               const txt = lc ? normalizeEditableText(lc.textContent) : '';
               out.push(txt);
             }
@@ -8957,13 +9067,13 @@
     }).join('');
 
     return `<div class="split-wrap">
-    <div class="sp">
-      <div class="sp-hdr" style="color:var(--danger)">原始版本
+    <div class="sp sp-readonly" contenteditable="false">
+      <div class="sp-hdr" style="color:var(--danger)" contenteditable="false">原始版本
         &nbsp;<span style="color:var(--text3);font-size:10px">${esc(file.path)}</span>
       </div>${leftCols}
     </div>
-    <div class="sp">
-      <div class="sp-hdr" style="color:var(--accent2)">当前版本
+    <div class="sp sp-editable">
+      <div class="sp-hdr" style="color:var(--accent2)" contenteditable="false">当前版本
         &nbsp;<span style="color:var(--text3);font-size:10px">${esc(file.path)}</span>
       </div>${rightCols}
     </div>
