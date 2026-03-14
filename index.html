@@ -3529,6 +3529,22 @@
 
         lineEl.textContent = left;
         newLine.textContent = indent + right;
+        try {
+          const prevIndent = String(lineEl.dataset ? (lineEl.dataset.gmAutoIndent || '') : '');
+          if (prevIndent && String(right || '') === '' && String(left || '') === prevIndent) {
+            lineEl.textContent = '';
+            try { lineEl.dispatchEvent(new Event('input', { bubbles: true })); } catch (e2) {}
+            try { delete lineEl.dataset.gmAutoIndent; } catch (e2) {}
+          }
+        } catch (e2) {}
+        try {
+          if (indent && String(right || '') === '') {
+            newLine.dataset.gmAutoIndent = indent;
+            window.__gmAutoIndentLine = newLine;
+          } else {
+            delete newLine.dataset.gmAutoIndent;
+          }
+        } catch (e2) {}
         try { lineEl.dataset.dirty = '1'; } catch (e2) {}
         try { newLine.dataset.dirty = '1'; } catch (e2) {}
         try { lineEl.dispatchEvent(new Event('input', { bubbles: true })); } catch (e2) {}
@@ -4708,6 +4724,33 @@
       } catch (e2) {}
     }, true);
 
+    const __gmMaybeClearEditableAutoIndent = () => {
+      try {
+        const line = window.__gmAutoIndentLine;
+        if (!line) return;
+        const host = document.getElementById('diffView');
+        if (!host || !host.contains(line)) { window.__gmAutoIndentLine = null; return; }
+        const sel = window.getSelection ? window.getSelection() : null;
+        const node = sel && sel.rangeCount ? (sel.focusNode || sel.anchorNode || sel.getRangeAt(0).startContainer) : null;
+        const el = node ? ((node.nodeType === Node.ELEMENT_NODE) ? node : (node.parentElement || null)) : null;
+        const curLine = (el && el.closest) ? el.closest('.editable-line') : null;
+        if (curLine === line) return;
+        const indent = String(line.dataset ? (line.dataset.gmAutoIndent || '') : '');
+        const raw = String(line.textContent || '').replace(/[\r\n\u2028\u2029]/g, '');
+        if (indent && raw === indent) {
+          line.textContent = '';
+          try { line.dispatchEvent(new Event('input', { bubbles: true })); } catch (e2) {}
+        }
+        try { delete line.dataset.gmAutoIndent; } catch (e2) {}
+        window.__gmAutoIndentLine = null;
+      } catch (e) {
+        try { window.__gmAutoIndentLine = null; } catch (e2) {}
+      }
+    };
+
+    document.addEventListener('selectionchange', () => { try { __gmMaybeClearEditableAutoIndent(); } catch (e) {} }, true);
+    document.addEventListener('mousedown', () => { try { __gmMaybeClearEditableAutoIndent(); } catch (e) {} }, true);
+
     let __editMouseDown = null;
     let __editMouseDragging = false;
     let __editDragDisabledEditing = false;
@@ -5204,7 +5247,25 @@
         const __gmShowIndentBarAtCaret = (lineEl) => {
           const bar = __gmEnsureIndentBar();
           if (!bar || !lineEl) return;
-          const rect = __gmGetCaretRectInEditableLine(lineEl);
+          let rect = __gmGetCaretRectInEditableLine(lineEl);
+          try {
+            const w = rect ? Number(rect.width || 0) : 0;
+            const h = rect ? Number(rect.height || 0) : 0;
+            const l = rect ? Number(rect.left || 0) : 0;
+            const t = rect ? Number(rect.top || 0) : 0;
+            const r = rect ? Number(rect.right || 0) : 0;
+            const b = rect ? Number(rect.bottom || 0) : 0;
+            const looksZero = (!w && !h) || (!l && !t && !r && !b);
+            if (!rect || looksZero) {
+              const lr = lineEl.getBoundingClientRect ? lineEl.getBoundingClientRect() : null;
+              if (lr) {
+                const lh = Math.max(14, Number(lr.height || 0) || 18);
+                const x = Number(lr.left || 0) + 8;
+                const y = Number(lr.top || 0);
+                rect = { left: x, right: x, top: y, bottom: y + lh, width: 0, height: lh };
+              }
+            }
+          } catch (e) {}
           if (!rect) return;
 
           bar.style.display = 'flex';
@@ -13242,6 +13303,58 @@
         }
       });
 
+      let __gmPlainAutoIndent = null;
+      const __gmPlainGetLineAtPos = (v, pos) => {
+        try {
+          const p = Math.max(0, Math.min(Number(pos) || 0, v.length));
+          const ls = v.lastIndexOf('\n', Math.max(0, p - 1));
+          const lineStart = (ls < 0) ? 0 : (ls + 1);
+          const le = v.indexOf('\n', lineStart);
+          const lineEnd = (le < 0) ? v.length : le;
+          const line = v.slice(lineStart, lineEnd);
+          return { lineStart, lineEnd, line };
+        } catch (e) {
+          return { lineStart: 0, lineEnd: 0, line: '' };
+        }
+      };
+
+      const __gmPlainMaybeClearAutoIndent = () => {
+        try {
+          if (!__gmPlainAutoIndent) return;
+          const v = String(ta.value || '');
+          const cur = __gmPlainGetLineAtPos(v, Number(ta.selectionStart || 0));
+          if (Number(cur.lineStart) === Number(__gmPlainAutoIndent.lineStart)) return;
+          const cand = __gmPlainGetLineAtPos(v, Number(__gmPlainAutoIndent.lineStart));
+          const lineText = String(cand.line || '');
+          const indent = String(__gmPlainAutoIndent.indent || '');
+          if (indent && lineText === indent) {
+            const before = v.slice(0, cand.lineStart);
+            const after = v.slice(cand.lineEnd);
+            ta.value = before + after;
+            try { ta.dispatchEvent(new Event('input', { bubbles: true })); } catch (e2) {}
+          }
+          __gmPlainAutoIndent = null;
+        } catch (e) {
+          __gmPlainAutoIndent = null;
+        }
+      };
+
+      const __gmPlainClearAutoIndentCandidate = (cand) => {
+        try {
+          if (!cand) return;
+          const v = String(ta.value || '');
+          const info = __gmPlainGetLineAtPos(v, Number(cand.lineStart));
+          const lineText = String(info.line || '');
+          const indent = String(cand.indent || '');
+          if (indent && lineText === indent) {
+            const before = v.slice(0, info.lineStart);
+            const after = v.slice(info.lineEnd);
+            ta.value = before + after;
+            try { ta.dispatchEvent(new Event('input', { bubbles: true })); } catch (e2) {}
+          }
+        } catch (e) {}
+      };
+
       ta.addEventListener('keydown', (e) => {
         if (e.key === 'Tab') {
           e.preventDefault();
@@ -13263,8 +13376,17 @@
             const m = line.match(/^[\t ]*/);
             const indent = m ? String(m[0] || '') : '';
             insertTextAtSelection('\n' + indent);
+            try {
+              const nextStart = start + 1;
+              const prev = __gmPlainAutoIndent;
+              __gmPlainAutoIndent = { lineStart: nextStart, indent };
+              try { if (prev && Number(prev.lineStart) !== Number(__gmPlainAutoIndent.lineStart)) __gmPlainClearAutoIndentCandidate(prev); } catch (e4) {}
+            } catch (e3) {
+              __gmPlainAutoIndent = null;
+            }
           } catch (e2) {
             insertTextAtSelection('\n');
+            __gmPlainAutoIndent = null;
           }
 
           // 手动触发一次 input 逻辑（与 Tab 一致）
@@ -13277,7 +13399,15 @@
             if (typeof window.setEditStatus === 'function') window.setEditStatus('已修改：自动保存已关闭（Ctrl+S 立即保存）');
           }
         }
+
+        const navKey = (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight');
+        if (navKey) {
+          try { __gmPlainMaybeClearAutoIndent(); } catch (e2) {}
+        }
       });
+
+      ta.addEventListener('mouseup', () => { try { __gmPlainMaybeClearAutoIndent(); } catch (e) {} });
+      ta.addEventListener('blur', () => { try { __gmPlainMaybeClearAutoIndent(); } catch (e) {} });
     }
     
     // 存储当前内容用于保存

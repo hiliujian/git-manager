@@ -82,6 +82,12 @@ _changed_files_cache = {
     "files": None,
 }
 
+# 最近一次读取文件的编码/是否发生 lossy(replace) 解码。
+# 说明：为保持前端显示体验，读取时可能用 errors="replace"。
+# 但若发生替换，文本已无法无损还原原始字节，此时必须阻止保存以免写坏文件。
+_file_last_encoding = {}
+_file_decode_lossy = {}
+
 # ════════════════════════════════════════════════════════
 #  WebSocket 实时通信
 # ════════════════════════════════════════════════════════
@@ -499,6 +505,11 @@ def get_file_content(filepath: str, return_encoding=False):
             result = data.decode("utf-8")
             detected_encoding = "utf-8"
             logger.debug(f"文件 {filepath} 使用 UTF-8 编码")
+            try:
+                _file_last_encoding[filepath] = detected_encoding
+                _file_decode_lossy[filepath] = False
+            except Exception:
+                pass
             return (result, detected_encoding) if return_encoding else result
         except UnicodeDecodeError:
             pass
@@ -507,6 +518,11 @@ def get_file_content(filepath: str, return_encoding=False):
             result = data.decode("utf-8-sig")
             detected_encoding = "utf-8-sig"
             logger.debug(f"文件 {filepath} 使用 UTF-8-BOM 编码")
+            try:
+                _file_last_encoding[filepath] = detected_encoding
+                _file_decode_lossy[filepath] = False
+            except Exception:
+                pass
             return (result, detected_encoding) if return_encoding else result
         except UnicodeDecodeError:
             pass
@@ -516,14 +532,31 @@ def get_file_content(filepath: str, return_encoding=False):
         try:
             enc = _detect_text_encoding_from_bytes(data)
             detected_encoding = enc
-            result = data.decode(enc, errors="replace")
-            logger.debug(f"文件 {filepath} 使用检测编码读取: {enc}")
+            lossy = False
+            try:
+                # strict 解码成功：无损
+                result = data.decode(enc)
+            except UnicodeDecodeError:
+                # 为保证前端可显示，回退 replace，但标记为 lossy
+                result = data.decode(enc, errors="replace")
+                lossy = True
+            logger.debug(f"文件 {filepath} 使用检测编码读取: {enc}{' (replace)' if lossy else ''}")
+            try:
+                _file_last_encoding[filepath] = detected_encoding
+                _file_decode_lossy[filepath] = bool(lossy)
+            except Exception:
+                pass
             return (result, detected_encoding) if return_encoding else result
         except Exception as e:
             logger.warning(f"文件 {filepath} 编码探测/解码失败: {e}，回退 UTF-8+replace")
 
         result = data.decode("utf-8", errors="replace")
         detected_encoding = "utf-8"
+        try:
+            _file_last_encoding[filepath] = detected_encoding
+            _file_decode_lossy[filepath] = True
+        except Exception:
+            pass
         return (result, detected_encoding) if return_encoding else result
     except Exception as e:
         logger.error(f"读取文件内容失败: {filepath} - {e}")
@@ -644,6 +677,15 @@ def save_file_content(filepath: str, content: str, force_encoding: str = None):
 
         rel_path = (filepath or "").replace("\\", "/").lstrip("/")
 
+        # 如果该文件在最近一次读取时发生过 replace（lossy 解码），说明原始字节无法从文本无损还原。
+        # 这种情况下禁止保存，避免写坏文件（VS2019/编译器会报错）。
+        try:
+            if _file_decode_lossy.get(filepath):
+                enc_hint = _file_last_encoding.get(filepath) or target_enc
+                return False, f"该文件读取时发生编码替换（{enc_hint} + replace），无法保证无损保存。请用正确编码打开/修复原始字节后再保存。"
+        except Exception:
+            pass
+
         # Decide target EOL:
         # Priority: 1) detect from original file (most reliable)
         #           2) git attributes (eol)
@@ -719,6 +761,14 @@ def save_file_content(filepath: str, content: str, force_encoding: str = None):
             txt = str(txt).replace("\r\n", "\n").replace("\r", "\n")
             if target_eol != "\n":
                 txt = txt.replace("\n", target_eol)
+
+        # Validate encoding strictly. We must follow the original encoding; if it cannot
+        # represent the edited content, refuse to save (avoid silent transcoding).
+        try:
+            _ = txt.encode(target_enc)
+        except UnicodeEncodeError as e:
+            logger.error(f"内容包含无法用 {target_enc} 编码的字符: {filepath} - {e}")
+            return False, f"内容包含无法用 {target_enc} 编码的字符: {e}"
 
         # Write exact newlines without implicit translation
         logger.debug(f"准备写入文件: {full}, 编码: {target_enc}, 换行符: {repr(target_eol)}, 内容长度: {len(txt)}")
