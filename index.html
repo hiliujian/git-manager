@@ -841,6 +841,45 @@
       -webkit-overflow-scrolling:touch;
     }
     .plain-editor-textarea::selection{background:rgba(110,180,247,.25);}
+
+    .plain-editor-indentbar{
+      position:fixed;
+      z-index:9999;
+      display:none;
+      gap:6px;
+      padding:6px;
+      border:1px solid var(--border);
+      border-radius:8px;
+      background:rgba(20, 24, 33, .92);
+      backdrop-filter: blur(8px);
+      box-shadow: 0 10px 24px rgba(0,0,0,.35);
+      align-items:center;
+      pointer-events:auto;
+    }
+    [data-theme="light"] .plain-editor-indentbar{
+      background:rgba(255,255,255,.92);
+      box-shadow: 0 10px 24px rgba(0,0,0,.18);
+    }
+    .plain-editor-indentbar button{
+      width:28px;
+      height:28px;
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      border-radius:6px;
+      border:1px solid transparent;
+      background:transparent;
+      color:var(--text2);
+      cursor:pointer;
+      transition:all .12s;
+    }
+    .plain-editor-indentbar button:hover{
+      background:rgba(110,180,247,.10);
+      border-color:rgba(110,180,247,.25);
+      color:var(--text);
+    }
+    .plain-editor-indentbar button:active{transform:translateY(1px);}
+    .plain-editor-indentbar svg{width:18px;height:18px;}
     
     /* 编辑器关闭按钮 */
     .editor-close-btn{
@@ -5023,6 +5062,250 @@
       }
     };
 
+    const __gmInitEditableIndentBarOnce = () => {
+      try {
+        if (window.__gmEditableIndentBarInited) return;
+        window.__gmEditableIndentBarInited = true;
+
+        const __gmEnsureIndentBar = () => {
+          try {
+            if (window.__gmPlainIndentBarEl && window.__gmPlainIndentBarEl.parentElement) return window.__gmPlainIndentBarEl;
+            const el = document.createElement('div');
+            el.className = 'plain-editor-indentbar';
+            el.innerHTML = `
+              <button type="button" data-act="indent" title="缩进 (Tab)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M4 4h16"/>
+                  <path d="M4 12h10"/>
+                  <path d="M4 20h16"/>
+                  <path d="M14 8l4 4-4 4"/>
+                </svg>
+              </button>
+              <button type="button" data-act="outdent" title="反缩进 (Shift+Tab)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M4 4h16"/>
+                  <path d="M4 12h10"/>
+                  <path d="M4 20h16"/>
+                  <path d="M10 8l-4 4 4 4"/>
+                </svg>
+              </button>
+            `;
+            document.body.appendChild(el);
+            window.__gmPlainIndentBarEl = el;
+            return el;
+          } catch (e) {
+            return null;
+          }
+        };
+
+        const __gmIndentBarHide = () => {
+          const bar = window.__gmPlainIndentBarEl;
+          if (!bar) return;
+          try {
+            if (bar.__gmHideTimer) {
+              clearTimeout(bar.__gmHideTimer);
+              bar.__gmHideTimer = 0;
+            }
+          } catch (e) {}
+          bar.style.display = 'none';
+        };
+
+        const __gmIndentBarScheduleHide = (delayMs) => {
+          const bar = window.__gmPlainIndentBarEl;
+          if (!bar) return;
+          try {
+            if (bar.__gmHideTimer) clearTimeout(bar.__gmHideTimer);
+          } catch (e) {}
+          bar.__gmHideTimer = setTimeout(() => {
+            try { __gmIndentBarHide(); } catch (e2) {}
+          }, Math.max(0, Number(delayMs) || 0));
+        };
+
+        const __gmIndentBarCancelHide = () => {
+          const bar = window.__gmPlainIndentBarEl;
+          if (!bar) return;
+          try {
+            if (bar.__gmHideTimer) {
+              clearTimeout(bar.__gmHideTimer);
+              bar.__gmHideTimer = 0;
+            }
+          } catch (e) {}
+        };
+
+        const __gmGetCaretRectInEditableLine = (lineEl) => {
+          try {
+            const sel = window.getSelection ? window.getSelection() : null;
+            if (!sel || sel.rangeCount === 0) return null;
+            const r0 = sel.getRangeAt(0);
+            if (lineEl && !lineEl.contains(r0.startContainer)) return null;
+            const r = r0.cloneRange();
+            r.collapse(true);
+            let rect = null;
+            try {
+              const rs = r.getClientRects();
+              rect = (rs && rs.length) ? rs[0] : null;
+            } catch (e) { rect = null; }
+            if (rect && Number.isFinite(rect.left) && Number.isFinite(rect.top)) return rect;
+
+            try {
+              rect = r.getBoundingClientRect();
+              if (rect && Number.isFinite(rect.left) && Number.isFinite(rect.top)) return rect;
+            } catch (e2) {}
+            return null;
+          } catch (e) {
+            return null;
+          }
+        };
+
+        const __gmIsCaretAtLineStartLike = (lineEl) => {
+          try {
+            if (!lineEl) return false;
+            const caret = (typeof getCaretOffset === 'function') ? Number(getCaretOffset(lineEl) || 0) : 0;
+            const raw = String(lineEl.textContent || '').replace(/\n/g, '').replace(/\u200b/g, '');
+            const m = raw.match(/^[\t ]*/);
+            const indentLen = m ? String(m[0] || '').length : 0;
+            return caret <= indentLen;
+          } catch (e) {
+            return false;
+          }
+        };
+
+        const __gmApplyIndentToEditableLine = (lineEl, dir) => {
+          try {
+            if (!lineEl) return;
+            const IND = '\t';
+            const raw0 = String(lineEl.textContent || '').replace(/\n/g, '').replace(/\u200b/g, '');
+            let caret = (typeof getCaretOffset === 'function') ? Number(getCaretOffset(lineEl) || 0) : 0;
+
+            let raw1 = raw0;
+            if (dir > 0) {
+              raw1 = IND + raw0;
+              caret += IND.length;
+            } else {
+              if (raw0.startsWith('\t')) {
+                raw1 = raw0.slice(1);
+                caret = Math.max(0, caret - 1);
+              } else if (raw0.startsWith('  ')) {
+                raw1 = raw0.slice(2);
+                caret = Math.max(0, caret - 2);
+              } else if (raw0.startsWith(' ')) {
+                raw1 = raw0.slice(1);
+                caret = Math.max(0, caret - 1);
+              }
+            }
+
+            lineEl.textContent = raw1;
+            try { lineEl.dispatchEvent(new Event('input', { bubbles: true })); } catch (e) {}
+            try { lineEl.focus({ preventScroll: true }); } catch (e2) { try { lineEl.focus(); } catch (e3) {} }
+            try { if (typeof setCaretOffset === 'function') setCaretOffset(lineEl, caret); } catch (e4) {}
+          } catch (e) {}
+        };
+
+        const __gmShowIndentBarAtCaret = (lineEl) => {
+          const bar = __gmEnsureIndentBar();
+          if (!bar || !lineEl) return;
+          const rect = __gmGetCaretRectInEditableLine(lineEl);
+          if (!rect) return;
+
+          bar.style.display = 'flex';
+          const bw = Math.max(1, Math.round(bar.offsetWidth || 1));
+          const bh = Math.max(1, Math.round(bar.offsetHeight || 1));
+
+          const host = document.getElementById('diffView');
+          const hostRect = host ? host.getBoundingClientRect() : null;
+          const minLeft = hostRect ? (hostRect.left + 6) : 6;
+          const maxLeft = hostRect ? (hostRect.right - bw - 6) : (window.innerWidth - bw - 6);
+          const minTop = hostRect ? (hostRect.top + 6) : 6;
+          const maxTop = hostRect ? (hostRect.bottom - bh - 6) : (window.innerHeight - bh - 6);
+
+          let left = Number(rect.left || 0) - Math.round(bw / 2);
+          left = Math.max(minLeft, Math.min(maxLeft, left));
+          let top = Number(rect.bottom || rect.top || 0) + 6;
+          top = Math.max(minTop, Math.min(maxTop, top));
+
+          bar.style.left = `${Math.max(6, Math.round(left))}px`;
+          bar.style.top = `${Math.max(6, Math.round(top))}px`;
+          bar.__gmActiveEditableLine = lineEl;
+        };
+
+        const __gmBindIndentBarUi = () => {
+          const bar = __gmEnsureIndentBar();
+          if (!bar || bar.__gmBound) return;
+          bar.__gmBound = true;
+          bar.addEventListener('mousedown', (e) => { try { e.preventDefault(); } catch (e2) {} });
+          bar.addEventListener('mouseenter', () => {
+            try { __gmIndentBarCancelHide(); } catch (e) {}
+          });
+          bar.addEventListener('mouseleave', () => {
+            try { __gmIndentBarScheduleHide(220); } catch (e) {}
+          });
+          bar.addEventListener('click', (e) => {
+            try {
+              const btn = e && e.target && (e.target.closest ? e.target.closest('button') : null);
+              const act = btn ? String(btn.getAttribute('data-act') || '') : '';
+              const lineEl = bar.__gmActiveEditableLine;
+              if (!act || !lineEl) return;
+              if (act === 'indent') __gmApplyIndentToEditableLine(lineEl, 1);
+              if (act === 'outdent') __gmApplyIndentToEditableLine(lineEl, -1);
+              __gmIndentBarHide();
+            } catch (e2) {}
+          });
+        };
+
+        __gmBindIndentBarUi();
+
+        document.addEventListener('mousemove', (ev) => {
+          try {
+            const host = document.getElementById('diffView');
+            if (!host) return;
+            const tgt = ev && ev.target;
+            const bar = window.__gmPlainIndentBarEl;
+            if (bar && bar.style.display !== 'none') {
+              if (tgt && (tgt === bar || (bar.contains && bar.contains(tgt)))) {
+                __gmIndentBarCancelHide();
+                return;
+              }
+            }
+
+            if (!tgt || !host.contains(tgt)) {
+              // 延迟隐藏，给鼠标移动到按钮的时间
+              return __gmIndentBarScheduleHide(220);
+            }
+            const lineEl = tgt.closest ? tgt.closest('.editable-line') : null;
+            if (!lineEl || !host.contains(lineEl)) return __gmIndentBarScheduleHide(220);
+
+            const sel = window.getSelection ? window.getSelection() : null;
+            if (!sel || sel.rangeCount === 0) return __gmIndentBarScheduleHide(220);
+            const r = sel.getRangeAt(0);
+            const node = sel.focusNode || r.startContainer;
+            const el = node ? ((node.nodeType === Node.ELEMENT_NODE) ? node : (node.parentElement || null)) : null;
+            const caretLine = (el && el.closest) ? el.closest('.editable-line') : null;
+            if (!caretLine || caretLine !== lineEl) return __gmIndentBarScheduleHide(220);
+            if (!__gmIsCaretAtLineStartLike(lineEl)) return __gmIndentBarScheduleHide(220);
+
+            __gmIndentBarCancelHide();
+
+            __gmShowIndentBarAtCaret(lineEl);
+          } catch (e) {
+            try { __gmIndentBarScheduleHide(220); } catch (e2) {}
+          }
+        }, { passive: true });
+
+        document.addEventListener('scroll', __gmIndentBarHide, true);
+        window.addEventListener('resize', __gmIndentBarHide, { passive: true });
+        document.addEventListener('selectionchange', () => {
+          try {
+            const bar = window.__gmPlainIndentBarEl;
+            if (!bar || bar.style.display === 'none') return;
+            const lineEl = bar.__gmActiveEditableLine;
+            if (!lineEl) return __gmIndentBarHide();
+            if (!__gmIsCaretAtLineStartLike(lineEl)) return __gmIndentBarHide();
+            __gmShowIndentBarAtCaret(lineEl);
+          } catch (e) {}
+        });
+      } catch (e) {}
+    };
+
     // Capture on both document and window to avoid focus/target edge cases.
     const __editableLineKeydownListener = (e) => {
       let t = e && e.target;
@@ -5224,6 +5507,7 @@
     };
 
     document.addEventListener('keydown', __editableLineKeydownListener, true);
+    try { __gmInitEditableIndentBarOnce(); } catch (e) {}
 
     if (!window.__gmCtrlASelectInited) {
       window.__gmCtrlASelectInited = true;
@@ -12580,12 +12864,349 @@
       ta.selectionStart = ta.selectionEnd = pos;
     };
 
+    const __gmEnsureIndentBar = () => {
+      try {
+        if (window.__gmPlainIndentBarEl && window.__gmPlainIndentBarEl.parentElement) return window.__gmPlainIndentBarEl;
+        const el = document.createElement('div');
+        el.className = 'plain-editor-indentbar';
+        el.innerHTML = `
+          <button type="button" data-act="indent" title="缩进 (Tab)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 4h16"/>
+              <path d="M4 12h10"/>
+              <path d="M4 20h16"/>
+              <path d="M14 8l4 4-4 4"/>
+            </svg>
+          </button>
+          <button type="button" data-act="outdent" title="反缩进 (Shift+Tab)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 4h16"/>
+              <path d="M4 12h10"/>
+              <path d="M4 20h16"/>
+              <path d="M10 8l-4 4 4 4"/>
+            </svg>
+          </button>
+        `;
+        document.body.appendChild(el);
+        window.__gmPlainIndentBarEl = el;
+        return el;
+      } catch (e) {
+        return null;
+      }
+    };
+
+    const __gmPlainIndentApply = (dir) => {
+      if (!ta) return;
+      const IND = '  ';
+      const v0 = String(ta.value || '');
+      let s0 = Number(ta.selectionStart || 0);
+      let e0 = Number(ta.selectionEnd || 0);
+      if (s0 > e0) { const tmp = s0; s0 = e0; e0 = tmp; }
+
+      const lineStartAt = (pos) => {
+        const p = Math.max(0, Math.min(pos, v0.length));
+        const ls = v0.lastIndexOf('\n', Math.max(0, p - 1));
+        return (ls < 0) ? 0 : (ls + 1);
+      };
+      const lineEndAt = (pos) => {
+        const p = Math.max(0, Math.min(pos, v0.length));
+        const le = v0.indexOf('\n', p);
+        return (le < 0) ? v0.length : le;
+      };
+
+      const startLineStart = lineStartAt(s0);
+      let endLineEnd = lineEndAt(e0);
+      // 如果选区尾部正好在行首（且不是同一行），视为上一行结束
+      if (e0 > 0 && e0 === lineStartAt(e0) && e0 !== startLineStart) {
+        endLineEnd = lineEndAt(e0 - 1);
+      }
+      const block = v0.slice(startLineStart, endLineEnd);
+      const lines = block.split('\n');
+
+      let deltaStart = 0;
+      let deltaEnd = 0;
+      if (dir > 0) {
+        for (let i = 0; i < lines.length; i++) {
+          lines[i] = IND + lines[i];
+        }
+        deltaStart = IND.length;
+        deltaEnd = IND.length * lines.length;
+      } else {
+        for (let i = 0; i < lines.length; i++) {
+          if (lines[i].startsWith(IND)) {
+            lines[i] = lines[i].slice(IND.length);
+            if (i === 0) deltaStart -= IND.length;
+            deltaEnd -= IND.length;
+          } else if (lines[i].startsWith('\t')) {
+            lines[i] = lines[i].slice(1);
+            if (i === 0) deltaStart -= 1;
+            deltaEnd -= 1;
+          }
+        }
+      }
+
+      const v1 = v0.slice(0, startLineStart) + lines.join('\n') + v0.slice(endLineEnd);
+      ta.value = v1;
+
+      const newSelStart = Math.max(0, Math.min(v1.length, s0 + deltaStart));
+      const newSelEnd = Math.max(0, Math.min(v1.length, e0 + deltaEnd));
+      ta.selectionStart = newSelStart;
+      ta.selectionEnd = newSelEnd;
+
+      try {
+        ta.dispatchEvent(new Event('input', { bubbles: true }));
+      } catch (e) {
+        window.__dirtyEdits = true;
+        renderGutter();
+        syncScroll();
+      }
+    };
+
+    const __gmPlainIndentBarHide = () => {
+      const bar = window.__gmPlainIndentBarEl;
+      if (bar) bar.style.display = 'none';
+    };
+
+    const __gmPlainIndentBarShowAtCaretRect = (caretRect) => {
+      const bar = __gmEnsureIndentBar();
+      if (!bar || !ta || !caretRect) return;
+
+      const taRect = ta.getBoundingClientRect();
+      if (!taRect) return;
+
+      // 先显示以便测量
+      bar.style.display = 'flex';
+      const bw = Math.max(1, Math.round(bar.offsetWidth || 1));
+      const bh = Math.max(1, Math.round(bar.offsetHeight || 1));
+
+      // 放到光标下方，水平居中对齐光标
+      const desiredTop = Number(caretRect.bottom || caretRect.top || 0) + 6;
+      let desiredLeft = Number(caretRect.left || 0) - Math.round(bw / 2);
+
+      const minLeft = taRect.left + 6;
+      const maxLeft = taRect.right - bw - 6;
+      if (Number.isFinite(minLeft) && Number.isFinite(maxLeft)) {
+        desiredLeft = Math.max(minLeft, Math.min(maxLeft, desiredLeft));
+      }
+
+      const minTop = taRect.top + 6;
+      const maxTop = taRect.bottom - bh - 6;
+      const t = Math.max(minTop, Math.min(maxTop, desiredTop));
+
+      bar.style.left = `${Math.max(6, Math.round(desiredLeft))}px`;
+      bar.style.top = `${Math.max(6, Math.round(t))}px`;
+    };
+
+    const __gmPlainIndentHookEvents = () => {
+      try {
+        if (!ta || ta.__gmIndentBarHooked) return;
+        ta.__gmIndentBarHooked = true;
+        const bar = __gmEnsureIndentBar();
+        if (!bar) return;
+
+        const getMetrics = () => {
+          const cs = window.getComputedStyle ? window.getComputedStyle(ta) : null;
+          const lh = parseFloat(cs ? (cs.lineHeight || '18') : '18') || 18;
+          const padTop = parseFloat(cs ? (cs.paddingTop || '8') : '8') || 0;
+          const rect = ta.getBoundingClientRect();
+          return { cs, lh, padTop, rect };
+        };
+
+        const __gmGetCaretClientRect = () => {
+          try {
+            const pos = Number(ta.selectionStart || 0);
+            const v = String(ta.value || '');
+            const m = getMetrics();
+
+            let mirror = ta.__gmCaretMirror;
+            let marker = ta.__gmCaretMarker;
+            if (!mirror || !marker || !mirror.parentElement) {
+              mirror = document.createElement('div');
+              mirror.style.position = 'fixed';
+              mirror.style.left = '0';
+              mirror.style.top = '0';
+              mirror.style.visibility = 'hidden';
+              mirror.style.pointerEvents = 'none';
+              mirror.style.whiteSpace = 'pre';
+              mirror.style.overflow = 'auto';
+              mirror.style.zIndex = '-1';
+
+              marker = document.createElement('span');
+              marker.textContent = ' '; // 让 rect 有宽高
+
+              mirror.appendChild(marker);
+              document.body.appendChild(mirror);
+              ta.__gmCaretMirror = mirror;
+              ta.__gmCaretMarker = marker;
+            }
+
+            // 同步 textarea 样式与尺寸
+            mirror.style.fontFamily = m.cs ? (m.cs.fontFamily || '') : '';
+            mirror.style.fontSize = m.cs ? (m.cs.fontSize || '') : '';
+            mirror.style.fontWeight = m.cs ? (m.cs.fontWeight || '') : '';
+            mirror.style.letterSpacing = m.cs ? (m.cs.letterSpacing || '') : '';
+            mirror.style.lineHeight = m.cs ? (m.cs.lineHeight || '') : '';
+            try {
+              // 尽量保持与 textarea 一致的 white-space 行为
+              mirror.style.whiteSpace = m.cs ? (m.cs.whiteSpace || 'pre') : 'pre';
+            } catch (e) { mirror.style.whiteSpace = 'pre'; }
+            mirror.style.paddingTop = m.cs ? (m.cs.paddingTop || '0') : '0';
+            mirror.style.paddingRight = m.cs ? (m.cs.paddingRight || '0') : '0';
+            mirror.style.paddingBottom = m.cs ? (m.cs.paddingBottom || '0') : '0';
+            mirror.style.paddingLeft = m.cs ? (m.cs.paddingLeft || '0') : '0';
+            mirror.style.border = m.cs ? (m.cs.border || '0') : '0';
+            mirror.style.boxSizing = m.cs ? (m.cs.boxSizing || 'border-box') : 'border-box';
+            mirror.style.width = `${Math.max(0, Math.round(m.rect.width))}px`;
+            mirror.style.height = `${Math.max(0, Math.round(m.rect.height))}px`;
+            // 让 tab 宽度一致
+            try { mirror.style.tabSize = m.cs ? (m.cs.tabSize || '2') : '2'; } catch (e) {}
+
+            // 放到 textarea 同一位置，配合 scrollTop 计算 caret 的视口坐标
+            mirror.style.left = `${Math.round(m.rect.left)}px`;
+            mirror.style.top = `${Math.round(m.rect.top)}px`;
+            mirror.scrollTop = Number(ta.scrollTop || 0);
+            mirror.scrollLeft = Number(ta.scrollLeft || 0);
+
+            // 填充光标前文本，并把 marker 放到末尾
+            const before = v.slice(0, Math.max(0, Math.min(pos, v.length)));
+            // 保留 marker，但要先清空 mirror 内容
+            mirror.textContent = '';
+            mirror.appendChild(document.createTextNode(before));
+            mirror.appendChild(marker);
+
+            const r = marker.getBoundingClientRect();
+            return r;
+          } catch (e) {
+            return null;
+          }
+        };
+
+        let raf = 0;
+        const schedule = (fn) => {
+          if (raf) cancelAnimationFrame(raf);
+          raf = requestAnimationFrame(() => {
+            raf = 0;
+            try { fn(); } catch (e) {}
+          });
+        };
+
+        const isCaretAtLineStart = () => {
+          try {
+            const v = String(ta.value || '');
+            const pos = Number(ta.selectionStart || 0);
+            if (!Number.isFinite(pos) || pos < 0) return false;
+            const ls = v.lastIndexOf('\n', Math.max(0, pos - 1));
+            const lineStart = (ls < 0) ? 0 : (ls + 1);
+            const le = v.indexOf('\n', lineStart);
+            const lineEnd = (le < 0) ? v.length : le;
+            const line = v.slice(lineStart, lineEnd);
+            const m = line.match(/^[\t ]*/);
+            const indentLen = m ? String(m[0] || '').length : 0;
+            const firstNonWs = lineStart + indentLen;
+            // 光标在“行首缩进区域”内也算行首（更符合用户感知）
+            return pos <= firstNonWs;
+          } catch (e) {
+            return false;
+          }
+        };
+
+        const lineFromMouse = (ev) => {
+          try {
+            const m = getMetrics();
+            const lh = m.lh;
+            const padTop = m.padTop;
+            const rect = m.rect;
+            const y = Number(ev.clientY || 0) - rect.top - padTop + Number(ta.scrollTop || 0);
+            return Math.max(1, Math.floor(y / lh) + 1);
+          } catch (e) {
+            return 1;
+          }
+        };
+
+        const maybeShow = (ev) => {
+          schedule(() => {
+            if (!window.__plainEditorFilename) return __gmPlainIndentBarHide();
+            if (!ta.matches(':focus')) return __gmPlainIndentBarHide();
+            if (!isCaretAtLineStart()) return __gmPlainIndentBarHide();
+
+            const mouseLn = lineFromMouse(ev);
+            const caretLn = __gmLineFromTextareaSelection(ta);
+            if (Number(mouseLn) !== Number(caretLn)) return __gmPlainIndentBarHide();
+            const cr = __gmGetCaretClientRect();
+            if (!cr) return __gmPlainIndentBarHide();
+            __gmPlainIndentBarShowAtCaretRect(cr);
+          });
+        };
+
+        const maybeShowFromGutter = (ev) => {
+          schedule(() => {
+            if (!window.__plainEditorFilename) return __gmPlainIndentBarHide();
+            if (!ta.matches(':focus')) return __gmPlainIndentBarHide();
+            if (!isCaretAtLineStart()) return __gmPlainIndentBarHide();
+            const caretLn = __gmLineFromTextareaSelection(ta);
+            const tgt = ev && ev.target;
+            let mouseLn = null;
+            try {
+              const n = tgt && tgt.closest ? tgt.closest('.n') : null;
+              if (n) mouseLn = parseInt(String(n.textContent || '').trim(), 10);
+            } catch (e) { mouseLn = null; }
+            if (!Number.isFinite(Number(mouseLn)) || Number(mouseLn) <= 0) {
+              try {
+                const m = getMetrics();
+                const gh = gutter && gutter.getBoundingClientRect ? gutter.getBoundingClientRect() : null;
+                if (!gh) return __gmPlainIndentBarHide();
+                const y = Number(ev.clientY || 0) - gh.top + Number(ta.scrollTop || 0);
+                mouseLn = Math.max(1, Math.floor((y - 0) / m.lh) + 1);
+              } catch (e2) { mouseLn = null; }
+            }
+            if (Number(mouseLn) !== Number(caretLn)) return __gmPlainIndentBarHide();
+            const cr = __gmGetCaretClientRect();
+            if (!cr) return __gmPlainIndentBarHide();
+            __gmPlainIndentBarShowAtCaretRect(cr);
+          });
+        };
+
+        ta.addEventListener('mousemove', maybeShow);
+        ta.addEventListener('mouseleave', __gmPlainIndentBarHide);
+        ta.addEventListener('scroll', __gmPlainIndentBarHide);
+        ta.addEventListener('blur', __gmPlainIndentBarHide);
+        ta.addEventListener('keyup', __gmPlainIndentBarHide);
+
+        try {
+          if (gutter) {
+            gutter.addEventListener('mousemove', maybeShowFromGutter);
+            gutter.addEventListener('mouseleave', __gmPlainIndentBarHide);
+            gutter.addEventListener('scroll', __gmPlainIndentBarHide);
+          }
+        } catch (e) {}
+
+        bar.addEventListener('mousedown', (e) => {
+          // 防止按钮点击导致 textarea 失焦
+          try { e.preventDefault(); } catch (e2) {}
+        });
+
+        bar.addEventListener('click', (e) => {
+          try {
+            const btn = e && e.target && (e.target.closest ? e.target.closest('button') : null);
+            const act = btn ? String(btn.getAttribute('data-act') || '') : '';
+            if (!act) return;
+            try { ta.focus({ preventScroll: true }); } catch (e3) { try { ta.focus(); } catch (e4) {} }
+            if (act === 'indent') __gmPlainIndentApply(1);
+            if (act === 'outdent') __gmPlainIndentApply(-1);
+            __gmPlainIndentBarHide();
+          } catch (e2) {}
+        });
+      } catch (e) {}
+    };
+
     if (ta) {
       renderGutter();
       syncScroll();
       try { ta.focus({ preventScroll: true }); } catch (e) { try { ta.focus(); } catch (e2) {} }
 
       try { __gmInitLastLineTrackingOnce(); } catch (e) {}
+
+      try { __gmPlainIndentHookEvents(); } catch (e) {}
 
       ta.addEventListener('click', () => {
         try {
@@ -12624,15 +13245,10 @@
       ta.addEventListener('keydown', (e) => {
         if (e.key === 'Tab') {
           e.preventDefault();
-          insertTextAtSelection('  ');
-          // 手动触发一次 input 逻辑
-          window.__dirtyEdits = true;
-          renderGutter();
-          syncScroll();
-          if (window.__autoSaveEnabled) {
-            if (typeof window.scheduleAutoSave === 'function') window.scheduleAutoSave();
+          if (e.shiftKey) {
+            __gmPlainIndentApply(-1);
           } else {
-            if (typeof window.setEditStatus === 'function') window.setEditStatus('已修改：自动保存已关闭（Ctrl+S 立即保存）');
+            __gmPlainIndentApply(1);
           }
         }
 
