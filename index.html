@@ -140,6 +140,14 @@
       background: #fff3bf;
       color: #e67700;
     }
+    [data-theme="light"] .fi-st.C {
+      background: #c5f6fa;
+      color: #0c8599;
+    }
+    [data-theme="light"] .fi-st.S {
+      background: #e7f5ff;
+      color: #1c7ed6;
+    }
 
     /* Light theme log file status badge overrides */
     [data-theme="light"] .lf-st.M {
@@ -491,6 +499,8 @@
     .fi-st.D{background:#2d0d0d;color:#f27272;}
     .fi-st.R{background:#2a1060;color:#b48ef7;}
     .fi-st.U{background:#2a1e00;color:#f0b429;}
+    .fi-st.C{background:#0b2f33;color:#4ddbe6;}
+    .fi-st.S{background:#0b244a;color:#63a6ff;}
     .fi-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
       font-family:'JetBrains Mono',monospace;font-size:11px;}
     .fi-dir{color:var(--text3);}
@@ -1097,6 +1107,87 @@
       animation: __gmFindMatchFlashLight 520ms ease-out 1;
     }
 
+    .file-filter-panel{
+      position:fixed;
+      z-index:90;
+      min-width:210px;
+      max-width:250px;
+      background:var(--bg2);
+      border:1px solid rgba(255,255,255,0.10);
+      box-shadow:0 18px 60px rgba(0,0,0,0.35);
+      border-radius:12px;
+      padding:10px 10px;
+      display:none;
+    }
+    [data-theme="light"] .file-filter-panel{
+      border:1px solid rgba(0,0,0,0.10);
+      box-shadow:0 18px 60px rgba(0,0,0,0.18);
+    }
+    .file-filter-panel .ttl{
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      margin:2px 2px 8px 2px;
+      color:var(--text);
+      font-size:12px;
+      font-weight:700;
+    }
+    .file-filter-panel .x{
+      border:none;
+      background:transparent;
+      color:var(--text2);
+      cursor:pointer;
+      padding:4px 6px;
+      border-radius:8px;
+    }
+    .file-filter-panel .x:hover{ background:rgba(255,255,255,0.06); color:var(--text); }
+    [data-theme="light"] .file-filter-panel .x:hover{ background:rgba(0,0,0,0.05); }
+    .file-filter-panel .sec{
+      margin:8px 2px;
+      padding-top:8px;
+      border-top:1px solid rgba(255,255,255,0.08);
+    }
+    [data-theme="light"] .file-filter-panel .sec{ border-top:1px solid rgba(0,0,0,0.08); }
+    .file-filter-panel label{
+      display:flex;
+      align-items:center;
+      gap:8px;
+      font-size:12px;
+      color:var(--text);
+      padding:6px 6px;
+      border-radius:10px;
+      cursor:pointer;
+      user-select:none;
+    }
+    .file-filter-panel .sec.__gm-st{ display:grid; grid-template-columns:1fr 1fr; gap:2px 6px; }
+    .file-filter-panel .sec.__gm-st label{ padding:6px 6px; }
+    .file-filter-panel .sec.__gm-st label .fi-st{ margin-left:2px; }
+    .file-filter-panel .sec.__gm-st .__gm-st-txt{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .file-filter-panel label:hover{ background:rgba(255,255,255,0.06); }
+    [data-theme="light"] .file-filter-panel label:hover{ background:rgba(0,0,0,0.05); }
+    .file-filter-panel input[type="checkbox"]{ accent-color: var(--accent); }
+    .file-filter-panel .btnrow{ display:flex; gap:8px; margin-top:8px; padding:0 6px 4px 6px; }
+    .file-filter-panel .btnrow .btn{
+      padding:6px 10px;
+      font-size:12px;
+      border-radius:10px;
+      border:1px solid rgba(255,255,255,0.10);
+      background:rgba(255,255,255,0.06);
+      color:var(--text);
+      cursor:pointer;
+    }
+    [data-theme="light"] .file-filter-panel .btnrow .btn{
+      border:1px solid rgba(0,0,0,0.12);
+      background:rgba(0,0,0,0.04);
+    }
+    .file-filter-panel .btnrow .btn:hover{ background:rgba(255,255,255,0.10); }
+    [data-theme="light"] .file-filter-panel .btnrow .btn:hover{ background:rgba(0,0,0,0.06); }
+
+    #fileCount{ cursor:pointer; }
+    #fileCount:hover{ filter:brightness(1.08); }
+    #fileCount.filtered{ box-shadow:0 0 0 1px rgba(255, 214, 10, 0.38) inset; }
+    [data-theme="light"] #fileCount.filtered{ box-shadow:0 0 0 1px rgba(255, 193, 7, 0.45) inset; }
+
     .find-overlay{
       position:absolute;
       top:0;
@@ -1567,7 +1658,7 @@
   <div class="sidebar" id="sidebar">
     <div class="ph">
       <span class="ph-title">变更</span>
-      <span class="badge" id="fileCount">0</span>
+      <span class="badge" id="fileCount" title="筛选变更文件" onclick="toggleFileFilter()">0</span>
       <button class="icon-btn" title="刷新" onclick="refresh()">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
           <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/>
@@ -6593,6 +6684,12 @@
       updateRecentFilesDropdown();
     } catch (e) {}
 
+    try {
+      __gmChangeTypeFilterSet = new Set();
+      __gmSmartFileFilterEnabled = false;
+      __gmHideFileFilterPanel();
+    } catch (e) {}
+
     try { lastLineByPath.clear(); } catch (e) {}
 
     try {
@@ -7299,6 +7396,239 @@
   }
 
   // ── File List ─────────────────────────────────────────────────────────────────
+  let __gmChangeTypeFilterSet = new Set();
+  let __gmSmartFileFilterEnabled = false;
+  let __gmFileFilterPanelEl = null;
+
+  function __gmGetFileCategoryByPath(p) {
+    try {
+      const path = String(p || '');
+      const base = path.replace(/\\/g, '/').split('/').pop() || '';
+      const ext = (base.lastIndexOf('.') >= 0) ? base.slice(base.lastIndexOf('.') + 1).toLowerCase() : '';
+      const code = new Set(['js','jsx','ts','tsx','py','java','c','cc','cpp','h','hpp','cs','go','rs','php','rb','kt','swift','scala','vue','svelte','m','mm']);
+      const cfg = new Set(['json','yml','yaml','toml','ini','conf','config','properties','env','editorconfig','gitignore','gitattributes']);
+      const docs = new Set(['md','markdown','txt','rst','adoc']);
+      const img = new Set(['png','jpg','jpeg','gif','svg','webp','ico','bmp']);
+      const style = new Set(['css','scss','sass','less']);
+      if (code.has(ext)) return 'code';
+      if (cfg.has(ext)) return 'config';
+      if (docs.has(ext)) return 'docs';
+      if (img.has(ext)) return 'image';
+      if (style.has(ext)) return 'style';
+      return 'other';
+    } catch (e) {
+      return 'other';
+    }
+  }
+
+  function __gmIsNoiseFilePath(p) {
+    try {
+      const path = String(p || '').replace(/\\/g, '/');
+      const segs = path.split('/').filter(Boolean);
+      for (const s of segs) {
+        if (s.startsWith('.')) return true;
+      }
+      const noiseDirs = new Set([
+        'node_modules','dist','build','out','target','vendor',
+        '__pycache__','.venv','venv','.mypy_cache','.pytest_cache',
+        'coverage','.idea','.vscode','.gradle','.next','.nuxt',
+        '.cache','.turbo'
+      ]);
+      for (const s of segs) {
+        if (noiseDirs.has(s)) return true;
+      }
+      const base = segs.length ? segs[segs.length - 1] : '';
+      const low = base.toLowerCase();
+      if (low.endsWith('.log') || low.endsWith('.tmp') || low.endsWith('.swp') || low.endsWith('.bak')) return true;
+      return false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function __gmIsFileFiltersActive() {
+    try {
+      if (__gmSmartFileFilterEnabled) return true;
+      if (__gmChangeTypeFilterSet && __gmChangeTypeFilterSet.size) return true;
+      const q = String(fileFilter || '').trim();
+      return !!q;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function __gmGetVisibleFiles() {
+    const q = String(fileFilter || '').toLowerCase();
+    return (files || []).filter(f => {
+      try {
+        if (!f || !f.path) return false;
+        const path = String(f.path || '');
+        if (q && !path.toLowerCase().includes(q)) return false;
+        if (__gmSmartFileFilterEnabled && __gmIsNoiseFilePath(path)) return false;
+        if (__gmSmartFileFilterEnabled) {
+          const st0 = String(f.status || '').trim().toUpperCase();
+          if (st0 === 'U' && !(__gmChangeTypeFilterSet && __gmChangeTypeFilterSet.has('U'))) return false;
+        }
+        if (__gmChangeTypeFilterSet && __gmChangeTypeFilterSet.size) {
+          const st = String(f.status || '').trim().toUpperCase();
+          if (!__gmChangeTypeFilterSet.has(st)) return false;
+        }
+        return true;
+      } catch (e) {
+        return true;
+      }
+    });
+  }
+
+  function __gmEnsureFileFilterPanel() {
+    if (__gmFileFilterPanelEl && __gmFileFilterPanelEl.parentElement) return __gmFileFilterPanelEl;
+    const el = document.createElement('div');
+    el.className = 'file-filter-panel';
+    el.innerHTML = `
+      <div class="ttl">
+        <span>筛选变更文件</span>
+        <button type="button" class="x" data-act="close">×</button>
+      </div>
+      <div class="sec __gm-st">
+        <label><input type="checkbox" data-st="U"><span class="fi-st U">U</span><span class="__gm-st-txt">未跟踪</span></label>
+        <label><input type="checkbox" data-st="M"><span class="fi-st M">M</span><span class="__gm-st-txt">已修改</span></label>
+        <label><input type="checkbox" data-st="A"><span class="fi-st A">A</span><span class="__gm-st-txt">新增</span></label>
+        <label><input type="checkbox" data-st="D"><span class="fi-st D">D</span><span class="__gm-st-txt">删除</span></label>
+        <label><input type="checkbox" data-st="R"><span class="fi-st R">R</span><span class="__gm-st-txt">重命名</span></label>
+        <label><input type="checkbox" data-st="C"><span class="fi-st C">C</span><span class="__gm-st-txt">拷贝</span></label>
+      </div>
+      <div class="sec">
+        <label><input type="checkbox" data-smart="1"><span class="fi-st S">S</span><span class="__gm-st-txt">智能过滤</span></label>
+      </div>
+      <div class="btnrow">
+        <button type="button" class="btn" data-act="reset">重置</button>
+        <button type="button" class="btn" data-act="apply">应用</button>
+      </div>
+    `;
+    document.body.appendChild(el);
+    __gmFileFilterPanelEl = el;
+
+    try {
+      el.addEventListener('click', (e) => {
+        const t = e && e.target;
+        const actEl = t && t.closest ? t.closest('[data-act]') : null;
+        const act = actEl ? String(actEl.getAttribute('data-act') || '') : '';
+        if (act === 'close') {
+          __gmHideFileFilterPanel();
+          return;
+        }
+        if (act === 'reset') {
+          __gmChangeTypeFilterSet = new Set();
+          __gmSmartFileFilterEnabled = false;
+          __gmSyncFileFilterPanelUI();
+          renderFileList();
+          updateStats();
+          return;
+        }
+        if (act === 'apply') {
+          __gmReadFileFilterPanelUI();
+          __gmHideFileFilterPanel();
+          renderFileList();
+          updateStats();
+          return;
+        }
+      });
+    } catch (e) {}
+
+    return el;
+  }
+
+  function __gmReadFileFilterPanelUI() {
+    const el = __gmFileFilterPanelEl;
+    if (!el) return;
+    try {
+      const s = new Set();
+      el.querySelectorAll('input[data-st]').forEach(cb => {
+        try {
+          if (cb && cb.checked) s.add(String(cb.getAttribute('data-st') || '').trim().toUpperCase());
+        } catch (e) {}
+      });
+      __gmChangeTypeFilterSet = s;
+    } catch (e) {}
+    try {
+      const cb = el.querySelector('input[data-smart]');
+      __gmSmartFileFilterEnabled = !!(cb && cb.checked);
+    } catch (e) {}
+  }
+
+  function __gmSyncFileFilterPanelUI() {
+    const el = __gmFileFilterPanelEl;
+    if (!el) return;
+    try {
+      el.querySelectorAll('input[data-st]').forEach(cb => {
+        const k = String(cb.getAttribute('data-st') || '').trim().toUpperCase();
+        cb.checked = !!(__gmChangeTypeFilterSet && __gmChangeTypeFilterSet.has(k));
+      });
+    } catch (e) {}
+    try {
+      const cb = el.querySelector('input[data-smart]');
+      if (cb) cb.checked = !!__gmSmartFileFilterEnabled;
+    } catch (e) {}
+  }
+
+  function __gmShowFileFilterPanel() {
+    const badge = document.getElementById('fileCount');
+    if (!badge) return;
+    const el = __gmEnsureFileFilterPanel();
+    if (!el) return;
+    __gmSyncFileFilterPanelUI();
+    const r = badge.getBoundingClientRect();
+    el.style.display = 'block';
+    const w = Math.max(1, el.offsetWidth || 260);
+    const left = Math.max(8, Math.round((r.left + r.right) / 2 - w / 2));
+    const top = Math.max(8, Math.round(r.bottom + 8));
+    el.style.left = `${left}px`;
+    el.style.top = `${top}px`;
+
+    try {
+      if (!el.__gmBoundClose) {
+        el.__gmBoundClose = true;
+        document.addEventListener('mousedown', (e) => {
+          try {
+            const t = e && e.target;
+            const p = __gmFileFilterPanelEl;
+            const b = document.getElementById('fileCount');
+            if (!p || p.style.display === 'none') return;
+            if (t && p.contains && p.contains(t)) return;
+            if (t && b && (t === b || (b.contains && b.contains(t)))) return;
+            __gmHideFileFilterPanel();
+          } catch (e2) {}
+        }, true);
+        document.addEventListener('keydown', (e) => {
+          try {
+            if (e && e.key === 'Escape') __gmHideFileFilterPanel();
+          } catch (e2) {}
+        }, true);
+      }
+    } catch (e) {}
+  }
+
+  function __gmHideFileFilterPanel() {
+    const el = __gmFileFilterPanelEl;
+    if (!el) return;
+    el.style.display = 'none';
+  }
+
+  function toggleFileFilter() {
+    try {
+      const el = __gmEnsureFileFilterPanel();
+      if (!el) return;
+      let shown = false;
+      try {
+        shown = (getComputedStyle(el).display !== 'none');
+      } catch (e2) {
+        shown = !!(el.style && el.style.display !== 'none');
+      }
+      if (shown) __gmHideFileFilterPanel();
+      else __gmShowFileFilterPanel();
+    } catch (e) {}
+  }
+
   function renderFileList() {
     const el = document.getElementById('fileList');
     // 事件委托：避免频繁重渲染导致监听丢失/叠加，并保证在 diff/编辑模式下 checkbox 始终可点
@@ -7331,9 +7661,19 @@
         });
       }
     } catch (e) {}
-    const q  = fileFilter.toLowerCase();
-    const vis = files.filter(f => !q || f.path.toLowerCase().includes(q));
-    document.getElementById('fileCount').textContent = files.length;
+    const vis = __gmGetVisibleFiles();
+    try {
+      const fc = document.getElementById('fileCount');
+      if (fc) {
+        if (__gmIsFileFiltersActive()) fc.textContent = `${vis.length}/${(files || []).length}`;
+        else fc.textContent = (files || []).length;
+
+        try {
+          if (__gmIsFileFiltersActive()) fc.classList.add('filtered');
+          else fc.classList.remove('filtered');
+        } catch (e2) {}
+      }
+    } catch (e) {}
     // Use DocumentFragment for better performance with large lists
     const fragment = document.createDocumentFragment();
 
