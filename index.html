@@ -503,7 +503,7 @@
     .fi-st.S{background:#0b244a;color:#63a6ff;}
     .fi-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
       font-family:'JetBrains Mono',monospace;font-size:11px;}
-    .fi-dir{color:var(--text3);}
+    .fi-dir{color:var(--text3); margin-left:6px;}
     .fi-delta{display:flex;gap:3px;flex-shrink:0;font-size:10px;font-family:'JetBrains Mono',monospace;}
     .fi-delta .a{color:var(--accent2);}
     .fi-delta .r{color:var(--danger);}
@@ -7687,7 +7687,7 @@
       div.innerHTML = `
       <input type="checkbox" class="fi-cb" data-idx="${i}" ${checkedSet.has(i)?'checked':''}>
       <span class="fi-st ${f.status}">${f.status}</span>
-      <span class="fi-name"><span class="fi-dir">${esc(dir)}</span>${esc(name)}</span>
+      <span class="fi-name">${esc(name)}<span class="fi-dir">${dir ? `${esc(dir)}` : ''}</span></span>
       <span class="fi-delta">
         ${f.added   > 0 ? `<span class="a">+${f.added}</span>`  : ''}
         ${f.removed > 0 ? `<span class="r">-${f.removed}</span>`: ''}
