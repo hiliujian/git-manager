@@ -1061,6 +1061,42 @@
       box-shadow: inset 2px 0 0 rgba(255, 214, 10, 0.55);
     }
 
+    @keyframes __gmFindMatchFlash {
+      0% {
+        background: rgba(255, 230, 120, 0.10);
+        box-shadow: inset 2px 0 0 rgba(255, 230, 120, 0.60);
+      }
+      35% {
+        background: rgba(255, 214, 10, 0.26);
+        box-shadow: inset 2px 0 0 rgba(255, 214, 10, 0.88), inset 0 0 0 1px rgba(255, 214, 10, 0.55);
+      }
+      100% {
+        background: rgba(255, 230, 120, 0.10);
+        box-shadow: inset 2px 0 0 rgba(255, 230, 120, 0.60);
+      }
+    }
+
+    @keyframes __gmFindMatchFlashLight {
+      0% {
+        background: rgba(255, 214, 10, 0.16);
+        box-shadow: inset 2px 0 0 rgba(255, 214, 10, 0.55);
+      }
+      35% {
+        background: rgba(255, 193, 7, 0.34);
+        box-shadow: inset 2px 0 0 rgba(255, 193, 7, 0.90), inset 0 0 0 1px rgba(255, 193, 7, 0.55);
+      }
+      100% {
+        background: rgba(255, 214, 10, 0.16);
+        box-shadow: inset 2px 0 0 rgba(255, 214, 10, 0.55);
+      }
+    }
+    .plain-editor-gutter .n.find-match.__gm-find-flash{
+      animation: __gmFindMatchFlash 520ms ease-out 1;
+    }
+    [data-theme="light"] .plain-editor-gutter .n.find-match.__gm-find-flash{
+      animation: __gmFindMatchFlashLight 520ms ease-out 1;
+    }
+
     .find-overlay{
       position:absolute;
       top:0;
@@ -2643,6 +2679,32 @@
     } catch (e) {}
   }
 
+  function __gmFlashPlainEditorFindMatchLine(ln) {
+    try {
+      const gutter = document.getElementById('plainEditorGutter');
+      if (!gutter || !gutter.querySelectorAll) return;
+      const nodes = gutter.querySelectorAll('.n');
+      let hit = null;
+      for (let i = 0; i < nodes.length; i++) {
+        const el = nodes[i];
+        const n = Number((el && el.textContent) ? el.textContent.trim() : '');
+        if (Number.isFinite(n) && Number(n) === Number(ln)) {
+          hit = el;
+          break;
+        }
+      }
+      if (!hit || !hit.classList) return;
+      try { hit.classList.remove('__gm-find-flash'); } catch (e2) {}
+      try { void hit.offsetWidth; } catch (e3) {}
+      try { hit.classList.add('__gm-find-flash'); } catch (e4) {}
+      try {
+        setTimeout(() => {
+          try { hit.classList.remove('__gm-find-flash'); } catch (e5) {}
+        }, 520);
+      } catch (e6) {}
+    } catch (e) {}
+  }
+
   function rebuildFindMatches() {
     clearFindHighlights();
     findMatches = [];
@@ -2726,6 +2788,11 @@
         const s = Math.max(0, Number(el.start || 0));
         const e = Math.max(s, Number(el.end || s));
         try { ta.setSelectionRange(s, e); } catch (e2) {}
+        try {
+          const v = String(ta.value || '');
+          const ln = v.slice(0, s).split('\n').length;
+          __gmFlashPlainEditorFindMatchLine(ln);
+        } catch (e2) {}
         try {
           requestAnimationFrame(() => {
             try { __gmScrollTextareaToSelection(ta, s); } catch (e3) {}
@@ -13028,6 +13095,28 @@
       if (bar) bar.style.display = 'none';
     };
 
+    const __gmPlainIndentBarScheduleHide = (delayMs) => {
+      const bar = window.__gmPlainIndentBarEl;
+      if (!bar) return;
+      try {
+        if (bar.__gmHideTimer) clearTimeout(bar.__gmHideTimer);
+      } catch (e) {}
+      bar.__gmHideTimer = setTimeout(() => {
+        try { __gmPlainIndentBarHide(); } catch (e2) {}
+      }, Math.max(0, Number(delayMs) || 0));
+    };
+
+    const __gmPlainIndentBarCancelHide = () => {
+      const bar = window.__gmPlainIndentBarEl;
+      if (!bar) return;
+      try {
+        if (bar.__gmHideTimer) {
+          clearTimeout(bar.__gmHideTimer);
+          bar.__gmHideTimer = 0;
+        }
+      } catch (e) {}
+    };
+
     const __gmPlainIndentBarShowAtCaretRect = (caretRect) => {
       const bar = __gmEnsureIndentBar();
       if (!bar || !ta || !caretRect) return;
@@ -13056,6 +13145,11 @@
 
       bar.style.left = `${Math.max(6, Math.round(desiredLeft))}px`;
       bar.style.top = `${Math.max(6, Math.round(t))}px`;
+
+      try {
+        bar.__gmPlainSelStart = Number(ta.selectionStart || 0);
+        bar.__gmPlainSelEnd = Number(ta.selectionEnd || 0);
+      } catch (e) {}
     };
 
     const __gmPlainIndentHookEvents = () => {
@@ -13064,6 +13158,18 @@
         ta.__gmIndentBarHooked = true;
         const bar = __gmEnsureIndentBar();
         if (!bar) return;
+
+        try {
+          if (!bar.__gmPlainHoverBound) {
+            bar.__gmPlainHoverBound = true;
+            bar.addEventListener('mouseenter', () => {
+              try { __gmPlainIndentBarCancelHide(); } catch (e) {}
+            });
+            bar.addEventListener('mouseleave', () => {
+              try { __gmPlainIndentBarScheduleHide(220); } catch (e) {}
+            });
+          }
+        } catch (e) {}
 
         const getMetrics = () => {
           const cs = window.getComputedStyle ? window.getComputedStyle(ta) : null;
@@ -13192,9 +13298,9 @@
 
             const mouseLn = lineFromMouse(ev);
             const caretLn = __gmLineFromTextareaSelection(ta);
-            if (Number(mouseLn) !== Number(caretLn)) return __gmPlainIndentBarHide();
+            if (Number(mouseLn) !== Number(caretLn)) return __gmPlainIndentBarScheduleHide(600);
             const cr = __gmGetCaretClientRect();
-            if (!cr) return __gmPlainIndentBarHide();
+            if (!cr) return __gmPlainIndentBarScheduleHide(600);
             __gmPlainIndentBarShowAtCaretRect(cr);
           });
         };
@@ -13215,20 +13321,26 @@
               try {
                 const m = getMetrics();
                 const gh = gutter && gutter.getBoundingClientRect ? gutter.getBoundingClientRect() : null;
-                if (!gh) return __gmPlainIndentBarHide();
+                if (!gh) return __gmPlainIndentBarScheduleHide(600);
                 const y = Number(ev.clientY || 0) - gh.top + Number(ta.scrollTop || 0);
                 mouseLn = Math.max(1, Math.floor((y - 0) / m.lh) + 1);
               } catch (e2) { mouseLn = null; }
             }
-            if (Number(mouseLn) !== Number(caretLn)) return __gmPlainIndentBarHide();
+            if (Number(mouseLn) !== Number(caretLn)) return __gmPlainIndentBarScheduleHide(600);
             const cr = __gmGetCaretClientRect();
-            if (!cr) return __gmPlainIndentBarHide();
+            if (!cr) return __gmPlainIndentBarScheduleHide(600);
             __gmPlainIndentBarShowAtCaretRect(cr);
           });
         };
 
         ta.addEventListener('mousemove', maybeShow);
-        ta.addEventListener('mouseleave', __gmPlainIndentBarHide);
+        ta.addEventListener('mouseleave', (ev) => {
+          try {
+            const rt = ev ? ev.relatedTarget : null;
+            if (rt && bar && (rt === bar || (bar.contains && bar.contains(rt)))) return;
+          } catch (e2) {}
+          try { __gmPlainIndentBarScheduleHide(600); } catch (e) {}
+        });
         ta.addEventListener('scroll', __gmPlainIndentBarHide);
         ta.addEventListener('blur', __gmPlainIndentBarHide);
         ta.addEventListener('keyup', __gmPlainIndentBarHide);
@@ -13236,7 +13348,13 @@
         try {
           if (gutter) {
             gutter.addEventListener('mousemove', maybeShowFromGutter);
-            gutter.addEventListener('mouseleave', __gmPlainIndentBarHide);
+            gutter.addEventListener('mouseleave', (ev) => {
+              try {
+                const rt = ev ? ev.relatedTarget : null;
+                if (rt && bar && (rt === bar || (bar.contains && bar.contains(rt)))) return;
+              } catch (e2) {}
+              try { __gmPlainIndentBarScheduleHide(600); } catch (e) {}
+            });
             gutter.addEventListener('scroll', __gmPlainIndentBarHide);
           }
         } catch (e) {}
@@ -13251,6 +13369,15 @@
             const btn = e && e.target && (e.target.closest ? e.target.closest('button') : null);
             const act = btn ? String(btn.getAttribute('data-act') || '') : '';
             if (!act) return;
+            try {
+              const v = String(ta.value || '');
+              const s = Number(bar.__gmPlainSelStart);
+              const ee = Number(bar.__gmPlainSelEnd);
+              if (Number.isFinite(s) && Number.isFinite(ee)) {
+                ta.selectionStart = Math.max(0, Math.min(v.length, s));
+                ta.selectionEnd = Math.max(0, Math.min(v.length, ee));
+              }
+            } catch (e5) {}
             try { ta.focus({ preventScroll: true }); } catch (e3) { try { ta.focus(); } catch (e4) {} }
             if (act === 'indent') __gmPlainIndentApply(1);
             if (act === 'outdent') __gmPlainIndentApply(-1);
