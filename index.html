@@ -6542,7 +6542,96 @@
     startRealTimeRefresh();
   }
 
+  function __gmResetRepoScopedState() {
+    try { closeFindBar(); } catch (e) {}
+    try { clearFindHighlights(); } catch (e) {}
+
+    try {
+      findQuery = '';
+      findMatches = [];
+      findPos = -1;
+      findLineHits = null;
+      __gmFindOverlayScrollHandlers = [];
+      __gmFindOverlayRaf = 0;
+    } catch (e) {}
+
+    try {
+      files = [];
+      checkedSet = new Set();
+      curFile = null;
+      curHunks = [];
+      curFileContent = '';
+      baseFileContent = null;
+      curFileEncoding = 'utf-8';
+      autoScrollToFirstChangeOnce = false;
+    } catch (e) {}
+
+    try {
+      commitHunksSelectedByPath = new Map();
+      commitHunksInitByPath = new Map();
+      commitHunksLenByPath = new Map();
+      commitHunksDesiredByPath = new Map();
+      commitLinesSelectedByPath = new Map();
+      commitLinesInitByPath = new Map();
+      commitLinesDesiredByPath = new Map();
+      commitLinesTotalByPath = new Map();
+    } catch (e) {}
+
+    try {
+      fileFilter = '';
+      logFilter = '';
+      logMode = 'list';
+      curCommit = null;
+      curCommitFiles = [];
+      curLogFile = null;
+      logData = [];
+      fileStatsOverrideByPath = new Map();
+    } catch (e) {}
+
+    try {
+      recentFiles = [];
+      updateRecentFilesDropdown();
+    } catch (e) {}
+
+    try { lastLineByPath.clear(); } catch (e) {}
+
+    try {
+      window.__plainEditorFilename = null;
+      window.__plainEditorIsExternal = false;
+      window.__plainEditorFileHandle = null;
+      window.__dirtyEdits = false;
+      window.__plainEditorExternalLastModified = null;
+      window.__plainEditorExternalStaleWarned = false;
+    } catch (e) {}
+
+    try { __gmStopExternalEditorWatch(); } catch (e) {}
+
+    try {
+      if (window.__gmPlainIndentBarEl) {
+        window.__gmPlainIndentBarEl.__gmActiveEditableLine = null;
+        window.__gmPlainIndentBarEl.__gmPlainSelStart = null;
+        window.__gmPlainIndentBarEl.__gmPlainSelEnd = null;
+      }
+    } catch (e) {}
+
+    try {
+      if (window.__gmEditUndoStack) window.__gmEditUndoStack = [];
+      if (window.__gmEditRedoStack) window.__gmEditRedoStack = [];
+      window.__gmWholeContentDirty = false;
+    } catch (e) {}
+
+    try {
+      undoStack = [];
+      hideUndoBar();
+    } catch (e) {}
+
+    try { clearDiff(); } catch (e) {}
+    try { renderFileList(); } catch (e) {}
+    try { updateStats(); } catch (e) {}
+  }
+
   function goToOpener() {
+    try { __gmResetRepoScopedState(); } catch (e) {}
     document.getElementById('opener').style.display    = 'flex';
     document.getElementById('app').style.display       = 'none';
     document.getElementById('branchTag').style.display = 'none';
