@@ -2918,18 +2918,6 @@
     // 检查是否在普通编辑器模式
     const isInPlainEditorMode = !!window.__plainEditorFilename;
     
-    // Ctrl+W: 关闭当前打开的文件
-    if (e.ctrlKey && !e.shiftKey && !e.altKey && k === 'w') {
-      // 检查是否在编辑器模式
-      if (isInPlainEditorMode) {
-        e.preventDefault();
-        e.stopPropagation();
-        e.stopImmediatePropagation();
-        closeEditorFile();
-        return false;
-      }
-    }
-    
     // 在普通编辑器模式下,Ctrl+Z和Ctrl+Y使用textarea的原生撤销/重做
     if (isInPlainEditorMode && (k === 'z' || k === 'y')) {
       if (e.ctrlKey && !e.altKey) {
@@ -3076,6 +3064,182 @@
   function setupEditableLineEditing(){
     if (window.__editableLineEditingInited) return;
     window.__editableLineEditingInited = true;
+
+    // Global Ctrl/Cmd+D: duplicate current line in editors.
+    // Must be captured early to override browser default bookmark behavior.
+    if (!window.__gmCtrlDDupeInited) {
+      window.__gmCtrlDDupeInited = true;
+      document.addEventListener('keydown', (e) => {
+        try {
+          if (!e) return;
+          const k = e.key;
+          const isAltW = (!!e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && (k === 'w' || k === 'W'));
+          const isCtrlMetaChord = ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey);
+          const isD = (isCtrlMetaChord && (k === 'd' || k === 'D'));
+          if (!isAltW && !isD) return;
+
+          // Plain editor textarea
+          try {
+            const ta = document.getElementById('plainEditorTextarea');
+            if (window.__plainEditorFilename && ta && (document.activeElement === ta)) {
+              e.preventDefault();
+              try { e.stopImmediatePropagation(); } catch (e2) {}
+              if (isAltW) {
+                try { removeRecentFileByPath(String(window.__plainEditorFilename || '')); } catch (e3) {}
+                return;
+              }
+              const v = String(ta.value || '');
+              const pos = Math.max(0, Number(ta.selectionStart || 0));
+              const ls = v.lastIndexOf('\n', Math.max(0, pos - 1));
+              const lineStart = (ls < 0) ? 0 : (ls + 1);
+              const le = v.indexOf('\n', lineStart);
+              const lineEnd = (le < 0) ? v.length : le;
+              const line = v.slice(lineStart, lineEnd);
+              const col = Math.max(0, pos - lineStart);
+              const before = v.slice(0, lineEnd);
+              const after = v.slice(lineEnd);
+              ta.value = before + ('\n' + line) + after;
+              const newPos = lineEnd + 1 + Math.min(col, line.length);
+              ta.selectionStart = newPos;
+              ta.selectionEnd = newPos;
+              try { ta.dispatchEvent(new Event('input', { bubbles: true })); } catch (e2) {}
+              window.__dirtyEdits = true;
+              try {
+                if (typeof renderGutter === 'function') renderGutter();
+                if (typeof syncScroll === 'function') syncScroll();
+              } catch (e2) {}
+              try {
+                if (window.__autoSaveEnabled) {
+                  if (typeof window.scheduleAutoSave === 'function') window.scheduleAutoSave();
+                } else {
+                  if (typeof window.setEditStatus === 'function') window.setEditStatus('已修改：自动保存已关闭（Ctrl+S 立即保存）');
+                }
+              } catch (e2) {}
+              return;
+            }
+          } catch (e2) {}
+
+          // Diff editor (including ce-host)
+          const host = document.getElementById('diffView');
+          if (!host) return;
+
+          try {
+            const rawTarget = e && e.target;
+            if (rawTarget && rawTarget.tagName) {
+              const tag = String(rawTarget.tagName || '').toUpperCase();
+              if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'BUTTON') {
+                return;
+              }
+            }
+          } catch (e2) {}
+
+          let line = null;
+          try {
+            const t = e.target;
+            if (t && t.closest) line = t.closest('.editable-line');
+          } catch (e2) {}
+          if (!line) {
+            try {
+              const sel = window.getSelection ? window.getSelection() : null;
+              const node = sel && sel.rangeCount ? (sel.focusNode || sel.anchorNode || sel.getRangeAt(0).startContainer) : null;
+              const el = node ? ((node.nodeType === Node.ELEMENT_NODE) ? node : (node.parentElement || null)) : null;
+              if (el && el.closest) line = el.closest('.editable-line');
+            } catch (e2) {}
+          }
+          if (!line || !host.contains(line)) return;
+
+          e.preventDefault();
+          try { e.stopImmediatePropagation(); } catch (e2) {}
+
+          if (isAltW) {
+            const p = (() => {
+              try {
+                if (window.__plainEditorFilename) return String(window.__plainEditorFilename || '');
+              } catch (e3) {}
+              try {
+                if (curFile !== null && files && files[curFile] && files[curFile].path) return String(files[curFile].path || '');
+              } catch (e3) {}
+              return '';
+            })();
+            if (p) {
+              try { removeRecentFileByPath(p); } catch (e3) {}
+            }
+            return;
+          }
+
+          try {
+            if (typeof __enableLineEditing === 'function') __enableLineEditing(line);
+          } catch (e2) {}
+
+          try {
+            if (typeof __gmPushEditorSnapshot === 'function') __gmPushEditorSnapshot(host);
+          } catch (e2) {}
+
+          const col = (() => {
+            try { return Math.max(0, Number(getCaretOffset(line)) || 0); } catch (e2) { return 0; }
+          })();
+
+          const clean = (s) => String(s || '').replace(/[\r\n\u2028\u2029]/g, '');
+          const __gmStripFoldArtifacts = (s) => {
+            try {
+              return String(s || '')
+                .replace(/[\u25be\u25b8]/g, '')
+                .replace(/\{\.\.\.\}/g, '')
+                .replace(/\.\.\.\}/g, '')
+                .replace(/\{\.\.\./g, '')
+                .replace(/\.\.\./g, '');
+            } catch (e2) {
+              return String(s || '');
+            }
+          };
+          const rawText = (() => {
+            try {
+              if (typeof __gmExtractPureTextFromLc === 'function') return String(__gmExtractPureTextFromLc(line) || '');
+            } catch (e2) {}
+            return String(line.textContent || '');
+          })();
+          const text = __gmStripFoldArtifacts(clean(rawText));
+
+          const dl = line.closest ? line.closest('.dl') : null;
+          if (!dl) return;
+          let newDl = null;
+          try { newDl = dl.cloneNode(true); } catch (e2) { newDl = null; }
+          if (!newDl) return;
+          try {
+            newDl.classList.remove('added', 'modified', 'removed', 'find-hit');
+            if (!newDl.classList.contains('context')) newDl.classList.add('context');
+          } catch (e2) {}
+          try {
+            const actions = newDl.querySelector('.dl-actions');
+            if (actions) actions.innerHTML = '';
+          } catch (e2) {}
+          try {
+            const ls = newDl.querySelector('.ls');
+            if (ls) ls.textContent = ' ';
+          } catch (e2) {}
+          try {
+            const ln = newDl.querySelector('.ln');
+            if (ln) ln.textContent = '';
+          } catch (e2) {}
+          const newLine = newDl.querySelector ? newDl.querySelector('.editable-line') : null;
+          if (!newLine) return;
+          newLine.textContent = text;
+          try { newLine.dataset.dirty = '1'; } catch (e2) {}
+          try { newLine.dispatchEvent(new Event('input', { bubbles: true })); } catch (e2) {}
+          try { dl.parentNode.insertBefore(newDl, dl.nextSibling); } catch (e2) { return; }
+          window.__dirtyEdits = true;
+          scheduleAutoSave();
+          setTimeout(() => {
+            if (typeof window.updateLineNumbers === 'function') window.updateLineNumbers();
+            try { if (typeof window.__gmApplyCodeFolding === 'function') window.__gmApplyCodeFolding(); } catch (e3) {}
+          }, 0);
+          try {
+            newLine.focus();
+            setCaretOffset(newLine, Math.max(0, Math.min(col, String(newLine.textContent || '').length)));
+          } catch (e2) {}
+        } catch (e2) {}
+      }, true);
+    }
 
     const __isCeHost = () => {
       try {
@@ -3477,25 +3641,48 @@
           return false;
         };
 
-        // Toggle button should sit next to '{' (IDEA-like). Insert into code cell at '{' position.
-        if (lc) {
+        // IMPORTANT: fold UI must never be inserted into editable text content.
+        // We anchor it at the end of '{' visually (IDE-like) using absolute positioning.
+        // Fallback: mount into non-editable sign column (.ls).
+        const __gmMountFoldUiAtBrace = (el, padX) => {
           try {
+            if (!el) return false;
+            if (!lc) return false;
+
             const rawText = __gmExtractPureTextFromLc(lc);
             const bracePos = rawText.indexOf('{');
+            if (bracePos < 0) return false;
             const textNode = lc.firstChild && lc.firstChild.nodeType === Node.TEXT_NODE ? lc.firstChild : null;
-            if (textNode && bracePos >= 0 && bracePos + 1 <= (textNode.textContent || '').length) {
-              const r = document.createRange();
-              r.setStart(textNode, bracePos + 1);
-              r.collapse(true);
-              r.insertNode(toggle);
-            } else {
-              lc.appendChild(toggle);
-            }
+            if (!textNode) return false;
+            if (bracePos + 1 > (textNode.textContent || '').length) return false;
+
+            const r = document.createRange();
+            r.setStart(textNode, bracePos + 1);
+            r.collapse(true);
+            const br = r.getBoundingClientRect();
+            const dr = startDl.getBoundingClientRect();
+            if (!br || !dr) return false;
+            if (!Number.isFinite(br.left) || !Number.isFinite(dr.left)) return false;
+
+            try { startDl.style.position = 'relative'; } catch (e2) {}
+            try {
+              el.style.position = 'absolute';
+              el.style.left = `${Math.max(0, (br.left - dr.left) + (Number(padX) || 0))}px`;
+              el.style.top = '50%';
+              el.style.transform = 'translateY(-50%)';
+            } catch (e2) {}
+
+            try { startDl.appendChild(el); } catch (e2) { return false; }
+            return true;
           } catch (e) {
-            try { lc.appendChild(toggle); } catch (e2) {}
+            return false;
           }
-        } else {
-          ls.insertBefore(toggle, ls.firstChild);
+        };
+
+        let mounted = false;
+        try { mounted = __gmMountFoldUiAtBrace(toggle, 2); } catch (e2) { mounted = false; }
+        if (!mounted) {
+          try { ls.insertBefore(toggle, ls.firstChild); } catch (e2) {}
         }
 
         if (!isFolded) return;
@@ -3529,21 +3716,11 @@
             try { window.__gmToggleFoldById(foldId); } catch (e) {}
             return false;
           };
-          try {
-            const rawText = __gmExtractPureTextFromLc(lc);
-            const bracePos = rawText.indexOf('{');
-            const textNode = lc.firstChild && lc.firstChild.nodeType === Node.TEXT_NODE ? lc.firstChild : null;
-            if (textNode && bracePos >= 0 && bracePos + 1 <= (textNode.textContent || '').length) {
-              inline.textContent = '...}';
-              const r2 = document.createRange();
-              r2.setStart(textNode, bracePos + 1);
-              r2.collapse(true);
-              r2.insertNode(inline);
-            } else {
-              lc.appendChild(inline);
-            }
-          } catch (e) {
-            try { lc.appendChild(inline); } catch (e2) {}
+          // Inline hint also uses absolute positioning near brace.
+          let inlineMounted = false;
+          try { inlineMounted = __gmMountFoldUiAtBrace(inline, 12); } catch (e2) { inlineMounted = false; }
+          if (!inlineMounted) {
+            try { ls.appendChild(inline); } catch (e2) {}
           }
         }
       } catch (e) {}
@@ -3624,9 +3801,26 @@
           try { return Math.max(0, Number(getCaretOffset(lineEl)) || 0); } catch (e2) { return 0; }
         })();
 
-        const raw = String(lineEl.textContent || '');
+        const raw = (() => {
+          try {
+            if (typeof __gmExtractPureTextFromLc === 'function') return String(__gmExtractPureTextFromLc(lineEl) || '');
+          } catch (e2) {}
+          return String(lineEl.textContent || '');
+        })();
         const clean = (s) => String(s || '').replace(/[\r\n\u2028\u2029]/g, '');
-        const text = clean(raw);
+        const __gmStripFoldArtifacts = (s) => {
+          try {
+            return String(s || '')
+              .replace(/[\u25be\u25b8]/g, '')
+              .replace(/\{\.\.\.\}/g, '')
+              .replace(/\.\.\.\}/g, '')
+              .replace(/\{\.\.\./g, '')
+              .replace(/\.\.\./g, '');
+          } catch (e2) {
+            return String(s || '');
+          }
+        };
+        const text = __gmStripFoldArtifacts(clean(raw));
         const indent = (() => {
           try {
             const m = text.match(/^[\t ]*/);
@@ -3727,6 +3921,12 @@
         try {
           newLine.focus();
           setCaretOffset(newLine, indent.length);
+        } catch (e2) {}
+
+        try {
+          setTimeout(() => {
+            try { if (typeof window.__gmApplyCodeFolding === 'function') window.__gmApplyCodeFolding(); } catch (e3) {}
+          }, 0);
         } catch (e2) {}
         return true;
       } catch (e) {
@@ -4879,6 +5079,14 @@
         try { line.dataset.dirty = '1'; } catch (e2) {}
         window.__dirtyEdits = true;
         scheduleAutoSave();
+
+        try {
+          if (!window.__gmFoldRecalcTimer) window.__gmFoldRecalcTimer = null;
+          if (window.__gmFoldRecalcTimer) clearTimeout(window.__gmFoldRecalcTimer);
+          window.__gmFoldRecalcTimer = setTimeout(() => {
+            try { if (typeof window.__gmApplyCodeFolding === 'function') window.__gmApplyCodeFolding(); } catch (e3) {}
+          }, 80);
+        } catch (e2) {}
       } catch (e2) {}
     }, true);
 
@@ -7966,7 +8174,7 @@
        ${fileObj.added > 0 ? `<span style="color:var(--accent2);font-size:10px">+${fileObj.added}</span>` : ''}
        ${fileObj.removed > 0 ? `<span style="color:var(--danger);font-size:10px">-${fileObj.removed}</span>` : ''}
        ${fileObj.modified > 0 ? `<span style="color:var(--accent);font-size:10px">~${fileObj.modified}</span>` : ''}
-       <button class="editor-close-btn" id="diffLabelCloseBtn" title="从最近列表移除并切换下一个 (Ctrl+W)">
+       <button class="editor-close-btn" id="diffLabelCloseBtn" title="从最近列表移除并切换下一个 (Alt+W)">
          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
            <line x1="18" y1="6" x2="6" y2="18"></line>
            <line x1="6" y1="6" x2="18" y2="18"></line>
@@ -9544,7 +9752,7 @@
        ${fileObj.added > 0 ? `<span style="color:var(--accent2);font-size:10px">+${fileObj.added}</span>` : ''}
        ${fileObj.removed > 0 ? `<span style="color:var(--danger);font-size:10px">-${fileObj.removed}</span>` : ''}
        ${fileObj.modified > 0 ? `<span style="color:var(--accent);font-size:10px">~${fileObj.modified}</span>` : ''}
-       <button class="editor-close-btn" id="diffLabelCloseBtn" title="从最近列表移除并切换下一个 (Ctrl+W)">
+       <button class="editor-close-btn" id="diffLabelCloseBtn" title="从最近列表移除并切换下一个 (Alt+W)">
          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
            <line x1="18" y1="6" x2="6" y2="18"></line>
            <line x1="6" y1="6" x2="18" y2="18"></line>
@@ -9636,16 +9844,28 @@
         const normalizeEditableText = (s) => {
           const v = (s !== null && s !== undefined) ? String(s) : '';
           const t = v.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+          const __gmStripFoldArtifacts = (x) => {
+            try {
+              return String(x || '')
+                .replace(/[\u25be\u25b8]/g, '')
+                .replace(/\{\.\.\.\}/g, '')
+                .replace(/\.\.\.\}/g, '')
+                .replace(/\{\.\.\./g, '')
+                .replace(/\.\.\./g, '');
+            } catch (e2) {
+              return String(x || '');
+            }
+          };
           if (t.length >= 2 && t[0] === '\n' && t[t.length - 1] === '\n' && t.slice(1, -1).indexOf('\n') === -1) {
-            return t.slice(1, -1);
+            return __gmStripFoldArtifacts(t.slice(1, -1));
           }
           if (t[0] === '\n' && t.slice(1).indexOf('\n') === -1) {
-            return t.slice(1);
+            return __gmStripFoldArtifacts(t.slice(1));
           }
           if (t[t.length - 1] === '\n' && t.slice(0, -1).indexOf('\n') === -1) {
-            return t.slice(0, -1);
+            return __gmStripFoldArtifacts(t.slice(0, -1));
           }
-          return t;
+          return __gmStripFoldArtifacts(t);
         };
 
         const __serializeWorkingContentFromDom = () => {
@@ -13014,7 +13234,7 @@
        <span class="line-count">${totalLines}行</span>
        <span style="color:var(--text3);font-size:10px">编辑器模式</span>
        ${externalLabel}
-       <button class="editor-close-btn" id="diffLabelCloseBtn" title="从最近列表移除并切换下一个 (Ctrl+W)">
+       <button class="editor-close-btn" id="diffLabelCloseBtn" title="从最近列表移除并切换下一个 (Alt+W)">
          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
            <line x1="18" y1="6" x2="6" y2="18"/>
            <line x1="6" y1="6" x2="18" y2="18"/>
@@ -13266,34 +13486,6 @@
       `;
       }
     }
-  }
-
-  // 关闭编辑器模式中的文件
-  function closeEditorFile() {
-    const filename = window.__plainEditorFilename;
-    
-    // 检查是否有未保存的更改
-    if (window.__dirtyEdits) {
-      const msg = `文件 "${filename}" 有未保存的更改。\n\n是否保存后关闭？\n\n点击"确定"保存并关闭\n点击"取消"直接关闭（放弃更改）`;
-      const saveBeforeClose = confirm(msg);
-      
-      if (saveBeforeClose) {
-        // 保存后关闭
-        savePlainEditorFile().then(() => {
-          performCloseEditor(filename);
-        }).catch(() => {
-          // 保存失败，询问是否仍要关闭
-          const forceClose = confirm('保存失败，是否仍要关闭文件？');
-          if (forceClose) {
-            performCloseEditor(filename);
-          }
-        });
-        return;
-      }
-    }
-
-    // 直接关闭
-    performCloseEditor(filename);
   }
 
   // 执行关闭编辑器操作
