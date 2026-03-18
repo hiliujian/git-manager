@@ -868,7 +868,8 @@
       line-height:18px;
       white-space:pre;
       overflow:auto;
-      tab-size:2;
+      tab-size:4;
+      -moz-tab-size:4;
       /* 优化滚动性能 */
       will-change:scroll-position;
       transform:translateZ(0);
@@ -950,6 +951,8 @@
       border: none;
       outline: none;
       white-space: pre;
+      tab-size:4;
+      -moz-tab-size:4;
       display: inline-block;
       min-width: 100%;
       user-select: text;
@@ -1013,7 +1016,7 @@
 
     /* Split layout */
     .split-wrap{display:grid;grid-template-columns:1fr 3px 1fr;min-height:100%;overflow-x:auto;}
-    .sp{overflow:auto;border-right:2px solid var(--border);min-width:0;}
+    .sp{overflow:auto;border-right:2px solid var(--border);min-width:0;tab-size:4;-moz-tab-size:4;}
     .sp:last-child{border-right:none;}
     .sp-hdr{padding:4px 10px;background:var(--bg3);border-bottom:1px solid var(--border);font-size:11px;position:sticky;top:0;z-index:1;font-family:'JetBrains Mono',monospace;}
     
