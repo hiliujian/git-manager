@@ -1211,10 +1211,10 @@
     .file-filter-panel .btnrow .btn:hover{ background:rgba(255,255,255,0.10); }
     [data-theme="light"] .file-filter-panel .btnrow .btn:hover{ background:rgba(0,0,0,0.06); }
 
-    #fileCount{ cursor:pointer; }
-    #fileCount:hover{ filter:brightness(1.08); }
-    #fileCount.filtered{ box-shadow:0 0 0 1px rgba(255, 214, 10, 0.38) inset; }
-    [data-theme="light"] #fileCount.filtered{ box-shadow:0 0 0 1px rgba(255, 193, 7, 0.45) inset; }
+    #fileCount{ cursor:pointer; transition:all .12s; }
+    #fileCount:hover{ background:var(--bg5); color:var(--text); }
+    #fileCount.filtered{ box-shadow:0 0 0 1px rgba(255, 255, 255, 0.22) inset; }
+    [data-theme="light"] #fileCount.filtered{ box-shadow:0 0 0 1px rgba(0, 0, 0, 0.18) inset; }
 
     .find-overlay{
       position:absolute;
