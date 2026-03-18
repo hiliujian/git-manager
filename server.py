@@ -527,6 +527,21 @@ def get_file_content(filepath: str, return_encoding=False):
         except UnicodeDecodeError:
             pass
 
+        # UTF-8 严格解码失败：优先尝试常见中文编码（严格模式），避免探测误判为单字节编码导致乱码。
+        for enc0 in ("gb18030", "gbk", "cp936", "gb2312"):
+            try:
+                result = data.decode(enc0)
+                detected_encoding = enc0
+                logger.debug(f"文件 {filepath} 使用常见中文编码读取: {enc0}")
+                try:
+                    _file_last_encoding[filepath] = detected_encoding
+                    _file_decode_lossy[filepath] = False
+                except Exception:
+                    pass
+                return (result, detected_encoding) if return_encoding else result
+            except UnicodeDecodeError:
+                continue
+
         # UTF-8 严格解码失败：探测编码（gbk/gb2312/gb18030 等），用于前端显示。
         # 注意：这里仅用于“读取展示”，保存仍由 save_file_content() 决定编码，避免扩大损害。
         try:
@@ -592,6 +607,15 @@ def _detect_text_encoding_from_bytes(data: bytes):
                 
                 if confidence > 0.5:
                     detected_enc_lower = detected_enc.lower()
+                    # 避免单字节编码误判：这类编码几乎总能“解码成功”，但中文会变成乱码
+                    if (
+                        detected_enc_lower in ('latin-1', 'iso-8859-1') or
+                        detected_enc_lower.startswith('windows-125') or
+                        detected_enc_lower.startswith('iso-8859-')
+                    ):
+                        detected_enc = None
+                        detected_enc_lower = ''
+
                     # 标准化编码
                     if detected_enc_lower in ('gb2312',):
                         return 'gb2312'
@@ -612,7 +636,7 @@ def _detect_text_encoding_from_bytes(data: bytes):
             pass
     
     # Fallback: 按优先级尝试常见编码
-    for enc in ("gbk", "gb18030", "gb2312", "cp936", "latin-1"):
+    for enc in ("gb18030", "gbk", "gb2312", "cp936"):
         try:
             data.decode(enc)
             return enc
@@ -2064,6 +2088,32 @@ def _branch_exists_local(branch_name: str):
     _, _, code = run_git(["show-ref", "--verify", "--quiet", f"refs/heads/{branch_name}"])
     return code == 0
 
+def _remote_ref_exists(remote_ref: str):
+    remote_ref = (remote_ref or "").strip()
+    if not remote_ref:
+        return False
+    # remote_ref example: origin/foo
+    _, _, code = run_git(["show-ref", "--verify", "--quiet", f"refs/remotes/{remote_ref}"])
+    return code == 0
+
+def _normalize_remote_ref(branch_name: str):
+    """Return (is_remote: bool, remote_ref: str|None, raw: str).
+
+    Accepts:
+    - remotes/origin/foo  (from `git branch -a`)
+    - origin/foo          (sometimes used as remote ref)
+    """
+    raw = (branch_name or "").strip()
+    if not raw:
+        return False, None, raw
+    if raw.startswith("remotes/"):
+        rr = raw.replace("remotes/", "", 1)
+        return True, rr, raw
+    # If user passes origin/foo directly and it's a real remote-tracking ref, treat it as remote.
+    if "/" in raw and _remote_ref_exists(raw):
+        return True, raw, raw
+    return False, None, raw
+
 def switch_branch(branch_name: str):
     """Switch to a branch.
 
@@ -2082,9 +2132,7 @@ def switch_branch(branch_name: str):
         return False, None, "工作区有未提交更改，请先提交/撤回/暂存（stash）后再切换分支", detail, True
 
     # Normalize
-    raw = branch_name
-    is_remote = raw.startswith("remotes/")
-    remote_ref = raw.replace("remotes/", "", 1) if is_remote else None
+    is_remote, remote_ref, raw = _normalize_remote_ref(branch_name)
 
     # Prefer git switch, fallback to checkout
     if is_remote and remote_ref:
@@ -2097,6 +2145,11 @@ def switch_branch(branch_name: str):
             out, err, code = run_git(["switch", local_name], timeout=120)
             if code != 0:
                 out, err, code = run_git(["checkout", local_name], timeout=120)
+
+            # Ensure upstream tracking is set (avoid detached-ish state and make pulls/pushes predictable)
+            if code == 0:
+                _, _, ucode = run_git(["branch", "--set-upstream-to", remote_ref, local_name], timeout=60)
+                # ignore upstream set failures (e.g. remote ref missing), switch is already done
         else:
             out, err, code = run_git(["switch", "-c", local_name, "--track", remote_ref], timeout=120)
             if code != 0:
@@ -2980,28 +3033,64 @@ class Handler(BaseHTTPRequestHandler):
                 status_out, _, status_code = run_git(["status", "--porcelain"], timeout=30)
                 has_changes = bool((status_out or "").strip())
 
+                is_remote, remote_ref, _raw = _normalize_remote_ref(target_branch)
+                want_detached = bool(data.get("detached"))
+
                 if not has_changes:
-                    # 工作区干净，直接切换分支
-                    logger.info(f"工作区干净，直接切换到分支: {target_branch}")
-                    switch_out, switch_err, switch_code = run_git(["checkout", target_branch], timeout=60)
-                    
-                    if switch_code == 0:
-                        logger.info(f"成功切换到分支: {target_branch}")
+                    if is_remote and want_detached:
+                        # remote_ref is normalized (origin/foo)
+                        remote_ref = remote_ref or target_branch.replace("remotes/", "", 1)
+                        # switch --detach avoids creating local branch
+                        out, err, code = run_git(["switch", "--detach", remote_ref], timeout=120)
+                        if code != 0:
+                            out, err, code = run_git(["checkout", remote_ref], timeout=120)
+                        if code != 0:
+                            self.send_json({
+                                "ok": False,
+                                "error": err or "切换到远端分支失败",
+                                "output": out or ""
+                            })
+                            return
+                        _, cur = get_branches()
                         self.send_json({
                             "ok": True,
-                            "current": target_branch,
-                            "message": f"成功切换到分支 {target_branch}"
+                            "current": cur,
+                            "message": f"成功切换到分支 {cur}"
+                        })
+                        return
+
+                    # 工作区干净：统一走 switch_branch（远端分支会自动创建本地并建立跟踪关系）
+                    logger.info(f"工作区干净，切换到分支: {target_branch}")
+                    ok, cur, err_msg, out_msg, safe_err = switch_branch(target_branch)
+                    if ok:
+                        logger.info(f"成功切换到分支: {cur}")
+                        self.send_json({
+                            "ok": True,
+                            "current": cur,
+                            "message": f"成功切换到分支 {cur}"
                         })
                     else:
-                        logger.error(f"切换分支失败: {switch_err}")
+                        logger.error(f"切换分支失败: {err_msg}")
                         self.send_json({
                             "ok": False,
-                            "error": switch_err or "切换分支失败",
-                            "output": switch_out or ""
+                            "error": err_msg or "切换分支失败",
+                            "output": out_msg or ""
                         })
                     return
 
                 # 工作区有未提交的修改，检查是否会被覆盖
+                if is_remote and (not want_detached):
+                    # 远端分支切换需要创建/设置跟踪关系，避免在有未提交修改时产生不可预期结果；
+                    # 交互上引导用户先处理修改再切换。
+                    self.send_json({
+                        "ok": False,
+                        "needs_handling": True,
+                        "has_uncommitted_changes": True,
+                        "affected_files": [],
+                        "error": "工作区有未提交的修改，请先提交/暂存后再从远端分支创建/切换本地分支",
+                        "message": "工作区有未提交的修改，请先处理后再切换远端分支"
+                    })
+                    return
                 logger.info(f"工作区有未提交修改，检查是否会被覆盖...")
                 
                 # 使用 git checkout --dry-run 来检测是否会有冲突
@@ -3084,27 +3173,27 @@ class Handler(BaseHTTPRequestHandler):
                 stashed = "No local changes to save" not in (stash_out or "")
                 
                 # 2. git checkout
-                switch_out, switch_err, switch_code = run_git(["checkout", target_branch], timeout=60)
-                
-                if switch_code != 0:
-                    logger.error(f"切换分支失败: {switch_err}")
+                ok, cur, err_msg, out_msg, safe_err = switch_branch(target_branch)
+
+                if not ok:
+                    logger.error(f"切换分支失败: {err_msg}")
                     # 切换失败，尝试恢复暂存
                     if stashed:
                         run_git(["stash", "pop"], timeout=60)
                     self.send_json({
                         "ok": False,
-                        "error": f"切换分支失败: {switch_err}",
-                        "output": switch_out or ""
+                        "error": f"切换分支失败: {err_msg}",
+                        "output": out_msg or ""
                     })
                     return
-                
-                logger.info(f"成功切换到分支: {target_branch}")
-                
+
+                logger.info(f"成功切换到分支: {cur}")
+
                 response = {
                     "ok": True,
-                    "current": target_branch,
+                    "current": cur,
                     "stashed": stashed,
-                    "message": f"成功切换到分支 {target_branch}"
+                    "message": f"成功切换到分支 {cur}"
                 }
                 
                 if stashed:
@@ -3143,25 +3232,25 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json({"error": f"提交失败: {commit_err}"}, 400)
                     return
 
-                # 3. git checkout
-                switch_out, switch_err, switch_code = run_git(["checkout", target_branch], timeout=60)
-                
-                if switch_code != 0:
-                    logger.error(f"切换分支失败: {switch_err}")
+                # 3. switch (remote refs will create/switch to local tracking branch)
+                ok, cur, err_msg, out_msg, safe_err = switch_branch(target_branch)
+
+                if not ok:
+                    logger.error(f"切换分支失败: {err_msg}")
                     self.send_json({
                         "ok": False,
                         "committed": True,
-                        "error": f"提交成功但切换分支失败: {switch_err}",
-                        "output": switch_out or ""
+                        "error": f"提交成功但切换分支失败: {err_msg}",
+                        "output": out_msg or ""
                     })
                     return
-                
-                logger.info(f"成功提交并切换到分支: {target_branch}")
+
+                logger.info(f"成功提交并切换到分支: {cur}")
                 self.send_json({
                     "ok": True,
-                    "current": target_branch,
+                    "current": cur,
                     "committed": True,
-                    "message": f"成功提交并切换到分支 {target_branch}"
+                    "message": f"成功提交并切换到分支 {cur}"
                 })
 
             elif p == "/api/stash_pop":

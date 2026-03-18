@@ -12590,6 +12590,40 @@
       return;
     }
 
+    // Remote branch: avoid detached HEAD by creating/switching a local tracking branch
+    const isRemote = branch.startsWith('remotes/');
+    if (isRemote) {
+      const remoteRef = branch.replace(/^remotes\//, ''); // origin/foo
+      const localName = remoteRef.includes('/') ? remoteRef.split('/', 2)[1] : remoteRef;
+      const branchesAll = (lastBranchesRes && Array.isArray(lastBranchesRes.branches)) ? lastBranchesRes.branches : [];
+      const localExists = branchesAll.some(x => String(x || '').trim() === localName);
+
+      closeBranchMenu();
+      const ok = await showConfirm({
+        title: '远端分支',
+        message: `当前选择的是远端分支 ${remoteRef}，是否创建或切换到本地分支 ${localName} 并建立跟踪关系？`,
+        okText: localExists ? '切换并关联' : '创建并关联',
+        cancelText: '取消'
+      });
+
+      if (!ok) {
+        // 仅查看：切到远端分支（detached）
+        toast('切换中...','info');
+        const res = await POST('/api/switch_branch', {branch, detached: true});
+        if (res && res.ok) {
+          if (res.current) document.getElementById('branchName').textContent = res.current;
+          const msg = res.has_uncommitted_changes
+            ? '✓ 已切换分支（未提交的修改已保留）'
+            : '✓ 已切换分支';
+          toast(msg, 'ok');
+          closeBranchMenu();
+          await refresh();
+          return;
+        }
+        // fall through to existing error handling below
+      }
+    }
+
     toast('切换中...','info');
     const res = await POST('/api/switch_branch', {branch});
     
