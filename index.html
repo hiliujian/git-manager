@@ -350,6 +350,7 @@
     ::-webkit-scrollbar{width:5px;height:5px;}
     ::-webkit-scrollbar-track{background:transparent;}
     ::-webkit-scrollbar-thumb{background:var(--bg5);border-radius:3px;}
+    ::-webkit-scrollbar-corner{background:transparent;}
 
 
     /* ── TOPBAR ── */
@@ -630,6 +631,29 @@
       text-overflow:ellipsis;
       white-space:nowrap;
     }
+
+    .diff-tooltip{
+      position:fixed;
+      z-index:999999;
+      display:none;
+      max-width:min(520px, 70vw);
+      padding:6px 8px;
+      border-radius:6px;
+      border:1px solid var(--border2);
+      background:rgba(20,22,28,.96);
+      color:var(--text);
+      font-family:'JetBrains Mono',monospace;
+      font-size:11px;
+      line-height:1.35;
+      white-space:pre-wrap;
+      pointer-events:none;
+      box-shadow:0 14px 40px rgba(0,0,0,.35);
+    }
+    [data-theme="light"] .diff-tooltip{
+      background:rgba(255,255,255,.98);
+      color:var(--text);
+      box-shadow:0 14px 40px rgba(0,0,0,.18);
+    }
     .recent-file-stats{
       display:flex;
       gap:8px;
@@ -678,7 +702,7 @@
     }
     .autosave-switch input:checked + .autosave-slider:before{transform:translateX(16px) translateY(-50%);background: var(--accent);border-color:#25508a;box-shadow:0 0 0 2px rgba(110,180,247,.16), 0 2px 10px rgba(0,0,0,.35);}
     .autosave-switch input:focus-visible + .autosave-slider{outline:2px solid rgba(110,180,247,.22);outline-offset:2px;}
-    .diff-view{flex:1;overflow:auto;background:var(--bg2);padding:0 8px 10px;position:relative;}
+    .diff-view{flex:1;overflow:auto;background:var(--bg2);padding:0 8px;margin-bottom:6px;position:relative;}
     .diff-view[contenteditable="true"]:focus{outline:none;}
     .diff-view[contenteditable="true"]{caret-color:transparent;}
     .diff-view[contenteditable="true"] .editable-line{caret-color:auto;}
@@ -988,12 +1012,13 @@
     .empty-state p{font-size:13px;}
 
     /* Split layout */
-    .split-wrap{display:grid;grid-template-columns:1fr 1fr;min-height:100%;overflow-x:auto;}
-    .sp{overflow:auto;border-right:2px solid var(--border);}
+    .split-wrap{display:grid;grid-template-columns:1fr 3px 1fr;min-height:100%;overflow-x:auto;}
+    .sp{overflow:auto;border-right:2px solid var(--border);min-width:0;}
     .sp:last-child{border-right:none;}
     .sp-hdr{padding:4px 10px;background:var(--bg3);border-bottom:1px solid var(--border);font-size:11px;position:sticky;top:0;z-index:1;font-family:'JetBrains Mono',monospace;}
     
     /* 只读面板及其所有子元素不可选 */
+    .sp-readonly{border-right:none;}
     .sp-readonly,
     .sp-readonly *{user-select:none;-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;cursor:default;}
     
@@ -6495,6 +6520,17 @@
             .replace(/\n/g,'\\n');
   }
 
+  function escHtmlAttr(s){
+    return String((s !== null && s !== undefined) ? s : '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;')
+            .replace(/\r/g, '&#13;')
+            .replace(/\n/g, '&#10;');
+  }
+
   function showDiffTooltip(text, evt){
     const el = ensureDiffTooltipEl();
     const t = (text !== null && text !== undefined ? text : '').replace(/\\n/g,'\n');
@@ -6506,8 +6542,24 @@
 
   function moveDiffTooltip(evt){
     if (!diffTooltipEl || diffTooltipEl.style.display === 'none') return;
-    const x = (((evt && evt.clientX) !== undefined && (evt && evt.clientX) !== null) ? evt.clientX : 0) + 14;
-    const y = (((evt && evt.clientY) !== undefined && (evt && evt.clientY) !== null) ? evt.clientY : 0) + 14;
+    const pad = 14;
+    const vx = (((evt && evt.clientX) !== undefined && (evt && evt.clientX) !== null) ? evt.clientX : 0);
+    const vy = (((evt && evt.clientY) !== undefined && (evt && evt.clientY) !== null) ? evt.clientY : 0);
+    let x = vx + pad;
+    let y = vy + pad;
+
+    try {
+      const r = diffTooltipEl.getBoundingClientRect();
+      const vw = Math.max(0, Number(window.innerWidth || 0));
+      const vh = Math.max(0, Number(window.innerHeight || 0));
+
+      // Clamp to viewport, prefer staying to the right/bottom of cursor.
+      if (x + r.width + 10 > vw) x = Math.max(6, vx - r.width - pad);
+      if (y + r.height + 10 > vh) y = Math.max(6, vy - r.height - pad);
+      x = Math.min(Math.max(6, x), Math.max(6, vw - r.width - 6));
+      y = Math.min(Math.max(6, y), Math.max(6, vh - r.height - 6));
+    } catch (e) {}
+
     diffTooltipEl.style.left = x + 'px';
     diffTooltipEl.style.top = y + 'px';
   }
@@ -9278,6 +9330,7 @@
           &nbsp;<span style="color:var(--text3);font-size:10px">${esc(file.path)}</span>
         </div>${leftHtml}
       </div>
+      <div class="resizer" id="diffSplitResizer"></div>
       <div class="sp sp-editable">
         <div class="sp-hdr" style="color:var(--accent2)" contenteditable="false">当前版本
           &nbsp;<span style="color:var(--text3);font-size:10px">${esc(file.path)}</span>
@@ -9288,6 +9341,7 @@
       applyIndeterminateCheckboxes(view);
       updateAllBlockCheckboxes(view, file.path, hunks);
       setupEditableLineEditing();
+      try { makeSplitResizer(); } catch (e) {}
       try { if (typeof window.__gmApplyCodeFolding === 'function') window.__gmApplyCodeFolding(); } catch (e) {}
     } else if (effectiveMode === 'single') {
       // 状态 U/D：单列显示（U 仅当前；D 仅原始）
@@ -9394,7 +9448,7 @@
         </button>` : '';
 
         const tipAttrs = line.tip ?
-                ` onmouseenter="showDiffTooltip('${escJsString(line.tip)}', event)" onmousemove="moveDiffTooltip(event)" onmouseleave="hideDiffTooltip()"` : '';
+                ` data-tip="${escHtmlAttr(line.tip)}" onmouseenter="showDiffTooltip(this.dataset.tip, event)" onmousemove="moveDiffTooltip(event)" onmouseleave="hideDiffTooltip()"` : '';
 
         let content = esc(line.text);
 
@@ -9572,7 +9626,7 @@
         </button>` : '';
 
         const tipAttrs = line.tip ?
-                ` onmouseenter="showDiffTooltip('${escJsString(line.tip)}', event)" onmousemove="moveDiffTooltip(event)" onmouseleave="hideDiffTooltip()"` : '';
+                ` data-tip="${escHtmlAttr(line.tip)}" onmouseenter="showDiffTooltip(this.dataset.tip, event)" onmousemove="moveDiffTooltip(event)" onmouseleave="hideDiffTooltip()"` : '';
 
         const canEdit = (!readonly) && (line.type !== 'removed');
         const lcAttrs = canEdit ? ' class="lc editable-line" tabindex="0"' : ' class="lc" contenteditable="false"';
@@ -9813,7 +9867,7 @@
       await savePlainEditorFile();
       return;
     }
-    
+
     if (curFile === null && !filepath) return;
     if (window.__saveFileInFlight) return;
     window.__saveFileInFlight = true;
@@ -9822,7 +9876,8 @@
       try { clearTimeout(window.__autoSaveTimer); } catch (e) {}
       window.__autoSaveTimer = null;
     }
-    const f = filepath ? {path: filepath} : files[curFile];
+
+    const f = filepath ? { path: filepath } : files[curFile];
 
     const saveBtn = document.getElementById('saveFileBtn');
     if (saveBtn) {
@@ -9830,153 +9885,186 @@
       saveBtn.innerHTML = '<span style="font-size:10px;">保存中...</span>';
     }
 
-
     try {
       let content = curFileContent;
 
       if (window.__gmWholeContentDirty) {
         // Use curFileContent directly (e.g. revert-as-local-edits path)
       } else {
-      // 在 diffView 的 ce-host 模式下，保存内容一律以 DOM 为准（避免 U 文件“全删空”时回退到旧的 curFileContent）
-      const host = document.getElementById('diffView');
-      const isCeHost = !!(host && String(host.getAttribute('data-ce-host') || '') === '1');
-      if (isCeHost) {
-        const normalizeEditableText = (s) => {
-          const v = (s !== null && s !== undefined) ? String(s) : '';
-          const t = v.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-          const __gmStripFoldArtifacts = (x) => {
-            try {
-              return String(x || '')
-                .replace(/[\u25be\u25b8]/g, '')
-                .replace(/\{\.\.\.\}/g, '')
-                .replace(/\.\.\.\}/g, '')
-                .replace(/\{\.\.\./g, '')
-                .replace(/\.\.\./g, '');
-            } catch (e2) {
-              return String(x || '');
-            }
-          };
-          if (t.length >= 2 && t[0] === '\n' && t[t.length - 1] === '\n' && t.slice(1, -1).indexOf('\n') === -1) {
-            return __gmStripFoldArtifacts(t.slice(1, -1));
-          }
-          if (t[0] === '\n' && t.slice(1).indexOf('\n') === -1) {
-            return __gmStripFoldArtifacts(t.slice(1));
-          }
-          if (t[t.length - 1] === '\n' && t.slice(0, -1).indexOf('\n') === -1) {
-            return __gmStripFoldArtifacts(t.slice(0, -1));
-          }
-          return __gmStripFoldArtifacts(t);
-        };
+        const host = document.getElementById('diffView');
+        const isCeHost = !!(host && String(host.getAttribute('data-ce-host') || '') === '1');
 
-        const __serializeWorkingContentFromDom = () => {
-          try {
-            const host = document.getElementById('diffView');
-            if (!host) return null;
-
-            // 检测渲染模式：如果有.split-wrap则是split模式，否则是single/unified模式
-            const wrap = host.querySelector('.split-wrap');
-            let scope = host;
-            
-            if (wrap) {
-              // Split模式：从右侧面板序列化
-              const right = wrap.querySelector('.sp:last-child');
-              if (!right) return null;
-              scope = right;
-            }
-            // single/unified模式：直接从host序列化
-
-            const dls = Array.from(scope.querySelectorAll('.dl'));
-            if (!dls.length) return [];
-
-            const out = [];
-            for (const dl of dls) {
-              if (!dl || !dl.classList) continue;
-              if (dl.classList.contains('revert-block-hint')) continue;
-              if (dl.classList.contains('gm-gap-hint')) continue; // 跳过折叠提示行
-              if (dl.classList.contains('gm-fold-hint')) continue; // 跳过代码折叠占位行
-
-              // Skip placeholder rows that are not part of working content
-              if (dl.classList.contains('removed')) continue;
-              
-              // Serialize working lines from .lc (code cell). Do NOT require .editable-line,
-              // otherwise readonly/context lines and folded-start line (temporarily non-editable)
-              // would be skipped, causing save to fallback to old curFileContent.
-              const lc = dl.querySelector ? dl.querySelector('.lc') : null;
-              if (!lc) {
-                if (dl.classList.contains('empty')) out.push('');
-                continue;
+        if (isCeHost) {
+          const hasDirtyNodes = !!document.querySelector('.lc.editable-line[data-dirty="1"], .dl[data-gm-insert-after]');
+          if (!window.__dirtyEdits && !hasDirtyNodes) {
+            content = curFileContent;
+          } else {
+            const normalizeEditableText = (s) => {
+              const v = (s !== null && s !== undefined) ? String(s) : '';
+              const t = v.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+              const __gmStripFoldArtifacts = (x) => {
+                try {
+                  return String(x || '')
+                    .replace(/[\u25be\u25b8]/g, '')
+                    .replace(/\{\.\.\.\}/g, '')
+                    .replace(/\.\.\.\}/g, '')
+                    .replace(/\{\.\.\./g, '')
+                    .replace(/\.\.\./g, '');
+                } catch (e2) {
+                  return String(x || '');
+                }
+              };
+              if (t.length >= 2 && t[0] === '\n' && t[t.length - 1] === '\n' && t.slice(1, -1).indexOf('\n') === -1) {
+                return __gmStripFoldArtifacts(t.slice(1, -1));
               }
+              if (t[0] === '\n' && t.slice(1).indexOf('\n') === -1) {
+                return __gmStripFoldArtifacts(t.slice(1));
+              }
+              if (t[t.length - 1] === '\n' && t.slice(0, -1).indexOf('\n') === -1) {
+                return __gmStripFoldArtifacts(t.slice(0, -1));
+              }
+              return __gmStripFoldArtifacts(t);
+            };
 
-              const raw = (typeof __gmExtractPureTextFromLc === 'function') ? __gmExtractPureTextFromLc(lc) : (lc.textContent || '');
-              const txt = normalizeEditableText(raw);
-              out.push(txt);
-            }
-            return out;
-          } catch (e) {
-            console.error('序列化DOM内容失败:', e);
-            return null;
-          }
-        };
+            const __serializeWorkingContentFromDom = () => {
+              try {
+                const host = document.getElementById('diffView');
+                if (!host) return null;
 
-        // 获取文件的当前内容
-        // 对于U类型文件(新增文件),直接从DOM序列化内容,不需要检测原文件换行符
-        // 因为原文件不存在,使用系统默认的LF换行符
-        console.log('saveFile: preparing to save, file status:', f.status, 'path:', f.path);
-        let detectedEOL = '\n';
-        let originalEndsWithEOL = false;
-        
-        // 对于非U类型文件,才需要获取原文件内容来检测换行符格式
-        const isNewFile = (f.status === 'U' || f.status === 'A');
-        console.log('saveFile: isNewFile:', isNewFile);
-        
-        if (!isNewFile) {
-          try {
-            const res = await GET(`/api/file_content?path=${encodeURIComponent(f.path)}`);
-            if (res.content !== undefined) {
-              // 检测原文件的换行符格式
-              const originalContent = String(res.content || '');
-              detectedEOL = originalContent.includes('\r\n') ? '\r\n' : '\n';
-              originalEndsWithEOL = originalContent.endsWith('\n') || originalContent.endsWith('\r');
-              console.log('saveFile: detected EOL:', detectedEOL === '\n' ? 'LF' : 'CRLF');
+                const wrap = host.querySelector('.split-wrap');
+                let scope = host;
+
+                if (wrap) {
+                  const right = wrap.querySelector('.sp:last-child');
+                  if (!right) return null;
+                  scope = right;
+                }
+
+                const dls = Array.from(scope.querySelectorAll('.dl'));
+                if (!dls.length) return [];
+
+                const out = [];
+                for (const dl of dls) {
+                  if (!dl || !dl.classList) continue;
+                  if (dl.classList.contains('revert-block-hint')) continue;
+                  if (dl.classList.contains('gm-gap-hint')) continue;
+                  if (dl.classList.contains('gm-fold-hint')) continue;
+                  if (dl.classList.contains('removed')) continue;
+
+                  const lc = dl.querySelector ? dl.querySelector('.lc') : null;
+                  if (!lc) {
+                    // `.dl.empty` without `.lc` is a UI placeholder row, not a real file line.
+                    // Do not serialize it into file content.
+                    continue;
+                  }
+
+                  try {
+                    const lnEl = dl.querySelector ? dl.querySelector('.ln') : null;
+                    const lnTxt = lnEl ? String(lnEl.textContent || '').trim() : '';
+                    // Only serialize real file lines that have numeric line numbers.
+                    // This filters out UI placeholder rows and hint rows which may appear after edits.
+                    if (!/^\d+$/.test(lnTxt)) continue;
+                  } catch (e) {}
+
+                  const raw = (typeof __gmExtractPureTextFromLc === 'function') ? __gmExtractPureTextFromLc(lc) : (lc.textContent || '');
+                  let txt = normalizeEditableText(raw);
+                  txt = String(txt || '').replace(/\r\n/g, '').replace(/\r/g, '').replace(/\n/g, '');
+                  out.push(txt);
+                }
+
+                return out;
+              } catch (e) {
+                console.error('序列化DOM内容失败:', e);
+                return null;
+              }
+            };
+
+            let detectedEOL = '\n';
+            let originalLeadingEmptyLines = 0;
+            let originalTrailingEmptyLines = 0;
+
+            const isNewFile = (f.status === 'U' || f.status === 'A');
+            if (!isNewFile) {
+              try {
+                const res = await GET(`/api/file_content?path=${encodeURIComponent(f.path)}`);
+                if (res.content !== undefined) {
+                  const originalContent = String(res.content || '');
+                  detectedEOL = originalContent.includes('\r\n') ? '\r\n' : '\n';
+                  const __gmIsBlankLine = (s) => {
+                    try {
+                      return String(s || '')
+                        .replace(/[\u200B\u200C\u200D\u2060\uFEFF]/g, '')
+                        .replace(/\u00a0/g, ' ')
+                        .trim() === '';
+                    } catch (e) { return false; }
+                  };
+
+                  const normalized = originalContent.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+                  const parts = normalized.split('\n');
+                  let lead = 0;
+                  for (let i = 0; i < parts.length; i++) {
+                    if (__gmIsBlankLine(parts[i])) lead++;
+                    else break;
+                  }
+                  let trail = 0;
+                  for (let i = parts.length - 1; i >= 0; i--) {
+                    if (__gmIsBlankLine(parts[i])) trail++;
+                    else break;
+                  }
+                  originalLeadingEmptyLines = lead;
+                  originalTrailingEmptyLines = trail;
+                }
+              } catch (e) {}
             }
-          } catch (e) {
-            console.warn('获取原文件内容失败,使用默认LF换行符:', e);
+
+            const domLines = __serializeWorkingContentFromDom();
+            if (domLines && Array.isArray(domLines)) {
+              try {
+                const __gmIsBlankLine = (s) => {
+                  try {
+                    return String(s || '')
+                      .replace(/[\u200B\u200C\u200D\u2060\uFEFF]/g, '')
+                      .replace(/\u00a0/g, ' ')
+                      .trim() === '';
+                  } catch (e) { return false; }
+                };
+
+                let leading = 0;
+                for (let i = 0; i < domLines.length; i++) {
+                  if (__gmIsBlankLine(domLines[i])) leading++;
+                  else break;
+                }
+                while (leading > originalLeadingEmptyLines && domLines.length) {
+                  domLines.shift();
+                  leading--;
+                }
+
+                let trailing = 0;
+                for (let i = domLines.length - 1; i >= 0; i--) {
+                  if (__gmIsBlankLine(domLines[i])) trailing++;
+                  else break;
+                }
+                while (trailing > originalTrailingEmptyLines && domLines.length) {
+                  domLines.pop();
+                  trailing--;
+                }
+              } catch (e3) {}
+
+              content = domLines.join(detectedEOL);
+            }
           }
         } else {
-          console.log('saveFile: new file, using default LF');
-        }
-        
-        // Serialize content directly from current DOM to guarantee WYSIWYG.
-        const domLines = __serializeWorkingContentFromDom();
-        console.log('saveFile: serialized lines count:', domLines ? domLines.length : 'null');
-        if (domLines && Array.isArray(domLines)) {
-          // Preserve original "ends with newline" semantics to avoid dropping trailing empty line
-          // when user didn't actually modify the content.
-          if (!isNewFile && originalEndsWithEOL) {
-            if (!domLines.length || domLines[domLines.length - 1] !== '') {
-              domLines.push('');
-            }
+          const editor = document.getElementById('fileEditor');
+          if (editor) {
+            content = editor.value;
           }
-          content = domLines.join(detectedEOL);
-          console.log('saveFile: final content length:', content.length);
-        } else {
-          console.error('saveFile: failed to serialize DOM content');
         }
-      } else {
-        // Get content from the editor
-        const editor = document.getElementById('fileEditor');
-        if (editor) {
-          content = editor.value;
-        }
-      }
       }
 
-      console.log('saveFile: 准备保存, content length:', content.length);
       const res = await POST('/api/save_file', { path: f.path, content: content });
       if (res.ok) {
         toast('✓ 保存成功', 'ok');
-        curFileContent = content; // Update the cached content
-
+        curFileContent = content;
         window.__dirtyEdits = false;
 
         try {
@@ -9995,10 +10083,6 @@
 
         try { window.__gmWholeContentDirty = false; } catch (e) {}
 
-        // 保存成功后保持当前编辑视图，不强制重载 diff（避免“加载中…”闪烁）。
-        // 但文件列表/统计仍需更新：
-        // - WS 连接：后端会推送 files_updated；这里提前设置一次性跳过，避免推送触发 loadDiff
-        // - WS 未连接：手动刷新文件列表，但同样跳过自动 loadDiff
         skipNextAutoDiffRefresh = true;
         if (!wsConnected) {
           await refreshFilesOnly(false);
@@ -10085,6 +10169,8 @@
       if (diffMode === 'split') view.innerHTML = buildSplit(file, hunks, readonly);
       else                      view.innerHTML = buildUnified(file, hunks, readonly);
     }
+
+    try { makeSplitResizer(); } catch (e) {}
 
     // Add synchronized scrolling for split view
     if (diffMode === 'split') {
@@ -10659,6 +10745,7 @@
         &nbsp;<span style="color:var(--text3);font-size:10px">${esc(file.path)}</span>
       </div>${leftCols}
     </div>
+    <div class="resizer" id="diffSplitResizer"></div>
     <div class="sp sp-editable">
       <div class="sp-hdr" style="color:var(--accent2)" contenteditable="false">当前版本
         &nbsp;<span style="color:var(--text3);font-size:10px">${esc(file.path)}</span>
@@ -12801,6 +12888,14 @@
       document.body.style.cursor='col-resize';
       document.body.style.userSelect='none';
     });
+    rz.addEventListener('dblclick', (e) => {
+      const el = document.querySelector(targetSel);
+      if (!el) return;
+      el.style.width = '';
+      el.style.minWidth = '';
+      el.style.maxWidth = '';
+      setTimeout(() => { try { refresh(); } catch(e) {} }, 0);
+    });
     document.addEventListener('mousemove', e => {
       if (!drag) return;
       const dx = dir==='right' ? e.clientX-startX : startX-e.clientX;
@@ -12815,6 +12910,93 @@
       document.body.style.cursor='';
       document.body.style.userSelect='';
       setTimeout(() => { try { refresh(); } catch(e) {} }, 0);
+    });
+  }
+
+  function makeSplitResizer() {
+    const view = document.getElementById('diffView');
+    if (!view) return;
+    const rz = view.querySelector('#diffSplitResizer.resizer');
+    if (!rz) return;
+    if (rz.dataset && rz.dataset.inited === '1') return;
+
+    const applyRatio = (wrap, ratio) => {
+      if (!wrap) return;
+      const rect = wrap.getBoundingClientRect();
+      const total = Math.max(0, Math.floor(rect.width || 0));
+      const bar = 3;
+      const minPane = 160;
+      const usable = Math.max(0, total - bar);
+      const lockedLeft = Math.floor(usable / 2);
+      const minLeft = (usable <= (minPane * 2)) ? lockedLeft : minPane;
+      const maxLeft = (usable <= (minPane * 2)) ? lockedLeft : (usable - minPane);
+      const left = Math.max(minLeft, Math.min(maxLeft, Math.round(usable * ratio)));
+      const right = Math.max(0, usable - left);
+      wrap.style.gridTemplateColumns = `${left}px ${bar}px ${right}px`;
+    };
+
+    const defaultRatio = 0.5;
+    if (window.__gmSplitRatio === undefined || window.__gmSplitRatio === null) window.__gmSplitRatio = defaultRatio;
+
+    rz.dataset.inited = '1';
+
+    requestAnimationFrame(() => {
+      const wrap = view.querySelector('.split-wrap');
+      if (wrap) applyRatio(wrap, Number(window.__gmSplitRatio) || defaultRatio);
+    });
+
+    let drag = false;
+    let startX = 0;
+    let startLeft = 0;
+
+    rz.addEventListener('dblclick', (e) => {
+      const wrap = view.querySelector('.split-wrap');
+      if (!wrap) return;
+      window.__gmSplitRatio = defaultRatio;
+      applyRatio(wrap, defaultRatio);
+    });
+
+    rz.addEventListener('mousedown', (e) => {
+      const wrap = view.querySelector('.split-wrap');
+      if (!wrap) return;
+      const left = wrap.querySelector('.sp:first-child');
+      if (!left) return;
+      drag = true;
+      startX = e.clientX;
+      startLeft = left.getBoundingClientRect().width;
+      rz.classList.add('drag');
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (!drag) return;
+      const wrap = view.querySelector('.split-wrap');
+      if (!wrap) return;
+      const rect = wrap.getBoundingClientRect();
+      const total = Math.max(0, Math.floor(rect.width || 0));
+      const bar = 3;
+      const minPane = 160;
+      const usable = Math.max(0, total - bar);
+
+      const lockedLeft = Math.floor(usable / 2);
+      const minLeft = (usable <= (minPane * 2)) ? lockedLeft : minPane;
+      const maxLeft = (usable <= (minPane * 2)) ? lockedLeft : (usable - minPane);
+
+      const dx = e.clientX - startX;
+      const left = Math.max(minLeft, Math.min(maxLeft, Math.round(startLeft + dx)));
+      const right = Math.max(0, usable - left);
+
+      wrap.style.gridTemplateColumns = `${left}px ${bar}px ${right}px`;
+      window.__gmSplitRatio = usable > 0 ? (left / usable) : defaultRatio;
+    });
+
+    document.addEventListener('mouseup', () => {
+      if (!drag) return;
+      drag = false;
+      rz.classList.remove('drag');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
     });
   }
 
@@ -12880,6 +13062,7 @@
 
   makeResizer('r1','.sidebar','right');
   makeResizer('r2','#rightPanel','left');
+  makeSplitResizer();
   updatePanelToggleButtons();
   initChangeNavigationWheelScroll();
 
@@ -13298,7 +13481,7 @@
     }
     
     const ta = document.getElementById('plainEditorTextarea');
-    const content = ta ? String(ta.value || '') : '';
+    let content = ta ? String(ta.value || '') : '';
     const filename = window.__plainEditorFilename;
     
     // 外部文件:尝试使用File System Access API保存
@@ -13452,6 +13635,57 @@
     }
 
     try {
+      try {
+        const r0 = await GET(`/api/file_content?path=${encodeURIComponent(filename)}`);
+        if (r0 && r0.content !== undefined) {
+          const originalContent = String(r0.content || '');
+          const detectedEOL = originalContent.includes('\r\n') ? '\r\n' : '\n';
+          const __gmIsBlankLine = (s) => {
+            try {
+              return String(s || '')
+                .replace(/[\u200B\u200C\u200D\u2060\uFEFF]/g, '')
+                .replace(/\u00a0/g, ' ')
+                .trim() === '';
+            } catch (e) { return false; }
+          };
+
+          const origParts = originalContent.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+          let origLead = 0;
+          for (let i = 0; i < origParts.length; i++) {
+            if (__gmIsBlankLine(origParts[i])) origLead++;
+            else break;
+          }
+          let origTrail = 0;
+          for (let i = origParts.length - 1; i >= 0; i--) {
+            if (__gmIsBlankLine(origParts[i])) origTrail++;
+            else break;
+          }
+
+          let curParts = String(content || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+          let curLead = 0;
+          for (let i = 0; i < curParts.length; i++) {
+            if (__gmIsBlankLine(curParts[i])) curLead++;
+            else break;
+          }
+          while (curLead > origLead && curParts.length) {
+            curParts.shift();
+            curLead--;
+          }
+          let curTrail = 0;
+          for (let i = curParts.length - 1; i >= 0; i--) {
+            if (__gmIsBlankLine(curParts[i])) curTrail++;
+            else break;
+          }
+          while (curTrail > origTrail && curParts.length) {
+            curParts.pop();
+            curTrail--;
+          }
+
+          const normalized = curParts.join('\n');
+          content = (detectedEOL === '\n') ? normalized : normalized.replace(/\n/g, detectedEOL);
+        }
+      } catch (e0) {}
+
       // 尝试保存到工作目录
       const res = await POST('/api/save_file', {path: filename, content: content});
       
