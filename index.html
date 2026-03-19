@@ -1459,12 +1459,18 @@
     .hunk-revert:hover{background:#38100f;border-color:#6b1f1e;box-shadow:0 0 6px #f2727244;}
     .hunk-revert svg{flex-shrink:0;}
 
-    .undo-bar{position:fixed;right:14px;bottom:14px;z-index:10000;display:none;gap:10px;align-items:center;background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:10px 12px;box-shadow:0 10px 30px rgba(0,0,0,.35)}
-    .undo-bar .t{font-size:12px;color:var(--text2)}
-    .undo-bar .btn{background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:10px;padding:6px 10px;font-size:12px;cursor:pointer}
-    .undo-bar .btn:hover{background:var(--bg3)}
-    .undo-bar .x{opacity:.75}
-    .undo-bar .x:hover{opacity:1}
+    .undo-tip{position:fixed;right:14px;bottom:14px;z-index:10000;display:none;gap:10px;align-items:center;background:rgba(20,22,30,.86);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border:1px solid var(--border);border-radius:14px;padding:10px 12px;box-shadow:0 12px 34px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.06);opacity:1;transform:translateY(0);transition:opacity .55s ease, transform .55s ease}
+    .undo-tip.hide{opacity:0;transform:translateY(8px)}
+    .undo-tip .t{font-size:12px;color:rgba(255,255,255,.78)}
+    .undo-tip .btn{background:rgba(255,255,255,.08);border:none;color:rgba(255,255,255,.88);border-radius:10px;padding:6px 10px;font-size:12px;cursor:pointer}
+    .undo-tip .btn:hover{background:rgba(255,255,255,.14)}
+    .undo-tip .x{opacity:.75}
+    .undo-tip .x:hover{opacity:1}
+
+    [data-theme="light"] .undo-tip{background:rgba(255,255,255,.88);border-color:var(--border2);box-shadow:0 12px 34px rgba(0,0,0,.18), inset 0 1px 0 rgba(255,255,255,.75)}
+    [data-theme="light"] .undo-tip .t{color:rgba(0,0,0,.62)}
+    [data-theme="light"] .undo-tip .btn{background:rgba(0,0,0,.05);color:rgba(0,0,0,.72)}
+    [data-theme="light"] .undo-tip .btn:hover{background:rgba(0,0,0,.08)}
 
     /* Line-level revert button like IDEA */
     .line-revert{
@@ -2036,10 +2042,10 @@
 
 <div id="toastBox"></div>
 
-<div class="undo-bar" id="undoBar">
-  <span class="t" id="undoText">已撤回，可撤销</span>
-  <button class="btn" id="undoBtn" onclick="undoLastRevert()">撤销 (Ctrl+Z)</button>
-  <button class="btn x" onclick="hideUndoBar()">关闭</button>
+<div class="undo-tip" id="undoTip" style="display:none">
+  <span class="t" id="undoTipText">已撤回</span>
+  <button class="btn" id="undoTipBtn" onclick="undoLastRevertFromTip()">撤销</button>
+  <button class="btn x" onclick="hideUndoTip()">关闭</button>
 </div>
 
 <div id="navDial" class="nav-dial">
@@ -3148,7 +3154,13 @@
           // (e.g. clicking revert buttons keeps focus on the button).
           // 但必须确保不在普通编辑器模式下
           try {
-            if (!isInPlainEditorMode && window.__gmRevertAsLocalEdits && window.__gmEditUndoStack && window.__gmEditUndoStack.length > 0 && typeof window.__gmRestoreEditorSnapshot === 'function') {
+            const curKey = (() => {
+              try {
+                if (curFile !== null && files && files[curFile] && files[curFile].path) return `file:${String(files[curFile].path)}`;
+              } catch (e0) {}
+              return null;
+            })();
+            if (!isInPlainEditorMode && window.__gmRevertAsLocalEdits && window.__gmEditUndoStack && window.__gmEditUndoStack.length > 0 && typeof window.__gmRestoreEditorSnapshot === 'function' && (!window.__gmEditUndoScopeKey || (curKey && window.__gmEditUndoScopeKey === curKey))) {
               e.preventDefault();
               try { e.stopImmediatePropagation(); } catch (e3) {}
               try { e.stopPropagation(); } catch (e3) {}
@@ -3169,7 +3181,6 @@
                 col: pos && Number.isFinite(Number(pos.col)) ? pos.col : 0,
                 fileContent: curFileContent,
                 hunks: (() => { try { return JSON.parse(JSON.stringify(curHunks || [])); } catch (e5) { return null; } })(),
-                files: (() => { try { return JSON.parse(JSON.stringify(files || [])); } catch (e5) { return null; } })(),
                 wholeDirty: !!window.__gmWholeContentDirty,
               };
 
@@ -3186,8 +3197,13 @@
       // Avoid breaking input editing
       const tag = (e.target && e.target.tagName || '').toLowerCase();
       if (tag === 'input' || tag === 'textarea' || (e.target && e.target.isContentEditable)) return;
+      // 仅在撤回TIP可见时才将 Ctrl+Z 解释为“撤销撤回”，避免跨视图/空白区域误触发导致跳转。
+      if (!__gmIsUndoTipVisible()) return;
       e.preventDefault();
-      undoLastRevert();
+      try {
+        if (curFile === null) return;
+      } catch (e0) { return; }
+      undoLastRevertForCurrentScopeStrict();
     }
   }, true);
 
@@ -3201,37 +3217,127 @@
   }
 
   // ── Undo Revert ───────────────────────────────────────────────────────────────
-  let undoStack = [];
-  let undoBarHideTimer = null;
+  const __gmUndoStacksByScope = new Map();
+  let __gmUndoTipHideTimer = null;
+  let __gmLastUndoScopeKey = null;
+  let __gmLastUndoTipText = null;
 
-  function ensureUndoBar(){
-    return document.getElementById('undoBar');
+  function __gmGetUndoScopeKeyForCurrentView(){
+    try {
+      if (curFile !== null && files && files[curFile] && files[curFile].path) {
+        return `file:${String(files[curFile].path)}`;
+      }
+    } catch (e) {}
+    return 'global';
   }
 
-  function showUndoBar(text){
-    const bar = ensureUndoBar();
-    if (!bar) return;
-    const t = document.getElementById('undoText');
-    if (t) t.textContent = text || '已撤回，可撤销';
-    bar.style.display = 'flex';
-    if (undoBarHideTimer) {
-      clearTimeout(undoBarHideTimer);
-      undoBarHideTimer = null;
-    }
-    // auto-hide after a while but keep action available for a short window
-    undoBarHideTimer = setTimeout(() => {
-      hideUndoBar();
-    }, 15000);
+  function __gmGetUndoStackForScope(scopeKey){
+    const k = String(scopeKey || 'global');
+    if (!__gmUndoStacksByScope.has(k)) __gmUndoStacksByScope.set(k, []);
+    return __gmUndoStacksByScope.get(k);
   }
 
-  function hideUndoBar(){
-    const bar = ensureUndoBar();
-    if (!bar) return;
-    bar.style.display = 'none';
-    if (undoBarHideTimer) {
-      clearTimeout(undoBarHideTimer);
-      undoBarHideTimer = null;
+  function showUndoTip(text){
+    const tip = document.getElementById('undoTip');
+    if (!tip) return;
+    const t = document.getElementById('undoTipText');
+    if (t) t.textContent = String(text || '已撤回');
+    try { tip.classList.remove('hide'); } catch (e) {}
+    tip.style.display = 'flex';
+    if (__gmUndoTipHideTimer) {
+      clearTimeout(__gmUndoTipHideTimer);
+      __gmUndoTipHideTimer = null;
     }
+    __gmUndoTipHideTimer = setTimeout(() => {
+      hideUndoTip();
+    }, 10000);
+  }
+
+  function hideUndoTip(){
+    const tip = document.getElementById('undoTip');
+    if (!tip) return;
+    try { tip.classList.add('hide'); } catch (e) {}
+    if (__gmUndoTipHideTimer) {
+      clearTimeout(__gmUndoTipHideTimer);
+      __gmUndoTipHideTimer = null;
+    }
+    setTimeout(() => {
+      try { tip.style.display = 'none'; } catch (e) {}
+      try { tip.classList.remove('hide'); } catch (e) {}
+    }, 600);
+  }
+
+  function __gmIsUndoTipVisible(){
+    try {
+      const tip = document.getElementById('undoTip');
+      if (!tip) return false;
+      return (tip.style.display !== 'none');
+    } catch (e) {
+      return false;
+    }
+  }
+
+  if (!window.__gmEditHistoryByPath) window.__gmEditHistoryByPath = new Map();
+
+  function __gmGetEditHistoryForPath(path){
+    const p = String(path || '');
+    if (!p) return null;
+    let h = window.__gmEditHistoryByPath.get(p);
+    if (!h) {
+      h = { undo: [], redo: [], wholeDirty: false };
+      window.__gmEditHistoryByPath.set(p, h);
+    }
+    if (!Array.isArray(h.undo)) h.undo = [];
+    if (!Array.isArray(h.redo)) h.redo = [];
+    return h;
+  }
+
+  function __gmPersistCurrentDiffEditorHistory(){
+    try {
+      if (curFile === null) return;
+      if (!files || !files[curFile] || !files[curFile].path) return;
+      const path = String(files[curFile].path);
+      const scopeKey = `file:${String(path)}`;
+      const h = __gmGetEditHistoryForPath(path);
+      if (!h) return;
+      h.undo = Array.isArray(window.__gmEditUndoStack) ? window.__gmEditUndoStack.slice() : [];
+      h.redo = Array.isArray(window.__gmEditRedoStack) ? window.__gmEditRedoStack.slice() : [];
+      try {
+        // 旧快照可能没有 scopeKey，补齐为当前文件 scope，避免后续被误认为可跨文件恢复导致“跳视图”。
+        h.undo = h.undo.map(s => {
+          try {
+            if (!s) return s;
+            if (s.scopeKey === undefined || s.scopeKey === null || s.scopeKey === '') return Object.assign({}, s, { scopeKey });
+            return s;
+          } catch (e3) { return s; }
+        });
+        h.redo = h.redo.map(s => {
+          try {
+            if (!s) return s;
+            if (s.scopeKey === undefined || s.scopeKey === null || s.scopeKey === '') return Object.assign({}, s, { scopeKey });
+            return s;
+          } catch (e3) { return s; }
+        });
+      } catch (e2) {}
+      try {
+        const max = (window.__gmEditUndoMax !== undefined) ? Number(window.__gmEditUndoMax) : 100;
+        const m = (Number.isFinite(max) && max > 0) ? max : 100;
+        if (h.undo.length > m) h.undo = h.undo.slice(h.undo.length - m);
+        if (h.redo.length > m) h.redo = h.redo.slice(h.redo.length - m);
+      } catch (e2) {}
+      h.wholeDirty = !!window.__gmWholeContentDirty;
+    } catch (e) {}
+  }
+
+  function __gmRestoreDiffEditorHistoryForPath(path){
+    try {
+      const h = __gmGetEditHistoryForPath(path);
+      if (!h) return;
+      window.__gmEditUndoStack = Array.isArray(h.undo) ? h.undo.slice() : [];
+      window.__gmEditRedoStack = Array.isArray(h.redo) ? h.redo.slice() : [];
+      window.__gmWholeContentDirty = !!h.wholeDirty;
+      window.__gmEditUndoScopeKey = `file:${String(path)}`;
+    } catch (e) {}
   }
 
   async function snapshotWorkingFile(path){
@@ -3585,7 +3691,7 @@
 
     if (!window.__gmEditUndoStack) window.__gmEditUndoStack = [];
     if (!window.__gmEditRedoStack) window.__gmEditRedoStack = [];
-    if (window.__gmEditUndoMax === undefined) window.__gmEditUndoMax = 80;
+    if (window.__gmEditUndoMax === undefined) window.__gmEditUndoMax = 100;
 
     const __gmGetActiveLineAndCol = (host) => {
       try {
@@ -3620,7 +3726,13 @@
       try {
         if (!host) return;
         const pos = __gmGetActiveLineAndCol(host);
-        window.__gmEditUndoStack.push({ html: host.innerHTML, idx: pos.idx, col: pos.col });
+        const scopeKey = (() => {
+          try {
+            if (curFile !== null && files && files[curFile] && files[curFile].path) return `file:${String(files[curFile].path)}`;
+          } catch (e2) {}
+          return null;
+        })();
+        window.__gmEditUndoStack.push({ html: host.innerHTML, idx: pos.idx, col: pos.col, scopeKey });
         if (window.__gmEditUndoStack.length > window.__gmEditUndoMax) window.__gmEditUndoStack.shift();
         window.__gmEditRedoStack = [];
       } catch (e) {}
@@ -3630,19 +3742,22 @@
       try {
         if (!host) return;
         const pos = __gmGetActiveLineAndCol(host);
+        const scopeKey = (() => {
+          try {
+            if (curFile !== null && files && files[curFile] && files[curFile].path) return `file:${String(files[curFile].path)}`;
+          } catch (e2) {}
+          return null;
+        })();
         const hunksSnap = (() => {
           try { return JSON.parse(JSON.stringify(curHunks || [])); } catch (e2) { return null; }
-        })();
-        const filesSnap = (() => {
-          try { return JSON.parse(JSON.stringify(files || [])); } catch (e2) { return null; }
         })();
         window.__gmEditUndoStack.push({
           html: host.innerHTML,
           idx: pos.idx,
           col: pos.col,
+          scopeKey,
           fileContent: curFileContent,
           hunks: hunksSnap,
-          files: filesSnap,
           wholeDirty: !!window.__gmWholeContentDirty,
         });
         if (window.__gmEditUndoStack.length > window.__gmEditUndoMax) window.__gmEditUndoStack.shift();
@@ -4126,14 +4241,23 @@
         if (!host || !snap) return;
         const prevScroll = __gmCaptureDiffScrollState();
         try {
-          if (snap.hunks !== undefined && snap.hunks !== null) {
-            try { curHunks = JSON.parse(JSON.stringify(snap.hunks || [])); } catch (e3) { curHunks = snap.hunks; }
+          const curScopeKey = (() => {
+            try {
+              if (curFile !== null && files && files[curFile] && files[curFile].path) return `file:${String(files[curFile].path)}`;
+            } catch (e3) {}
+            return null;
+          })();
+          const snapScopeKey = (snap.scopeKey !== undefined && snap.scopeKey !== null) ? String(snap.scopeKey) : null;
+          const scopeOk = !!(curScopeKey && snapScopeKey && snapScopeKey === curScopeKey);
+
+          // 仅在 scope 匹配时恢复 diff 数据；避免跨文件/跨视图 undo 还原 files 等全局状态导致“跳转”。
+          if (scopeOk) {
+            if (snap.hunks !== undefined && snap.hunks !== null) {
+              try { curHunks = JSON.parse(JSON.stringify(snap.hunks || [])); } catch (e4) { curHunks = snap.hunks; }
+            }
+            if (snap.fileContent !== undefined && snap.fileContent !== null) curFileContent = snap.fileContent;
+            if (snap.wholeDirty !== undefined) window.__gmWholeContentDirty = !!snap.wholeDirty;
           }
-          if (snap.files !== undefined && snap.files !== null) {
-            try { files = JSON.parse(JSON.stringify(snap.files || [])); } catch (e3) { files = snap.files; }
-          }
-          if (snap.fileContent !== undefined && snap.fileContent !== null) curFileContent = snap.fileContent;
-          if (snap.wholeDirty !== undefined) window.__gmWholeContentDirty = !!snap.wholeDirty;
         } catch (e2) {}
         host.innerHTML = String(snap.html || '');
         
@@ -4228,6 +4352,24 @@
           if (!isUndo && !isRedo) return;
 
           e.preventDefault();
+
+          // 严格按文件 scope 隔离：只应用 scopeKey 匹配当前文件的快照，防止 Ctrl+Z 恢复到其它文件 html 导致视图跳转。
+          const curScopeKey = (() => {
+            try {
+              if (curFile !== null && files && files[curFile] && files[curFile].path) return `file:${String(files[curFile].path)}`;
+            } catch (e3) {}
+            return null;
+          })();
+          const isSnapForCurScope = (snap) => {
+            try {
+              if (!snap) return false;
+              const sk = (snap.scopeKey !== undefined && snap.scopeKey !== null) ? String(snap.scopeKey) : null;
+              if (!sk) return true;
+              return !!(curScopeKey && sk === curScopeKey);
+            } catch (e3) {
+              return false;
+            }
+          };
           try { e.stopImmediatePropagation(); } catch (e2) {}
           try { e.stopPropagation(); } catch (e2) {}
 
@@ -4241,15 +4383,33 @@
                 try { window.__gmSuppressScrollToLine = false; } catch (e3) {}
               }, 100); // 延长到 100ms，确保所有后续操作完成后再清除抑制
             } catch (e3) {}
+            const curScopeKey = (() => {
+              try {
+                if (curFile !== null && files && files[curFile] && files[curFile].path) return `file:${String(files[curFile].path)}`;
+              } catch (e2) {}
+              return null;
+            })();
+            const isSnapForCurScope = (snap) => {
+              try {
+                if (!snap) return false;
+                const sk = (snap.scopeKey !== undefined && snap.scopeKey !== null) ? String(snap.scopeKey) : null;
+                if (!sk) return false;
+                return !!(curScopeKey && sk === curScopeKey);
+              } catch (e2) { return false; }
+            };
             const cur = {
               html: host.innerHTML,
               ...(() => { const p = __gmGetActiveLineAndCol(host); return { idx: p.idx, col: p.col }; })(),
+              scopeKey: curScopeKey,
               fileContent: curFileContent,
               hunks: (() => { try { return JSON.parse(JSON.stringify(curHunks || [])); } catch (e2) { return null; } })(),
-              files: (() => { try { return JSON.parse(JSON.stringify(files || [])); } catch (e2) { return null; } })(),
               wholeDirty: !!window.__gmWholeContentDirty,
             };
-            const snap = window.__gmEditUndoStack.pop();
+            let snap = null;
+            while (window.__gmEditUndoStack && window.__gmEditUndoStack.length > 0) {
+              const cand = window.__gmEditUndoStack.pop();
+              if (isSnapForCurScope(cand)) { snap = cand; break; }
+            }
             if (!snap) return;
             window.__gmEditRedoStack.push(cur);
             __gmRestoreEditorSnapshot(host, snap);
@@ -4267,15 +4427,33 @@
                 try { window.__gmSuppressScrollToLine = false; } catch (e3) {}
               }, 100); // 延长到 100ms，确保所有后续操作完成后再清除抑制
             } catch (e3) {}
+            const curScopeKey = (() => {
+              try {
+                if (curFile !== null && files && files[curFile] && files[curFile].path) return `file:${String(files[curFile].path)}`;
+              } catch (e2) {}
+              return null;
+            })();
+            const isSnapForCurScope = (snap) => {
+              try {
+                if (!snap) return false;
+                const sk = (snap.scopeKey !== undefined && snap.scopeKey !== null) ? String(snap.scopeKey) : null;
+                if (!sk) return false;
+                return !!(curScopeKey && sk === curScopeKey);
+              } catch (e2) { return false; }
+            };
             const cur = {
               html: host.innerHTML,
               ...(() => { const p = __gmGetActiveLineAndCol(host); return { idx: p.idx, col: p.col }; })(),
+              scopeKey: curScopeKey,
               fileContent: curFileContent,
               hunks: (() => { try { return JSON.parse(JSON.stringify(curHunks || [])); } catch (e2) { return null; } })(),
-              files: (() => { try { return JSON.parse(JSON.stringify(files || [])); } catch (e2) { return null; } })(),
               wholeDirty: !!window.__gmWholeContentDirty,
             };
-            const snap = window.__gmEditRedoStack.pop();
+            let snap = null;
+            while (window.__gmEditRedoStack && window.__gmEditRedoStack.length > 0) {
+              const cand = window.__gmEditRedoStack.pop();
+              if (isSnapForCurScope(cand)) { snap = cand; break; }
+            }
             if (!snap) return;
             window.__gmEditUndoStack.push(cur);
             __gmRestoreEditorSnapshot(host, snap);
@@ -6628,13 +6806,20 @@
 
   function pushUndoAction(action){
     if (!action) return;
-    undoStack.push(action);
-    if (undoStack.length > 20) undoStack.shift();
-    showUndoBar(action.label || '已撤回，可撤销');
+    const scopeKey = action && action.scopeKey ? String(action.scopeKey) : 'global';
+    const st = __gmGetUndoStackForScope(scopeKey);
+    st.push(action);
+    if (st.length > 100) st.shift();
+    __gmLastUndoScopeKey = scopeKey;
+    __gmLastUndoTipText = action && action.tipText ? String(action.tipText) : null;
+    try {
+      const msg = __gmLastUndoTipText || '已撤回';
+      showUndoTip(msg);
+    } catch (e) {}
   }
 
   async function restoreSnapshot(snap){
-    if (!snap || !snap.path) return {ok:false, msg:'缺少快照'};
+    if (!snap) return {ok:false, msg:'empty snapshot'};
     if (snap.exists) {
       const res = await POST('/api/save_file', {path: snap.path, content: snap.content});
       return {ok: !!(res && res.ok), msg: (res && (res.msg || res.error)) || ''};
@@ -6643,13 +6828,10 @@
     return {ok: !!(res && res.ok), msg: (res && (res.msg || res.error)) || ''};
   }
 
-  async function undoLastRevert(){
-    const action = undoStack.pop();
-    if (!action) {
-      toast('没有可撤销的撤回', 'warn');
-      hideUndoBar();
-      return;
-    }
+  async function undoLastRevert(scopeKey){
+    const st = __gmGetUndoStackForScope(scopeKey);
+    const action = st.pop();
+    if (!action) return;
 
     try {
       disableAutoRefreshDiff(8000);
@@ -6672,7 +6854,26 @@
       toast(`撤销失败: ${e.message}`, 'err');
       await refresh();
     } finally {
-      hideUndoBar();
+      try { hideUndoTip(); } catch (e) {}
+    }
+  }
+
+  async function undoLastRevertForCurrentScopeStrict(){
+    const key = __gmGetUndoScopeKeyForCurrentView();
+    const st = __gmGetUndoStackForScope(key);
+    if (!st || st.length === 0) return;
+    return undoLastRevert(key);
+  }
+
+  async function undoLastRevertFromTip(){
+    try {
+      const key = __gmLastUndoScopeKey;
+      if (!key) return;
+      const st = __gmGetUndoStackForScope(key);
+      if (!st || st.length === 0) return;
+      return undoLastRevert(key);
+    } catch (e) {
+      return;
     }
   }
 
@@ -7142,8 +7343,14 @@
     } catch (e) {}
 
     try {
-      undoStack = [];
-      hideUndoBar();
+      if (window.__gmEditHistoryByPath) window.__gmEditHistoryByPath.clear();
+    } catch (e) {}
+
+    try {
+      __gmUndoStacksByScope.clear();
+      __gmLastUndoScopeKey = null;
+      __gmLastUndoTipText = null;
+      hideUndoTip();
     } catch (e) {}
 
     try { clearDiff(); } catch (e) {}
@@ -8514,6 +8721,7 @@
       showLoading: opts.showLoading !== false,
       incremental: !!opts.incremental
     };
+    try { __gmPersistCurrentDiffEditorHistory(); } catch (e) {}
     const f = files[i];
     if (!f) {
       console.warn('loadDiff: file not found for index', i);
@@ -8563,6 +8771,8 @@
 
     // Update label (best-effort, may be refined after hunks load)
     renderDiffLabelForFile(f);
+
+    try { __gmRestoreDiffEditorHistoryForPath(String(f.path || '')); } catch (e) {}
     if (options.showLoading) {
       document.getElementById('diffView').innerHTML =
               '<div class="empty-state"><div class="spin"></div><p>加载中...</p></div>';
@@ -8723,6 +8933,7 @@
         }
       } catch (e) {}
     }
+    try { __gmUpdateUndoRevertButton(); } catch (e) {}
     console.log('loadDiff: completed');
   }
 
@@ -12063,7 +12274,8 @@
         if (undoSnap) {
           pushUndoAction({
             type: 'revert_file',
-            label: `已撤回 ${f.path}，可撤销`,
+            scopeKey: `file:${String(f.path)}`,
+            tipText: `已撤回 ${String(f.path)}`,
             snapshots: [undoSnap],
           });
         }
@@ -12128,7 +12340,8 @@
         if (undoSnaps && undoSnaps.length) {
           pushUndoAction({
             type: 'revert_all',
-            label: `${isPartial ? '已撤回所选文件修改' : '已撤回所有修改'}，可撤销（${undoSnaps.length} 个文件）`,
+            scopeKey: 'global',
+            tipText: isPartial ? '已撤回所选文件修改' : '已撤回所有修改',
             snapshots: undoSnaps,
           });
         }
@@ -12534,6 +12747,7 @@
   async function selectLogFile(i) {
     const f = curCommitFiles[i];
     if (!f || !curCommit) return;
+    try { __gmPersistCurrentDiffEditorHistory(); } catch (e) {}
     curLogFile = f;
     curFile    = null;  // 取消工作区文件选中
 
@@ -13685,6 +13899,8 @@
         __gmCaptureLastLineForPath(window.__plainEditorFilename);
       }
     } catch (e) {}
+
+    try { __gmPersistCurrentDiffEditorHistory(); } catch (e) {}
     
     // 清除当前选中状态
     curFile = null;
