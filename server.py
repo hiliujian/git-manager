@@ -616,6 +616,12 @@ def _detect_text_encoding_from_bytes(data: bytes):
                         detected_enc = None
                         detected_enc_lower = ''
 
+                    # 避免误判为罕见的 cpXXXX 编码（Windows 默认代码页/阿拉伯语等），
+                    # 这些编码对中文项目极易造成保存失败或乱码。
+                    if detected_enc_lower.startswith('cp') and detected_enc_lower not in ('cp936',):
+                        detected_enc = None
+                        detected_enc_lower = ''
+
                     # 标准化编码
                     if detected_enc_lower in ('gb2312',):
                         return 'gb2312'
@@ -625,6 +631,8 @@ def _detect_text_encoding_from_bytes(data: bytes):
                         return 'gb18030'
                     elif detected_enc_lower.startswith('utf'):
                         return 'utf-8'
+                    elif detected_enc_lower in ('cp936',):
+                        return 'cp936'
                     else:
                         # 验证检测到的编码是否有效
                         try:
@@ -786,20 +794,34 @@ def save_file_content(filepath: str, content: str, force_encoding: str = None):
             if target_eol != "\n":
                 txt = txt.replace("\n", target_eol)
 
-        # Validate encoding strictly. We must follow the original encoding; if it cannot
-        # represent the edited content, refuse to save (avoid silent transcoding).
+        # Validate encoding. Prefer preserving original encoding.
+        # If the original encoding cannot represent the edited content, try gb18030 first
+        # (compatible superset for common Chinese encodings). Avoid silently transcoding
+        # to UTF-8 here, because it may lead to "乱码" when toolchains expect ANSI/GBK.
+        enc_used = target_enc
+        transcoded = False
         try:
-            _ = txt.encode(target_enc)
+            _ = txt.encode(enc_used)
         except UnicodeEncodeError as e:
-            logger.error(f"内容包含无法用 {target_enc} 编码的字符: {filepath} - {e}")
-            return False, f"内容包含无法用 {target_enc} 编码的字符: {e}"
+            try:
+                # Prefer gb18030 as a safer fallback within GB-family.
+                _ = txt.encode('gb18030')
+                logger.warning(f"内容无法用 {enc_used} 编码，将回退 gb18030 保存: {filepath} - {e}")
+                transcoded = True
+                enc_used = 'gb18030'
+            except UnicodeEncodeError as e2:
+                logger.error(f"内容包含无法用 {enc_used} 编码的字符: {filepath} - {e}")
+                return False, f"内容包含无法用 {enc_used} 编码的字符: {e}"
 
         # Write exact newlines without implicit translation
-        logger.debug(f"准备写入文件: {full}, 编码: {target_enc}, 换行符: {repr(target_eol)}, 内容长度: {len(txt)}")
-        with open(full, "w", encoding=target_enc, newline="") as f:
+        logger.debug(f"准备写入文件: {full}, 编码: {enc_used}, 换行符: {repr(target_eol)}, 内容长度: {len(txt)}")
+        with open(full, "w", encoding=enc_used, newline="") as f:
             f.write(txt)
         
-        logger.info(f"✓ 文件保存成功: {filepath} (编码: {target_enc}, 换行符: {repr(target_eol)}, {len(txt)}字符)")
+        if transcoded and (enc_used != target_enc):
+            logger.info(f"✓ 文件保存成功: {filepath} (编码: {target_enc} -> {enc_used}, 换行符: {repr(target_eol)}, {len(txt)}字符)")
+            return True, f"保存成功（已从 {target_enc} 转为 {enc_used}）"
+        logger.info(f"✓ 文件保存成功: {filepath} (编码: {enc_used}, 换行符: {repr(target_eol)}, {len(txt)}字符)")
         return True, "保存成功"
     except Exception as e:
         logger.error(f"保存文件失败: {filepath} - {e}", exc_info=True)
