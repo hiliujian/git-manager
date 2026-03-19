@@ -245,6 +245,153 @@
       background: rgba(233, 236, 239, 0.95);
       border: 1px solid rgba(25, 113, 194, 0.5);
     }
+
+    /* Virtual Navigation Dial - Draggable Joystick */
+    .nav-dial {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 200px;
+      height: 200px;
+      z-index: 10000;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.2s ease;
+    }
+
+    .nav-dial.active {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .nav-dial-outer {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: var(--bg2);
+      border: 3px solid var(--border2);
+      border-radius: 50%;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+      opacity: 0.95;
+    }
+
+    .nav-dial-track {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 140px;
+      height: 140px;
+      border: 2px dashed var(--border);
+      border-radius: 50%;
+      opacity: 0.4;
+    }
+
+    .nav-dial-directions {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
+
+    .nav-dial-label {
+      position: absolute;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text3);
+      user-select: none;
+    }
+
+    .nav-dial-label.up {
+      top: 15px;
+      left: 50%;
+      transform: translateX(-50%);
+    }
+
+    .nav-dial-label.down {
+      bottom: 15px;
+      left: 50%;
+      transform: translateX(-50%);
+    }
+
+    .nav-dial-label.left {
+      left: 15px;
+      top: 50%;
+      transform: translateY(-50%);
+    }
+
+    .nav-dial-label.right {
+      right: 15px;
+      top: 50%;
+      transform: translateY(-50%);
+    }
+
+    .nav-dial-stick {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 60px;
+      height: 60px;
+      margin-top: -30px;
+      margin-left: -30px;
+      background: linear-gradient(135deg, var(--bg4), var(--bg3));
+      border: 3px solid var(--accent);
+      border-radius: 50%;
+      cursor: grab;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+      transition: box-shadow 0.15s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--accent);
+      letter-spacing: 0.5px;
+      user-select: none;
+    }
+
+    .nav-dial-stick:active {
+      cursor: grabbing;
+      box-shadow: 0 6px 20px rgba(110, 180, 247, 0.5);
+    }
+
+    .nav-dial-stick.dragging {
+      cursor: grabbing;
+      box-shadow: 0 6px 20px rgba(110, 180, 247, 0.5);
+    }
+
+    /* Light theme navigation dial overrides */
+    [data-theme="light"] .nav-dial-outer {
+      background: rgba(255, 255, 255, 0.98);
+      border-color: var(--border2);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+    }
+
+    [data-theme="light"] .nav-dial-track {
+      border-color: var(--border);
+    }
+
+    [data-theme="light"] .nav-dial-label {
+      color: var(--text2);
+    }
+
+    [data-theme="light"] .nav-dial-stick {
+      background: linear-gradient(135deg, var(--bg3), var(--bg2));
+      border-color: var(--accent);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+    }
+
+    [data-theme="light"] .nav-dial-stick:active,
+    [data-theme="light"] .nav-dial-stick.dragging {
+      box-shadow: 0 6px 20px rgba(25, 113, 194, 0.4);
+    }
     
     /* Light theme drag-drop overrides */
     [data-theme="light"] .drag-drop-overlay {
@@ -702,7 +849,7 @@
     }
     .autosave-switch input:checked + .autosave-slider:before{transform:translateX(16px) translateY(-50%);background: var(--accent);border-color:#25508a;box-shadow:0 0 0 2px rgba(110,180,247,.16), 0 2px 10px rgba(0,0,0,.35);}
     .autosave-switch input:focus-visible + .autosave-slider{outline:2px solid rgba(110,180,247,.22);outline-offset:2px;}
-    .diff-view{flex:1;overflow:auto;background:var(--bg2);padding:0 8px;margin-bottom:6px;position:relative;}
+    .diff-view{flex:1;overflow:auto;background:var(--bg2);padding:0 8px;position:relative;}
     .diff-view[contenteditable="true"]:focus{outline:none;}
     .diff-view[contenteditable="true"]{caret-color:transparent;}
     .diff-view[contenteditable="true"] .editable-line{caret-color:auto;}
@@ -1893,6 +2040,18 @@
   <span class="t" id="undoText">已撤回，可撤销</span>
   <button class="btn" id="undoBtn" onclick="undoLastRevert()">撤销 (Ctrl+Z)</button>
   <button class="btn x" onclick="hideUndoBar()">关闭</button>
+</div>
+
+<div id="navDial" class="nav-dial">
+  <div class="nav-dial-outer"></div>
+  <div class="nav-dial-track"></div>
+  <div class="nav-dial-directions">
+    <div class="nav-dial-label up">↑</div>
+    <div class="nav-dial-label down">↓</div>
+    <div class="nav-dial-label left">←</div>
+    <div class="nav-dial-label right">→</div>
+  </div>
+  <div id="navDialStick" class="nav-dial-stick">ALT</div>
 </div>
 
 <script>
@@ -14532,6 +14691,267 @@
     try {
       await tryAutoOpenRepoOnLoad();
     } catch (e) {}
+  })();
+
+  // ========== Virtual Navigation Dial (Draggable Joystick) ==========
+  (() => {
+    const navDial = document.getElementById('navDial');
+    const navDialStick = document.getElementById('navDialStick');
+    if (!navDial || !navDialStick) return;
+
+    let altPressed = false;
+    let altTimeout = null;
+    let isDragging = false;
+    let scrollInterval = null;
+    let currentVelocity = { x: 0, y: 0 };
+
+    const MAX_DISTANCE = 70; // 摇杆最大拖拽距离（像素）
+    const MAX_SCROLL_SPEED = 25; // 最大滚动速度
+
+    // 获取当前可滚动的元素
+    function getScrollableElement() {
+      // 1. 纯文本编辑器
+      const plainEditor = document.getElementById('plainEditorTextarea');
+      if (plainEditor && plainEditor.offsetParent !== null) {
+        return plainEditor;
+      }
+
+      // 2. 并排对比视图
+      const diffView = document.getElementById('diffView');
+      if (diffView && diffView.offsetParent !== null) {
+        // 查找 split-wrap 容器
+        const splitWrap = diffView.querySelector('.split-wrap');
+        if (splitWrap) {
+          const panels = splitWrap.querySelectorAll('.sp');
+          
+          // 并排对比视图：垂直滚动由 diffView 控制，水平滚动由各自面板控制
+          if (panels.length >= 2) {
+            return { type: 'split', verticalContainer: diffView, left: panels[0], right: panels[1] };
+          }
+        }
+        
+        // 虚拟滚动容器（大文件）
+        const diffContainer = diffView.querySelector('.diff-container');
+        if (diffContainer) {
+          return diffContainer;
+        }
+        
+        // 统一视图 - 回退到 diffView 本身
+        return diffView;
+      }
+
+      // 3. 提交日志列表
+      const commitLog = document.getElementById('commitLogList');
+      if (commitLog && commitLog.offsetParent !== null) {
+        return commitLog;
+      }
+
+      // 4. 默认返回页面主体
+      return document.documentElement || document.body;
+    }
+
+    // 计算摇杆位移和速度
+    function calculateVelocity(offsetX, offsetY) {
+      const distance = Math.sqrt(offsetX * offsetX + offsetY * offsetY);
+      const clampedDistance = Math.min(distance, MAX_DISTANCE);
+      
+      if (distance === 0) {
+        return { x: 0, y: 0 };
+      }
+
+      // 归一化方向
+      const normalizedX = offsetX / distance;
+      const normalizedY = offsetY / distance;
+
+      // 计算速度（非线性，使用平方根使控制更精细）
+      const speedRatio = Math.sqrt(clampedDistance / MAX_DISTANCE);
+      const speed = speedRatio * MAX_SCROLL_SPEED;
+
+      return {
+        x: normalizedX * speed,
+        y: normalizedY * speed
+      };
+    }
+
+    // 执行滚动
+    function performScroll() {
+      if (Math.abs(currentVelocity.x) < 0.5 && Math.abs(currentVelocity.y) < 0.5) {
+        return; // 速度太小不滚动
+      }
+
+      const target = getScrollableElement();
+      
+      // 处理并排对比视图的特殊滚动逻辑
+      if (target && target.type === 'split') {
+        // 垂直滚动：滚动 diffView 容器
+        target.verticalContainer.scrollTop += currentVelocity.y;
+        
+        // 水平滚动：同步滚动两个面板
+        target.left.scrollLeft += currentVelocity.x;
+        target.right.scrollLeft += currentVelocity.x;
+      } 
+      // 处理页面主体滚动
+      else if (target === document.documentElement || target === document.body) {
+        window.scrollBy(currentVelocity.x, currentVelocity.y);
+      } 
+      // 处理其他可滚动元素
+      else if (target && target.scrollTop !== undefined) {
+        target.scrollTop += currentVelocity.y;
+        target.scrollLeft += currentVelocity.x;
+      }
+    }
+
+    // 开始连续滚动
+    function startScrollLoop() {
+      if (scrollInterval) return;
+      scrollInterval = setInterval(() => {
+        performScroll();
+      }, 16); // 约 60fps
+    }
+
+    // 停止滚动
+    function stopScrollLoop() {
+      if (scrollInterval) {
+        clearInterval(scrollInterval);
+        scrollInterval = null;
+      }
+      currentVelocity = { x: 0, y: 0 };
+    }
+
+    // 更新摇杆位置
+    function updateStickPosition(offsetX, offsetY) {
+      const distance = Math.sqrt(offsetX * offsetX + offsetY * offsetY);
+      const clampedDistance = Math.min(distance, MAX_DISTANCE);
+      
+      if (distance > 0) {
+        const ratio = clampedDistance / distance;
+        offsetX *= ratio;
+        offsetY *= ratio;
+      }
+
+      navDialStick.style.transform = `translate(${offsetX}px, ${offsetY}px)`;
+    }
+
+    // 重置摇杆位置
+    function resetStickPosition() {
+      navDialStick.style.transform = 'translate(0, 0)';
+    }
+
+    // 显示导航盘
+    function showNavDial() {
+      navDial.classList.add('active');
+    }
+
+    // 隐藏导航盘
+    function hideNavDial() {
+      navDial.classList.remove('active');
+      stopScrollLoop();
+      resetStickPosition();
+      isDragging = false;
+    }
+
+    // 处理拖拽开始
+    function handleDragStart(e) {
+      if (!navDial.classList.contains('active')) return;
+      
+      e.preventDefault();
+      isDragging = true;
+      navDialStick.classList.add('dragging');
+      startScrollLoop();
+    }
+
+    // 处理拖拽移动
+    function handleDragMove(e) {
+      if (!isDragging) return;
+      e.preventDefault();
+
+      const rect = navDial.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+
+      let clientX, clientY;
+      if (e.type.startsWith('touch')) {
+        if (e.touches.length === 0) return;
+        clientX = e.touches[0].clientX;
+        clientY = e.touches[0].clientY;
+      } else {
+        clientX = e.clientX;
+        clientY = e.clientY;
+      }
+
+      const offsetX = clientX - centerX;
+      const offsetY = clientY - centerY;
+
+      updateStickPosition(offsetX, offsetY);
+      currentVelocity = calculateVelocity(offsetX, offsetY);
+    }
+
+    // 处理拖拽结束
+    function handleDragEnd(e) {
+      if (!isDragging) return;
+      e.preventDefault();
+      
+      isDragging = false;
+      navDialStick.classList.remove('dragging');
+      stopScrollLoop();
+      resetStickPosition();
+    }
+
+    // 监听 keydown 事件
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Alt' && !e.ctrlKey && !e.shiftKey && !e.metaKey) {
+        if (altPressed) return;
+        altPressed = true;
+        
+        clearTimeout(altTimeout);
+        altTimeout = setTimeout(() => {
+          if (altPressed) {
+            showNavDial();
+          }
+        }, 100);
+      }
+      
+      if (altPressed && e.key !== 'Alt') {
+        clearTimeout(altTimeout);
+        hideNavDial();
+        altPressed = false;
+      }
+    });
+
+    // 监听 keyup 事件
+    document.addEventListener('keyup', (e) => {
+      if (e.key === 'Alt') {
+        clearTimeout(altTimeout);
+        hideNavDial();
+        altPressed = false;
+      }
+    });
+
+    // 监听窗口失焦
+    window.addEventListener('blur', () => {
+      clearTimeout(altTimeout);
+      hideNavDial();
+      altPressed = false;
+    });
+
+    // 摇杆鼠标事件
+    navDialStick.addEventListener('mousedown', handleDragStart);
+    document.addEventListener('mousemove', handleDragMove);
+    document.addEventListener('mouseup', handleDragEnd);
+
+    // 摇杆触摸事件
+    navDialStick.addEventListener('touchstart', handleDragStart, { passive: false });
+    document.addEventListener('touchmove', handleDragMove, { passive: false });
+    document.addEventListener('touchend', handleDragEnd, { passive: false });
+    document.addEventListener('touchcancel', handleDragEnd, { passive: false });
+
+    // 点击导航盘外部区域隐藏
+    navDial.addEventListener('click', (e) => {
+      if (e.target === navDial || e.target.classList.contains('nav-dial-outer') || e.target.classList.contains('nav-dial-track')) {
+        hideNavDial();
+        altPressed = false;
+      }
+    });
   })();
 </script>
 </body>
