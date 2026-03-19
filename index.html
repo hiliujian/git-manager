@@ -4253,6 +4253,7 @@
             if (!snap) return;
             window.__gmEditRedoStack.push(cur);
             __gmRestoreEditorSnapshot(host, snap);
+            try { window.__gmJustDidUndoRedo = true; } catch (e2) {}
             return;
           }
 
@@ -4278,6 +4279,7 @@
             if (!snap) return;
             window.__gmEditUndoStack.push(cur);
             __gmRestoreEditorSnapshot(host, snap);
+            try { window.__gmJustDidUndoRedo = true; } catch (e2) {}
             return;
           }
         } catch (e2) {}
@@ -6930,7 +6932,7 @@
             console.log('跳过一次自动刷新diff（本地已主动更新）');
           } else {
             console.log('自动刷新当前文件的diff');
-            loadDiff(curFile);
+            loadDiff(curFile, { showLoading: false, incremental: true });
           }
         }
       } else {
@@ -8355,12 +8357,173 @@
     } catch (e) {}
   }
 
-  async function loadDiff(i) {
+  function __gmCaptureDiffScrollState(viewEl) {
+    try {
+      const splitWrap = viewEl ? viewEl.querySelector('.split-wrap') : null;
+      if (splitWrap) {
+        const leftSp = splitWrap.querySelector('.sp:first-child');
+        const rightSp = splitWrap.querySelector('.sp:last-child');
+        return {
+          mode: 'split',
+          left: leftSp ? leftSp.scrollTop : 0,
+          right: rightSp ? rightSp.scrollTop : 0
+        };
+      }
+      return { mode: 'single', top: viewEl ? viewEl.scrollTop : 0 };
+    } catch (e) {
+      return { mode: 'single', top: 0 };
+    }
+  }
+
+  function __gmRestoreDiffScrollState(viewEl, state) {
+    try {
+      if (!viewEl || !state) return;
+      if (state.mode === 'split') {
+        const splitWrap = viewEl.querySelector('.split-wrap');
+        if (!splitWrap) return;
+        const leftSp = splitWrap.querySelector('.sp:first-child');
+        const rightSp = splitWrap.querySelector('.sp:last-child');
+        if (leftSp) leftSp.scrollTop = Number(state.left || 0);
+        if (rightSp) rightSp.scrollTop = Number(state.right || 0);
+        return;
+      }
+      viewEl.scrollTop = Number(state.top || 0);
+    } catch (e) {}
+  }
+
+  function __gmCanIncrementalPatchDiff(prevHunks, nextHunks) {
+    if (!Array.isArray(prevHunks) || !Array.isArray(nextHunks)) return false;
+    if (prevHunks.length !== nextHunks.length) return false;
+    for (let hi = 0; hi < prevHunks.length; hi++) {
+      const a = prevHunks[hi];
+      const b = nextHunks[hi];
+      if (!a || !b) return false;
+      const al = Array.isArray(a.lines) ? a.lines.length : 0;
+      const bl = Array.isArray(b.lines) ? b.lines.length : 0;
+      if (al !== bl) return false;
+    }
+    return true;
+  }
+
+  function __gmPatchDiffRowsInPlace(viewEl, fileObj, prevHunks, nextHunks) {
+    if (!viewEl) return false;
+    if (!__gmCanIncrementalPatchDiff(prevHunks, nextHunks)) return false;
+
+    let patched = 0;
+    for (let hi = 0; hi < nextHunks.length; hi++) {
+      const a = prevHunks[hi] || {};
+      const b = nextHunks[hi] || {};
+      const aLines = Array.isArray(a.lines) ? a.lines : [];
+      const bLines = Array.isArray(b.lines) ? b.lines : [];
+
+      for (let li = 0; li < bLines.length; li++) {
+        const la = aLines[li] || null;
+        const lb = bLines[li] || null;
+        const ta = la ? la.type : '';
+        const tb = lb ? lb.type : '';
+        const xa = la ? __nn(la.text, '') : '';
+        const xb = lb ? __nn(lb.text, '') : '';
+        const oa = la ? __nn(la.old, '') : '';
+        const ob = lb ? __nn(lb.old, '') : '';
+        const na = la ? __nn(la.new, '') : '';
+        const nb = lb ? __nn(lb.new, '') : '';
+        const oma = la ? __nn(la.old_text, '') : '';
+        const omb = lb ? __nn(lb.old_text, '') : '';
+
+        const same = (ta === tb) && (xa === xb) && (oa === ob) && (na === nb) && (oma === omb);
+        if (same) continue;
+
+        const key = `${hi}-${li}`;
+        const rows = viewEl.querySelectorAll(`[data-line-id="${key}"]`);
+        if (!rows || !rows.length) continue;
+
+        rows.forEach(row => {
+          try {
+            if (tb === 'context' || tb === 'empty') {
+              try {
+                row.querySelectorAll('input.commit-cb').forEach(el => { try { el.remove(); } catch (e) {} });
+              } catch (e) {}
+              try {
+                row.querySelectorAll('button.line-revert').forEach(el => { try { el.remove(); } catch (e) {} });
+              } catch (e) {}
+              try {
+                row.querySelectorAll('.dl-actions').forEach(el => {
+                  try { el.innerHTML = ''; } catch (e) {}
+                });
+              } catch (e) {}
+            }
+
+            if (!row.classList.contains(tb)) {
+              row.className = row.className.replace(/\b(context|added|removed|modified|empty)\b/g, '').trim();
+              row.classList.add('dl');
+              if (tb) row.classList.add(tb);
+            }
+
+            const ls = row.querySelector('.ls');
+            if (ls && tb) {
+              if (tb === 'added') ls.textContent = '+';
+              else if (tb === 'removed') ls.textContent = '-';
+              else if (tb === 'modified') ls.textContent = '~';
+              else if (tb === 'context') ls.textContent = ' ';
+            }
+
+            const lns = row.querySelectorAll('.ln');
+            if (lns && lns.length) {
+              if (lns.length >= 2) {
+                if (lb) {
+                  lns[0].textContent = __nn(lb.old, '');
+                  lns[1].textContent = __nn(lb.new, '');
+                }
+              } else {
+                if (lb) lns[0].textContent = __nn(lb.new, __nn(lb.old, ''));
+              }
+            }
+
+            const lc = row.querySelector('.lc');
+            if (lc) {
+              const isEditable = lc.classList.contains('editable-line');
+              if (!isEditable) {
+                if (tb === 'modified') {
+                  const oldT = __nn(lb.old_text, '');
+                  const newT = __nn(lb.text, '');
+                  const html = buildInlineModifiedHtml(oldT, newT);
+                  lc.innerHTML = html.newHtml;
+                } else if (tb === 'removed') {
+                  lc.textContent = '';
+                } else {
+                  lc.textContent = __nn(lb.text, '');
+                }
+              } else {
+                if (tb === 'removed') {
+                  lc.textContent = '';
+                } else {
+                  lc.textContent = __nn(lb.text, '');
+                }
+              }
+            }
+          } catch (e) {}
+        });
+        patched++;
+      }
+    }
+    return patched > 0;
+  }
+
+  async function loadDiff(i, opts = {}) {
+    const options = {
+      showLoading: opts.showLoading !== false,
+      incremental: !!opts.incremental
+    };
     const f = files[i];
     if (!f) {
       console.warn('loadDiff: file not found for index', i);
       return;
     }
+
+    const viewEl = document.getElementById('diffView');
+    const prevScroll = __gmCaptureDiffScrollState(viewEl);
+    const prevHunks = curHunks;
+    const prevContent = curFileContent;
 
     const computeStatsFromHunks = (hunks) => {
       let a = 0, r = 0, m = 0;
@@ -8400,8 +8563,10 @@
 
     // Update label (best-effort, may be refined after hunks load)
     renderDiffLabelForFile(f);
-    document.getElementById('diffView').innerHTML =
-            '<div class="empty-state"><div class="spin"></div><p>加载中...</p></div>';
+    if (options.showLoading) {
+      document.getElementById('diffView').innerHTML =
+              '<div class="empty-state"><div class="spin"></div><p>加载中...</p></div>';
+    }
 
     // Load diff hunks
     console.log('loadDiff: loading diff hunks');
@@ -8415,7 +8580,8 @@
         document.getElementById('diffView').innerHTML = '<div class="empty-state"><p style="color:var(--text2)">加载失败: ' + res.error + '</p></div>';
         return;
       }
-      curHunks = res.hunks || [];
+      const nextHunks = res.hunks || [];
+      curHunks = nextHunks;
       console.log('loadDiff: loaded', curHunks.length, 'hunks');
       // 按块提交：默认全选当前文件的所有 hunk
       ensureDefaultHunkSelection(f.path, curHunks.length);
@@ -8532,7 +8698,18 @@
     // 保持原先体验：不显示“保存”按钮，保存走自动保存/快捷键。
     document.getElementById('saveFileBtn').style.display = 'none';
     console.log('loadDiff: rendering full file view with diff context');
-    renderDiffWithFullContext(f, curHunks, false, changeLocations);
+    let didPatch = false;
+    if (options.incremental && viewEl && prevContent !== null && prevContent !== undefined) {
+      try {
+        didPatch = __gmPatchDiffRowsInPlace(viewEl, f, prevHunks, curHunks);
+      } catch (e) {
+        didPatch = false;
+      }
+    }
+    if (!didPatch) {
+      renderDiffWithFullContext(f, curHunks, false, changeLocations);
+    }
+    try { __gmRestoreDiffScrollState(document.getElementById('diffView'), prevScroll); } catch (e) {}
     // Auto jump to the first change when user manually opens the file.
     if (autoScrollToFirstChangeOnce) {
       autoScrollToFirstChangeOnce = false;
@@ -9363,6 +9540,10 @@
 
           const ctl = controlLine || line;
 
+          const lineIdAttr = (ctl && ctl.hunkIndex !== undefined && ctl.originalLineIndex !== undefined)
+                  ? ` data-line-id="${ctl.hunkIndex}-${ctl.originalLineIndex}" data-hunk="${ctl.hunkIndex}" data-line="${ctl.originalLineIndex}"`
+                  : '';
+
           const checkedAttr = lineCheckedAttr(ctl.hunkIndex, ctl.originalLineIndex);
           const commitCb = (showCommitCb && columnType === 'right' && !readonly && ctl.hunkIndex !== undefined && ctl.originalLineIndex !== undefined) ?
                   `<input class="commit-cb" type="checkbox" ${checkedAttr} onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" onchange="event.stopPropagation();toggleCommitLine('${fpEsc}',${ctl.hunkIndex},${ctl.originalLineIndex},this.checked)">` : '';
@@ -9385,7 +9566,7 @@
             cellText = (columnType === 'left') ? html.oldHtml : html.newHtml;
           }
 
-          return `<div class="dl ${line.type}">${actions}<span class="ls" contenteditable="false">${s}</span><span class="ln" contenteditable="false">${line.num||''}</span><span${lcAttrs}>${cellText}</span></div>`;
+          return `<div class="dl ${line.type}"${lineIdAttr}>${actions}<span class="ls" contenteditable="false">${s}</span><span class="ln" contenteditable="false">${line.num||''}</span><span${lcAttrs}>${cellText}</span></div>`;
         };
 
         const renderHintRow = (columnType, count, showBtn, hunkIndex, startIdx, endIdx) => {
@@ -9630,7 +9811,11 @@
 
         const lcAttrs = canEdit ? ' class="lc editable-line" tabindex="0"' : ' class="lc" contenteditable="false"';
 
-        return `<div class="dl ${line.type}">
+        const lineIdAttr = (line && line.hunkIndex !== undefined && line.originalLineIndex !== undefined)
+                ? ` data-line-id="${line.hunkIndex}-${line.originalLineIndex}" data-hunk="${line.hunkIndex}" data-line="${line.originalLineIndex}"`
+                : '';
+
+        return `<div class="dl ${line.type}"${lineIdAttr}>
         <span class="dl-actions" contenteditable="false">${commitCb}${revertBtn}</span>
         <span class="ls" contenteditable="false">${s}</span>
         <span class="ln" contenteditable="false">${line.num}</span>
@@ -10058,7 +10243,8 @@
 
         if (isCeHost) {
           const hasDirtyNodes = !!document.querySelector('.lc.editable-line[data-dirty="1"], .dl[data-gm-insert-after]');
-          if (!window.__dirtyEdits && !hasDirtyNodes) {
+          const forceSerialize = !!window.__gmJustDidUndoRedo;
+          if (!forceSerialize && !window.__dirtyEdits && !hasDirtyNodes) {
             content = curFileContent;
           } else {
             const normalizeEditableText = (s) => {
@@ -10257,6 +10443,7 @@
       toast(`保存失败: ${error.message}`, 'err');
     } finally {
       window.__saveFileInFlight = false;
+      try { window.__gmJustDidUndoRedo = false; } catch (e) {}
       if (saveBtn) {
         saveBtn.disabled = false;
         saveBtn.innerHTML = `
@@ -10513,134 +10700,40 @@
   }
 
   function buildUnified(file, hunks, readonly) {
-    return '<div>' + hunks.map((hunk, hi) => {
-      // 检测连续相同类型的行并合并撤回按钮
-      const lineGroups = [];
-      let currentGroup = null;
+    return '<div>' + (hunks || []).map((hunk, hi) => {
+      const fpEsc = escJsString(file.path);
+      const rows = (hunk.lines || []).map((l, li) => {
+        let s = ' ';
+        if (l.type === 'added') s = '+';
+        else if (l.type === 'removed') s = '-';
+        else if (l.type === 'modified') s = '~';
+        else if (l.type === 'empty') s = '';
 
-      hunk.lines.forEach((l, li) => {
-        const isChangeLine = (l.type === 'added' || l.type === 'removed' || l.type === 'modified');
+        const canRevert = (!readonly) && (l.type === 'added' || l.type === 'removed' || l.type === 'modified');
+        const revertBtn = canRevert ?
+                `<button class="line-revert" contenteditable="false" onclick="askRevertLine('${fpEsc}',${hi},${li},'${file.status}')" title="撤回">
+            <span style="font-size:9px;font-weight:bold;">&gt;&gt;</span>
+          </button>` : '';
 
-        if (isChangeLine) {
-          // 获取当前行的实际行号
-          const currentLineNum = l.type === 'added' ? l.new : l.old;
+        const canEdit = (!readonly) && (l.type !== 'removed');
+        const lcAttrs = canEdit ? ' class="lc editable-line" tabindex="0"' : ' class="lc" contenteditable="false"';
+        const content = esc(__nn(l.text, ''));
 
-          if (currentGroup && currentGroup.type === l.type) {
-            // 检查行号是否连续
-            const lastItem = currentGroup.lines[currentGroup.lines.length - 1];
-            const lastLineNum = lastItem.lineNum;
-
-            // 判断是否连续：当前行号 = 上一行号 + 1
-            if (currentLineNum === lastLineNum + 1) {
-              // 连续，加入当前组
-              currentGroup.lines.push({line: l, index: li, lineNum: currentLineNum});
-              currentGroup.endIndex = li;
-            } else {
-              // 不连续，创建新组
-              lineGroups.push(currentGroup);
-              currentGroup = {
-                type: l.type,
-                startIndex: li,
-                endIndex: li,
-                lines: [{line: l, index: li, lineNum: currentLineNum}]
-              };
-            }
-          } else {
-            // 类型不同或没有当前组，创建新组
-            if (currentGroup) lineGroups.push(currentGroup);
-            currentGroup = {
-              type: l.type,
-              startIndex: li,
-              endIndex: li,
-              lines: [{line: l, index: li, lineNum: currentLineNum}]
-            };
-          }
-        } else {
-          // 非变更行,结束当前组
-          if (currentGroup) {
-            lineGroups.push(currentGroup);
-            currentGroup = null;
-          }
-          lineGroups.push({
-            type: 'single',
-            startIndex: li,
-            endIndex: li,
-            lines: [{line: l, index: li}]
-          });
-        }
-      });
-
-      // 添加最后一个组
-      if (currentGroup) lineGroups.push(currentGroup);
-
-      const rows = lineGroups.map(group => {
-        if (group.type === 'single') {
-          // 单行渲染(context行)
-          const l = group.lines[0].line;
-          const li = group.lines[0].index;
-          let s = ' ';
-          let content = esc(l.text);
-
-          const canEdit = (!readonly) && (l.type !== 'removed');
-          const lcAttrs = canEdit ? ' class="lc editable-line" tabindex="0"' : ' class="lc" contenteditable="false"';
-
-          return `<div class="dl ${l.type}" data-hunk="${hi}" data-line="${li}">
+        return `<div class="dl ${l.type}" data-line-id="${hi}-${li}" data-hunk="${hi}" data-line="${li}">
+          <span class="dl-actions" contenteditable="false">${revertBtn}</span>
           <span class="ls" contenteditable="false">${s}</span>
           <span class="ln" contenteditable="false">${__nn(l.old,'')}</span>
           <span class="ln" contenteditable="false">${__nn(l.new,'')}</span>
           <span${lcAttrs}>${content}</span>
         </div>`;
-        } else {
-          // 连续相同类型的行组 - 保留每行撤回，并在块上方添加提示行
-          const isSingleLine = group.lines.length === 1;
-          const startLi = group.startIndex;
-          const endLi = group.endIndex;
-          const startLineNum = group.lines[0].lineNum;
-          const endLineNum = group.lines[group.lines.length - 1].lineNum;
-
-          const hintRow = (!readonly && !isSingleLine) ?
-                  `<div class="dl revert-block-hint" data-hunk="${hi}" data-line="${startLi}" contenteditable="false">
-            <span class="ls" contenteditable="false"></span>
-            <span class="ln" contenteditable="false"></span>
-            <span class="ln" contenteditable="false"></span>
-            <span class="lc" contenteditable="false"><span class="hint-tag" contenteditable="false">块撤回</span><span class="hint-text" contenteditable="false">已识别为连续变更块（${group.lines.length}行），可一键撤回</span><span class="hint-actions" contenteditable="false"><button class="hint-btn" contenteditable="false" onclick="askRevertMultiLines('${escJsString(file.path)}',${hi},${startLi},${endLi},'${file.status}')">撤回该块（${group.lines.length}）</button></span></span>
-          </div>` : '';
-
-          const lineRows = group.lines.map(({line: l, index: li}) => {
-            let s = ' ';
-            if (l.type === 'added') s = '+';
-            else if (l.type === 'removed') s = '-';
-            else if (l.type === 'modified') s = '~';
-
-            const revertBtn = (!readonly) ?
-                    `<button class="line-revert" contenteditable="false" onclick="askRevertLine('${escJsString(file.path)}',${hi},${li},'${file.status}')" title="撤回第${__nn(l.new, __nn(l.old,''))}行">
-              <span style="font-size:9px;font-weight:bold;">&gt;&gt;</span>
-            </button>` : '';
-
-            let content = esc(l.text);
-
-            const canEdit = (!readonly) && (l.type !== 'removed');
-            const lcAttrs = canEdit ? ' class="lc editable-line" tabindex="0"' : ' class="lc" contenteditable="false"';
-
-            return `<div class="dl ${l.type}" data-hunk="${hi}" data-line="${li}">
-            ${revertBtn}
-            <span class="ls" contenteditable="false">${s}</span>
-            <span class="ln" contenteditable="false">${__nn(l.old,'')}</span>
-            <span class="ln" contenteditable="false">${__nn(l.new,'')}</span>
-            <span${lcAttrs}>${content}</span>
-          </div>`;
-          }).join('');
-
-          return hintRow + lineRows;
-        }
       }).join('');
 
       return `<div class="hunk" data-hunk-id="${hi}" contenteditable="false">
-      <div class="hunk-hdr" contenteditable="false">
-        <span class="hunk-info" contenteditable="false">${esc(hunk.header)}</span>
-        ${!readonly ? `<div class="hunk-btns" contenteditable="false">${revertBtn(file,hi)}</div>` : ''}
-      </div>${rows}
-    </div>`;
+        <div class="hunk-hdr" contenteditable="false">
+          <span class="hunk-info" contenteditable="false">${esc(hunk.header || '')}</span>
+          ${!readonly ? `<div class="hunk-btns" contenteditable="false">${revertBtn(file,hi)}</div>` : ''}
+        </div>${rows}
+      </div>`;
     }).join('') + '</div>';
   }
 
