@@ -13531,9 +13531,21 @@
   }
 
   // ── Resizers ──────────────────────────────────────────────────────────────────
-  function makeResizer(id, targetSel, dir='right') {
+  function makeResizer(id, targetSel, dir='right', doRefresh=true) {
     const rz = document.getElementById(id);
     let drag=false, startX, startW;
+
+    const __gmScheduleSplitLayoutReflow = () => {
+      try {
+        if (typeof window.__gmApplySplitRatioNow !== 'function') return;
+        if (window.__gmResizerLayoutRaf) return;
+        window.__gmResizerLayoutRaf = requestAnimationFrame(() => {
+          window.__gmResizerLayoutRaf = null;
+          try { window.__gmApplySplitRatioNow(); } catch (e) {}
+        });
+      } catch (e) {}
+    };
+
     rz.addEventListener('mousedown', e => {
       drag=true; startX=e.clientX;
       startW=document.querySelector(targetSel).offsetWidth;
@@ -13547,7 +13559,8 @@
       el.style.width = '';
       el.style.minWidth = '';
       el.style.maxWidth = '';
-      setTimeout(() => { try { refresh(); } catch(e) {} }, 0);
+      if (doRefresh) setTimeout(() => { try { refresh(); } catch(e) {} }, 0);
+      __gmScheduleSplitLayoutReflow();
     });
     document.addEventListener('mousemove', e => {
       if (!drag) return;
@@ -13555,6 +13568,7 @@
       const el = document.querySelector(targetSel);
       const w  = Math.max(160, Math.min(520, startW+dx));
       el.style.width=el.style.minWidth=el.style.maxWidth=w+'px';
+      __gmScheduleSplitLayoutReflow();
     });
     document.addEventListener('mouseup', ()=>{
       if (!drag) return;
@@ -13562,7 +13576,8 @@
       rz.classList.remove('drag');
       document.body.style.cursor='';
       document.body.style.userSelect='';
-      setTimeout(() => { try { refresh(); } catch(e) {} }, 0);
+      if (doRefresh) setTimeout(() => { try { refresh(); } catch(e) {} }, 0);
+      __gmScheduleSplitLayoutReflow();
     });
   }
 
@@ -13590,6 +13605,21 @@
 
     const defaultRatio = 0.5;
     if (window.__gmSplitRatio === undefined || window.__gmSplitRatio === null) window.__gmSplitRatio = defaultRatio;
+
+    try {
+      window.__gmApplySplitRatioNow = () => {
+        try {
+          const v = document.getElementById('diffView');
+          if (!v) return;
+          const wrap = v.querySelector('.split-wrap');
+          if (!wrap) return;
+          const ratio = (window.__gmSplitRatio === undefined || window.__gmSplitRatio === null)
+            ? defaultRatio
+            : (Number(window.__gmSplitRatio) || defaultRatio);
+          applyRatio(wrap, ratio);
+        } catch (e2) {}
+      };
+    } catch (e) {}
 
     rz.dataset.inited = '1';
 
@@ -13682,6 +13712,13 @@
     if (!app) return;
     app.classList.toggle('left-collapsed');
     updatePanelToggleButtons();
+    try {
+      requestAnimationFrame(() => {
+        try { if (typeof window.__gmApplySplitRatioNow === 'function') window.__gmApplySplitRatioNow(); } catch (e) {}
+        try { if (typeof syncScroll === 'function') syncScroll(); } catch (e) {}
+        try { if (typeof renderGutter === 'function') renderGutter(); } catch (e) {}
+      });
+    } catch (e) {}
   }
 
   function toggleRightPanel() {
@@ -13689,6 +13726,13 @@
     if (!app) return;
     app.classList.toggle('right-collapsed');
     updatePanelToggleButtons();
+    try {
+      requestAnimationFrame(() => {
+        try { if (typeof window.__gmApplySplitRatioNow === 'function') window.__gmApplySplitRatioNow(); } catch (e) {}
+        try { if (typeof syncScroll === 'function') syncScroll(); } catch (e) {}
+        try { if (typeof renderGutter === 'function') renderGutter(); } catch (e) {}
+      });
+    } catch (e) {}
   }
 
   function initChangeNavigationWheelScroll() {
@@ -13713,8 +13757,8 @@
     }, { passive: false });
   }
 
-  makeResizer('r1','.sidebar','right');
-  makeResizer('r2','#rightPanel','left');
+  makeResizer('r1','.sidebar','right', false);
+  makeResizer('r2','#rightPanel','left', false);
   makeSplitResizer();
   updatePanelToggleButtons();
   initChangeNavigationWheelScroll();
