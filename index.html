@@ -15167,7 +15167,9 @@
       // 1. 纯文本编辑器
       const plainEditor = document.getElementById('plainEditorTextarea');
       if (plainEditor && plainEditor.offsetParent !== null) {
-        return plainEditor;
+        const gutter = document.getElementById('plainEditorGutter');
+        const diffView = document.getElementById('diffView');
+        return { type: 'plain', textarea: plainEditor, gutter, container: diffView };
       }
 
       // 2. 并排对比视图
@@ -15244,6 +15246,31 @@
         target.left.scrollLeft += currentVelocity.x;
         target.right.scrollLeft += currentVelocity.x;
       } 
+      // 处理普通编辑器（textarea）滚动
+      else if (target && target.type === 'plain') {
+        const ta = target.textarea;
+        const dv = target.container;
+
+        // 同时尝试滚动 textarea 与 diffView 容器，兼容不同布局/滚动条来源。
+        try {
+          if (dv && dv.scrollTop !== undefined) {
+            dv.scrollTop += Number(currentVelocity.y) || 0;
+            dv.scrollLeft += Number(currentVelocity.x) || 0;
+          }
+        } catch (e) {}
+
+        try {
+          if (ta && ta.scrollTop !== undefined) {
+            ta.scrollTop += Number(currentVelocity.y) || 0;
+            ta.scrollLeft += Number(currentVelocity.x) || 0;
+            try {
+              const g = target.gutter;
+              if (g) g.scrollTop = ta.scrollTop;
+            } catch (e2) {}
+            try { ta.dispatchEvent(new Event('scroll', { bubbles: false })); } catch (e3) {}
+          }
+        } catch (e) {}
+      }
       // 处理页面主体滚动
       else if (target === document.documentElement || target === document.body) {
         window.scrollBy(currentVelocity.x, currentVelocity.y);
@@ -15354,6 +15381,14 @@
     // 监听 keydown 事件
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Alt' && !e.ctrlKey && !e.shiftKey && !e.metaKey) {
+        try {
+          const ta = document.getElementById('plainEditorTextarea');
+          if (ta && document.activeElement === ta) {
+            e.preventDefault();
+            try { e.stopImmediatePropagation(); } catch (e2) {}
+            try { e.stopPropagation(); } catch (e2) {}
+          }
+        } catch (e2) {}
         if (altPressed) return;
         altPressed = true;
         
@@ -15375,6 +15410,14 @@
     // 监听 keyup 事件
     document.addEventListener('keyup', (e) => {
       if (e.key === 'Alt') {
+        try {
+          const ta = document.getElementById('plainEditorTextarea');
+          if (ta && document.activeElement === ta) {
+            e.preventDefault();
+            try { e.stopImmediatePropagation(); } catch (e2) {}
+            try { e.stopPropagation(); } catch (e2) {}
+          }
+        } catch (e2) {}
         clearTimeout(altTimeout);
         hideNavDial();
         altPressed = false;
