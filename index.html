@@ -14536,14 +14536,30 @@
       gutter.scrollTop = ta.scrollTop;
     };
 
+    const __gmPlainReplaceRange = (start, end, replacement, selMode) => {
+      if (!ta) return;
+      const s = Math.max(0, Math.min(Number(start) || 0, ta.value.length));
+      const e = Math.max(0, Math.min(Number(end) || 0, ta.value.length));
+      const a = Math.min(s, e);
+      const b = Math.max(s, e);
+      const rep = (replacement === null || replacement === undefined) ? '' : String(replacement);
+      try {
+        if (typeof ta.setRangeText === 'function') {
+          ta.setRangeText(rep, a, b, selMode || 'end');
+          return;
+        }
+      } catch (e1) {}
+      const v = String(ta.value || '');
+      ta.value = v.slice(0, a) + rep + v.slice(b);
+      const pos = a + rep.length;
+      ta.selectionStart = ta.selectionEnd = pos;
+    };
+
     const insertTextAtSelection = (ins) => {
       if (!ta) return;
       const start = ta.selectionStart;
       const end = ta.selectionEnd;
-      const v = ta.value;
-      ta.value = v.slice(0, start) + ins + v.slice(end);
-      const pos = start + ins.length;
-      ta.selectionStart = ta.selectionEnd = pos;
+      __gmPlainReplaceRange(start, end, ins, 'end');
     };
 
     const __gmEnsureIndentBar = () => {
@@ -14628,10 +14644,12 @@
       }
 
       const v1 = v0.slice(0, startLineStart) + lines.join('\n') + v0.slice(endLineEnd);
-      ta.value = v1;
+      const newBlock = lines.join('\n');
+      __gmPlainReplaceRange(startLineStart, endLineEnd, newBlock, 'preserve');
 
-      const newSelStart = Math.max(0, Math.min(v1.length, s0 + deltaStart));
-      const newSelEnd = Math.max(0, Math.min(v1.length, e0 + deltaEnd));
+      const v1after = String(ta.value || '');
+      const newSelStart = Math.max(0, Math.min(v1after.length, s0 + deltaStart));
+      const newSelEnd = Math.max(0, Math.min(v1after.length, e0 + deltaEnd));
       ta.selectionStart = newSelStart;
       ta.selectionEnd = newSelEnd;
 
@@ -14852,9 +14870,9 @@
 
             const mouseLn = lineFromMouse(ev);
             const caretLn = __gmLineFromTextareaSelection(ta);
-            if (Number(mouseLn) !== Number(caretLn)) return __gmPlainIndentBarScheduleHide(600);
+            if (Number(mouseLn) !== Number(caretLn)) return __gmPlainIndentBarScheduleHide(220);
             const cr = __gmGetCaretClientRect();
-            if (!cr) return __gmPlainIndentBarScheduleHide(600);
+            if (!cr) return __gmPlainIndentBarScheduleHide(220);
             __gmPlainIndentBarShowAtCaretRect(cr);
           });
         };
@@ -14875,14 +14893,14 @@
               try {
                 const m = getMetrics();
                 const gh = gutter && gutter.getBoundingClientRect ? gutter.getBoundingClientRect() : null;
-                if (!gh) return __gmPlainIndentBarScheduleHide(600);
+                if (!gh) return __gmPlainIndentBarScheduleHide(220);
                 const y = Number(ev.clientY || 0) - gh.top + Number(ta.scrollTop || 0);
                 mouseLn = Math.max(1, Math.floor((y - 0) / m.lh) + 1);
               } catch (e2) { mouseLn = null; }
             }
-            if (Number(mouseLn) !== Number(caretLn)) return __gmPlainIndentBarScheduleHide(600);
+            if (Number(mouseLn) !== Number(caretLn)) return __gmPlainIndentBarScheduleHide(220);
             const cr = __gmGetCaretClientRect();
-            if (!cr) return __gmPlainIndentBarScheduleHide(600);
+            if (!cr) return __gmPlainIndentBarScheduleHide(220);
             __gmPlainIndentBarShowAtCaretRect(cr);
           });
         };
@@ -14893,7 +14911,7 @@
             const rt = ev ? ev.relatedTarget : null;
             if (rt && bar && (rt === bar || (bar.contains && bar.contains(rt)))) return;
           } catch (e2) {}
-          try { __gmPlainIndentBarScheduleHide(600); } catch (e) {}
+          try { __gmPlainIndentBarScheduleHide(220); } catch (e) {}
         });
         ta.addEventListener('scroll', __gmPlainIndentBarHide);
         ta.addEventListener('blur', __gmPlainIndentBarHide);
@@ -14907,7 +14925,7 @@
                 const rt = ev ? ev.relatedTarget : null;
                 if (rt && bar && (rt === bar || (bar.contains && bar.contains(rt)))) return;
               } catch (e2) {}
-              try { __gmPlainIndentBarScheduleHide(600); } catch (e) {}
+              try { __gmPlainIndentBarScheduleHide(220); } catch (e) {}
             });
             gutter.addEventListener('scroll', __gmPlainIndentBarHide);
           }
@@ -14968,9 +14986,37 @@
         syncScroll();
       });
 
-      ta.addEventListener('input', () => {
+      let __gmPlainIndentInserting = false;
+      ta.addEventListener('input', (ev) => {
         window.__dirtyEdits = true;
         try { window.__plainEditorExternalStaleWarned = false; } catch (e) {}
+
+        try {
+          const it = ev && ev.inputType ? String(ev.inputType) : '';
+          if (!__gmPlainIndentInserting && it === 'insertLineBreak') {
+            const start = Number(ta.selectionStart || 0);
+            const v = String(ta.value || '');
+            const ls = v.lastIndexOf('\n', Math.max(0, start - 2));
+            const lineStart = (ls < 0) ? 0 : (ls + 1);
+            const prevLine = v.slice(lineStart, Math.max(lineStart, start - 1));
+            const m = prevLine.match(/^[\t ]*/);
+            const indent = m ? String(m[0] || '') : '';
+            if (indent) {
+              __gmPlainIndentInserting = true;
+              try {
+                try { ta.focus({ preventScroll: true }); } catch (e2) { try { ta.focus(); } catch (e3) {} }
+                if (typeof document.execCommand === 'function') {
+                  document.execCommand('insertText', false, indent);
+                } else {
+                  __gmPlainReplaceRange(start, start, indent, 'end');
+                }
+              } finally {
+                __gmPlainIndentInserting = false;
+              }
+            }
+          }
+        } catch (e) {}
+
         renderGutter();
         syncScroll();
         if (window.__autoSaveEnabled) {
@@ -14984,58 +15030,6 @@
         }
       });
 
-      let __gmPlainAutoIndent = null;
-      const __gmPlainGetLineAtPos = (v, pos) => {
-        try {
-          const p = Math.max(0, Math.min(Number(pos) || 0, v.length));
-          const ls = v.lastIndexOf('\n', Math.max(0, p - 1));
-          const lineStart = (ls < 0) ? 0 : (ls + 1);
-          const le = v.indexOf('\n', lineStart);
-          const lineEnd = (le < 0) ? v.length : le;
-          const line = v.slice(lineStart, lineEnd);
-          return { lineStart, lineEnd, line };
-        } catch (e) {
-          return { lineStart: 0, lineEnd: 0, line: '' };
-        }
-      };
-
-      const __gmPlainMaybeClearAutoIndent = () => {
-        try {
-          if (!__gmPlainAutoIndent) return;
-          const v = String(ta.value || '');
-          const cur = __gmPlainGetLineAtPos(v, Number(ta.selectionStart || 0));
-          if (Number(cur.lineStart) === Number(__gmPlainAutoIndent.lineStart)) return;
-          const cand = __gmPlainGetLineAtPos(v, Number(__gmPlainAutoIndent.lineStart));
-          const lineText = String(cand.line || '');
-          const indent = String(__gmPlainAutoIndent.indent || '');
-          if (indent && lineText === indent) {
-            const before = v.slice(0, cand.lineStart);
-            const after = v.slice(cand.lineEnd);
-            ta.value = before + after;
-            try { ta.dispatchEvent(new Event('input', { bubbles: true })); } catch (e2) {}
-          }
-          __gmPlainAutoIndent = null;
-        } catch (e) {
-          __gmPlainAutoIndent = null;
-        }
-      };
-
-      const __gmPlainClearAutoIndentCandidate = (cand) => {
-        try {
-          if (!cand) return;
-          const v = String(ta.value || '');
-          const info = __gmPlainGetLineAtPos(v, Number(cand.lineStart));
-          const lineText = String(info.line || '');
-          const indent = String(cand.indent || '');
-          if (indent && lineText === indent) {
-            const before = v.slice(0, info.lineStart);
-            const after = v.slice(info.lineEnd);
-            ta.value = before + after;
-            try { ta.dispatchEvent(new Event('input', { bubbles: true })); } catch (e2) {}
-          }
-        } catch (e) {}
-      };
-
       ta.addEventListener('keydown', (e) => {
         if (e.key === 'Tab') {
           e.preventDefault();
@@ -15045,50 +15039,7 @@
             __gmPlainIndentApply(1);
           }
         }
-
-        if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
-          e.preventDefault();
-          try {
-            const v = String(ta.value || '');
-            const start = Number(ta.selectionStart || 0);
-            const ls = v.lastIndexOf('\n', Math.max(0, start - 1));
-            const lineStart = (ls < 0) ? 0 : (ls + 1);
-            const line = v.slice(lineStart, start);
-            const m = line.match(/^[\t ]*/);
-            const indent = m ? String(m[0] || '') : '';
-            insertTextAtSelection('\n' + indent);
-            try {
-              const nextStart = start + 1;
-              const prev = __gmPlainAutoIndent;
-              __gmPlainAutoIndent = { lineStart: nextStart, indent };
-              try { if (prev && Number(prev.lineStart) !== Number(__gmPlainAutoIndent.lineStart)) __gmPlainClearAutoIndentCandidate(prev); } catch (e4) {}
-            } catch (e3) {
-              __gmPlainAutoIndent = null;
-            }
-          } catch (e2) {
-            insertTextAtSelection('\n');
-            __gmPlainAutoIndent = null;
-          }
-
-          // 手动触发一次 input 逻辑（与 Tab 一致）
-          window.__dirtyEdits = true;
-          renderGutter();
-          syncScroll();
-          if (window.__autoSaveEnabled) {
-            if (typeof window.scheduleAutoSave === 'function') window.scheduleAutoSave();
-          } else {
-            if (typeof window.setEditStatus === 'function') window.setEditStatus('已修改：自动保存已关闭（Ctrl+S 立即保存）');
-          }
-        }
-
-        const navKey = (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight');
-        if (navKey) {
-          try { __gmPlainMaybeClearAutoIndent(); } catch (e2) {}
-        }
       });
-
-      ta.addEventListener('mouseup', () => { try { __gmPlainMaybeClearAutoIndent(); } catch (e) {} });
-      ta.addEventListener('blur', () => { try { __gmPlainMaybeClearAutoIndent(); } catch (e) {} });
     }
     
     // 存储当前内容用于保存
