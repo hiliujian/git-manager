@@ -14488,10 +14488,76 @@
   // 读取文件为文本
   function readFileAsText(file) {
     return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = (e) => resolve(e.target.result);
-      reader.onerror = (e) => reject(new Error('文件读取失败'));
-      reader.readAsText(file);
+      const __decodeBytes = (buf) => {
+        try {
+          const u8 = (buf instanceof Uint8Array) ? buf : new Uint8Array(buf);
+          if (!u8 || !u8.length) return '';
+
+          const hasUtf8Bom = (u8.length >= 3 && u8[0] === 0xEF && u8[1] === 0xBB && u8[2] === 0xBF);
+
+          const tryDec = (enc) => {
+            try {
+              const dec = new TextDecoder(enc, { fatal: true });
+              const s = dec.decode(u8);
+              return s;
+            } catch (e) {
+              return null;
+            }
+          };
+
+          // 优先 UTF-8（严格）
+          let s = tryDec('utf-8');
+          if (s !== null) {
+            if (hasUtf8Bom) s = s.slice(1);
+            return s;
+          }
+
+          // UTF-8 失败：尝试常见中文编码（顺序参考后端）
+          for (const enc of ['gb18030', 'gbk', 'cp936', 'gb2312']) {
+            const r = tryDec(enc);
+            if (r !== null) return r;
+          }
+
+          // 最后兜底：UTF-8 replace
+          try {
+            const dec = new TextDecoder('utf-8', { fatal: false });
+            s = dec.decode(u8);
+            if (hasUtf8Bom) s = s.slice(1);
+            return s;
+          } catch (e) {
+            return '';
+          }
+        } catch (e) {
+          return '';
+        }
+      };
+
+      try {
+        if (file && typeof file.arrayBuffer === 'function') {
+          file.arrayBuffer().then((buf) => {
+            try { resolve(__decodeBytes(buf)); } catch (e) { reject(new Error('文件读取失败')); }
+          }).catch(() => {
+            reject(new Error('文件读取失败'));
+          });
+          return;
+        }
+      } catch (e) {}
+
+      try {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          try {
+            const buf = e && e.target ? e.target.result : null;
+            resolve(__decodeBytes(buf || new ArrayBuffer(0)));
+          } catch (e2) {
+            reject(new Error('文件读取失败'));
+          }
+        };
+        reader.onerror = () => reject(new Error('文件读取失败'));
+        reader.readAsArrayBuffer(file);
+      } catch (e) {
+        reject(new Error('文件读取失败'));
+      }
     });
   }
 
