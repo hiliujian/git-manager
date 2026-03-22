@@ -11170,16 +11170,6 @@
                   domLines.shift();
                   leading--;
                 }
-
-                let trailing = 0;
-                for (let i = domLines.length - 1; i >= 0; i--) {
-                  if (__gmIsBlankLine(domLines[i])) trailing++;
-                  else break;
-                }
-                while (trailing > originalTrailingEmptyLines && domLines.length) {
-                  domLines.pop();
-                  trailing--;
-                }
               } catch (e3) {}
 
               content = domLines.join(detectedEOL);
@@ -14797,10 +14787,6 @@
           for (let i = curParts.length - 1; i >= 0; i--) {
             if (__gmIsBlankLine(curParts[i])) curTrail++;
             else break;
-          }
-          while (curTrail > origTrail && curParts.length) {
-            curParts.pop();
-            curTrail--;
           }
 
           const normalized = curParts.join('\n');
