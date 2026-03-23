@@ -6317,6 +6317,7 @@
           if (ext === 'c' || ext === 'h') return 'c';
           if (ext === 'cpp' || ext === 'hpp' || ext === 'cc' || ext === 'cxx') return 'cpp';
           if (ext === 'yaml' || ext === 'yml') return 'yaml';
+          if (ext === 'ini' || ext === 'cfg' || ext === 'conf') return 'ini';
           if (ext === 'diff' || ext === 'patch') return 'diff';
           return 'none';
         } catch (e2) {
@@ -6382,7 +6383,7 @@
           const lang = String(__gmGetDiffEditLang() || '').toLowerCase();
           const isMarkup = (lang === 'markup');
           const isCss = (lang === 'css');
-          const lineToken = (lang === 'python' || lang === 'yaml') ? '#' : '//';
+          const lineToken = (lang === 'python' || lang === 'yaml') ? '#' : ((lang === 'ini') ? ';' : '//');
 
           const hasAnyNonEmpty = targetLines.some(ln => String(ln.textContent || '').trim().length > 0);
           if (!hasAnyNonEmpty) return;
@@ -6393,6 +6394,7 @@
             const tr = tx.trim();
             if (isMarkup) return tr.startsWith('<!--') && tr.endsWith('-->');
             if (isCss) return tr.startsWith('/*') && tr.endsWith('*/');
+            if (lang === 'ini') return tr.startsWith(';') || tr.startsWith('#');
             return tr.startsWith(lineToken);
           });
 
@@ -6415,8 +6417,14 @@
                 const inner = tr.slice(2, tr.length - 2);
                 ln.textContent = indent + inner.trim();
               } else {
-                const r2 = rest.trim().startsWith(lineToken) ? rest.trim().slice(lineToken.length).replace(/^\s+/, '') : rest;
-                ln.textContent = indent + r2;
+                if (lang === 'ini') {
+                  const tr = rest.trim();
+                  const r2 = (tr.startsWith(';') || tr.startsWith('#')) ? tr.slice(1).replace(/^\s+/, '') : rest;
+                  ln.textContent = indent + r2;
+                } else {
+                  const r2 = rest.trim().startsWith(lineToken) ? rest.trim().slice(lineToken.length).replace(/^\s+/, '') : rest;
+                  ln.textContent = indent + r2;
+                }
               }
             } else {
               if (isMarkup) ln.textContent = indent + '<!-- ' + rest + ' -->';
@@ -15008,6 +15016,7 @@
       if (ext === 'c') return 'c';
       if (ext === 'cc' || ext === 'cxx' || ext === 'cpp' || ext === 'hpp' || ext === 'h') return 'cpp';
       if (ext === 'yaml' || ext === 'yml') return 'yaml';
+      if (ext === 'ini' || ext === 'cfg' || ext === 'conf') return 'ini';
       if (ext === 'diff' || ext === 'patch') return 'diff';
       return 'none';
     };
@@ -15764,7 +15773,7 @@
             const lang = String(__gmLang || '').toLowerCase();
             const isMarkup = (lang === 'markup');
             const isCss = (lang === 'css');
-            const lineToken = (lang === 'python' || lang === 'yaml') ? '#' : ((lang === 'diff') ? null : '//');
+            const lineToken = (lang === 'python' || lang === 'yaml') ? '#' : ((lang === 'ini') ? ';' : ((lang === 'diff') ? null : '//'));
 
             const hasAnyNonEmpty = lines.some(ln => String(ln).trim().length > 0);
             if (!hasAnyNonEmpty) return;
@@ -15774,6 +15783,7 @@
               if (!t.trim()) return true;
               if (isMarkup) return t.trim().startsWith('<!--') && t.trim().endsWith('-->');
               if (isCss) return t.trim().startsWith('/*') && t.trim().endsWith('*/');
+              if (lang === 'ini') return t.trim().startsWith(';') || t.trim().startsWith('#');
               if (!lineToken) return true;
               return t.trim().startsWith(lineToken);
             });
@@ -15795,6 +15805,11 @@
                   return indent + inner.trim();
                 }
                 if (!lineToken) return t;
+                if (lang === 'ini') {
+                  const tr = rest.trim();
+                  const r2 = (tr.startsWith(';') || tr.startsWith('#')) ? tr.slice(1).replace(/^\s+/, '') : rest;
+                  return indent + r2;
+                }
                 if (rest.startsWith(lineToken)) {
                   let r2 = rest.slice(lineToken.length);
                   if (r2.startsWith(' ')) r2 = r2.slice(1);
@@ -15809,7 +15824,7 @@
             });
 
             const rep = outLines.join('\n');
-            __gmPlainUndoableReplaceRange(lineStart, lineEnd, rep, s, en);
+            __gmPlainUndoableReplaceRange(lineStart, lineEnd, rep, lineStart, lineStart);
             return;
           } catch (e2) {}
         }
