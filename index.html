@@ -8510,7 +8510,20 @@
 
   function scrollToLine(lineNumber) {
     try {
-      if (window.__gmSuppressScrollToLine) return;
+      if (window.__gmSuppressScrollToLine) {
+        try {
+          if (!window.__gmScrollToLineSuppRetry) window.__gmScrollToLineSuppRetry = Object.create(null);
+          const key = String(lineNumber);
+          const n = Number(window.__gmScrollToLineSuppRetry[key] || 0);
+          if (n < 3) {
+            window.__gmScrollToLineSuppRetry[key] = n + 1;
+            setTimeout(() => {
+              try { scrollToLine(lineNumber); } catch (e2) {}
+            }, 120);
+          }
+        } catch (e2) {}
+        return;
+      }
     } catch (e) {}
     // Scroll to the specified line in the diff view
     const diffView = document.getElementById('diffView');
@@ -8555,7 +8568,68 @@
         });
       });
 
+      // If we are in virtual diff mode (large file), the target line might not be rendered yet.
+      // In that case, progressively render more lines and retry.
+      if (!targetLine) {
+        try {
+          const v = document.getElementById('virtualDiff');
+          const hasVirtual = !!(v && v.__gmVdFile && v.__gmVdHunks);
+          if (hasVirtual) {
+            const key = String(lineNumber);
+            if (!window.__gmScrollToLineVirtualRetry) window.__gmScrollToLineVirtualRetry = Object.create(null);
+            const n = Number(window.__gmScrollToLineVirtualRetry[key] || 0);
+            if (n < 8) {
+              window.__gmScrollToLineVirtualRetry[key] = n + 1;
+              const curEnd = Number.isFinite(Number(v.__gmVdEndLine)) ? Number(v.__gmVdEndLine) : 200;
+              const start = Number.isFinite(Number(v.__gmVdStartLine)) ? Number(v.__gmVdStartLine) : 0;
+              const file = v.__gmVdFile;
+              const hunks = v.__gmVdHunks;
+              const readonly = !!v.__gmVdReadonly;
+              const nextEnd = curEnd + 600;
+              if (nextEnd > curEnd) {
+                setTimeout(() => {
+                  try { renderVirtualDiff(file, hunks, readonly, start, nextEnd); } catch (e) {}
+                  setTimeout(() => {
+                    try { scrollToLine(lineNumber); } catch (e2) {}
+                  }, 0);
+                }, 0);
+                return;
+              }
+            }
+          }
+        } catch (e) {}
+      }
+
+      // If still not found, it might be because renderDiffWithFullContext is progressively rendering
+      // and the target DOM row has not been inserted yet (large line numbers tend to appear later).
+      if (!targetLine) {
+        try {
+          if (!window.__gmScrollToLineDomRetry) window.__gmScrollToLineDomRetry = Object.create(null);
+          const key = String(lineNumber);
+          const n = Number(window.__gmScrollToLineDomRetry[key] || 0);
+          if (n < 20) {
+            window.__gmScrollToLineDomRetry[key] = n + 1;
+            setTimeout(() => {
+              try { scrollToLine(lineNumber); } catch (e2) {}
+            }, 50);
+          }
+        } catch (e2) {}
+        return;
+      }
+
       if (targetLine) {
+        try {
+          const key = String(lineNumber);
+          if (window.__gmScrollToLineVirtualRetry && window.__gmScrollToLineVirtualRetry[key] !== undefined) {
+            delete window.__gmScrollToLineVirtualRetry[key];
+          }
+          if (window.__gmScrollToLineDomRetry && window.__gmScrollToLineDomRetry[key] !== undefined) {
+            delete window.__gmScrollToLineDomRetry[key];
+          }
+          if (window.__gmScrollToLineSuppRetry && window.__gmScrollToLineSuppRetry[key] !== undefined) {
+            delete window.__gmScrollToLineSuppRetry[key];
+          }
+        } catch (e) {}
         targetLine.scrollIntoView({ behavior: 'smooth', block: 'center' });
         flashHighlight(targetLine);
       }
@@ -11414,6 +11488,14 @@
   function renderVirtualDiff(file, hunks, readonly, startLine, endLine) {
     const container = document.getElementById('virtualDiff');
     if (!container) return;
+
+    try {
+      container.__gmVdFile = file;
+      container.__gmVdHunks = hunks;
+      container.__gmVdReadonly = !!readonly;
+      container.__gmVdStartLine = startLine;
+      container.__gmVdEndLine = endLine;
+    } catch (e) {}
 
     let currentLine = 0;
     let renderedLines = [];
