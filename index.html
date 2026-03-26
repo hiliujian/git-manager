@@ -9022,13 +9022,22 @@
   }
 
   function selAll(v) {
+    const vis = __gmGetVisibleFiles();
+    const visIdx = [];
+    try {
+      (vis || []).forEach(f => {
+        const i = (files || []).indexOf(f);
+        if (Number.isFinite(i) && i >= 0) visIdx.push(i);
+      });
+    } catch (e) {}
+
     if (v) {
-      files.forEach((_, i) => checkedSet.add(i));
+      visIdx.forEach(i => checkedSet.add(i));
     } else {
-      checkedSet.clear();
+      visIdx.forEach(i => checkedSet.delete(i));
     }
 
-    files.forEach((f) => {
+    (vis || []).forEach((f) => {
       if (!f || !f.path) return;
       commitLinesDesiredByPath.set(f.path, !!v);
       const set = getSelectedCommitLinesSet(f.path);
@@ -16330,7 +16339,7 @@
       // 处理页面主体滚动
       else if (target === document.documentElement || target === document.body) {
         window.scrollBy(currentVelocity.x, currentVelocity.y);
-      } 
+      }
       // 处理其他可滚动元素
       else if (target && target.scrollTop !== undefined) {
         target.scrollTop += currentVelocity.y;
