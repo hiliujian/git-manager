@@ -12973,7 +12973,7 @@
     diffView.innerHTML = '<div class="empty-state"><div class="spin"></div><p>撤回中...</p></div>';
 
     // Add loading state to file list
-    fileList.innerHTML = '<div style="padding:20px;text-align:center;"><div class="spin"></div><p style="margin-top:10px;color:var(--text2);">撤回中...</p></div>';
+    fileList.innerHTML = '<div class="empty-state"><div class="spin"></div><p>撤回中...</p></div>';
 
     // Snapshot before revert-all for Undo (best-effort, limited)
     let undoSnaps = [];
@@ -13007,7 +13007,8 @@
             snapshots: undoSnaps,
           });
         }
-        curFile = null; clearDiff(); await refresh();
+        curFile = null; clearDiff();
+        await refresh();
       } else {
         toast(`部分失败: ${(res.errors||[]).slice(0,2).join(', ')}`,'err');
         await refresh();
@@ -13015,6 +13016,27 @@
     } catch (error) {
       toast(`失败: ${error.message}`,'err');
       await refresh();
+    } finally {
+      // Ensure UI and auto-refresh state are restored even if refresh or some files failed.
+      try { shouldAutoRefreshDiff = true; } catch (e) {}
+      try { updateStats(); } catch (e) {}
+      try { renderFileList(); } catch (e) {}
+      try { updateRevertAllTexts(); } catch (e) {}
+
+      // Restore diff view only if it's still stuck at "撤回中...".
+      try {
+        const dv = document.getElementById('diffView');
+        const stuck = dv && String(dv.textContent || '').includes('撤回中');
+        if (stuck) {
+          if (curFile !== null && files && curFile < files.length) {
+            await loadDiff(curFile, { showLoading: false, incremental: false });
+          } else {
+            clearDiff();
+          }
+        }
+      } catch (e) {
+        try { clearDiff(); } catch (e2) {}
+      }
     }
   }
 
