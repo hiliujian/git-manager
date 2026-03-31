@@ -849,7 +849,7 @@
     }
     .autosave-switch input:checked + .autosave-slider:before{transform:translateX(16px) translateY(-50%);background: var(--accent);border-color:#25508a;box-shadow:0 0 0 2px rgba(110,180,247,.16), 0 2px 10px rgba(0,0,0,.35);}
     .autosave-switch input:focus-visible + .autosave-slider{outline:2px solid rgba(110,180,247,.22);outline-offset:2px;}
-    .diff-view{flex:1;overflow:auto;background:var(--bg2);padding:0 8px;position:relative;}
+    .diff-view{flex:1;overflow:auto;background:var(--bg2);padding:0 8px;position:relative;overflow-anchor:none;}
     .diff-view[contenteditable="true"]:focus{outline:none;}
     .diff-view[contenteditable="true"]{caret-color:transparent;}
     .diff-view[contenteditable="true"] .editable-line{caret-color:auto;}
@@ -1603,6 +1603,9 @@
       flex-shrink:0;line-height:20px;user-select:none;-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;}
     .ls{width:16px;min-width:16px;text-align:center;font-weight:700;flex-shrink:0;line-height:20px;user-select:none;-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;}
     .lc{padding:0 8px;white-space:pre;flex:1;min-width:0;overflow:visible;line-height:20px;user-select:text;cursor:default;}
+
+    /* Split view: left panel (original version) does not show +/-/~ markers and should not reserve space */
+    #__gmSplitLeft .ls{display:none;width:0;min-width:0;padding:0;margin:0;}
     
     /* 只有可编辑的代码行才显示文本输入光标 */
     .lc.editable-line{cursor:text !important;}
@@ -2109,12 +2112,80 @@
 
   const lastLineByPath = new Map();
 
+  function __gmBuildLineStarts(text) {
+    const v = (text === null || text === undefined) ? '' : String(text);
+    const starts = [0];
+    for (let i = 0; i < v.length; i++) {
+      if (v.charCodeAt(i) === 10) starts.push(i + 1);
+    }
+    return starts;
+  }
+
+  function __gmEnsurePlainLineIndex(ta, opts = {}) {
+    try {
+      if (!ta) return null;
+      const v = String(ta.value || '');
+      const len = v.length;
+      const force = !!opts.force;
+      if (!force && ta.__gmLineIndex && ta.__gmLineIndex.len === len) return ta.__gmLineIndex;
+      const idx = { len, starts: __gmBuildLineStarts(v) };
+      ta.__gmLineIndex = idx;
+      return idx;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function __gmPlainLineFromPos(idx, pos) {
+    try {
+      if (!idx || !idx.starts || !idx.starts.length) return 1;
+      const p = Math.max(0, Math.min(Number(pos) || 0, Number(idx.len) || 0));
+      const a = idx.starts;
+      let lo = 0;
+      let hi = a.length - 1;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        const s = a[mid];
+        if (s === p) return mid + 1;
+        if (s < p) lo = mid + 1;
+        else hi = mid - 1;
+      }
+      return Math.max(1, lo);
+    } catch (e) {
+      return 1;
+    }
+  }
+
+  function __gmPlainPosFromLine(idx, line) {
+    try {
+      if (!idx || !idx.starts || !idx.starts.length) return 0;
+      const ln = Math.max(1, Number(line) || 1);
+      const i = Math.max(0, Math.min(idx.starts.length - 1, ln - 1));
+      return idx.starts[i] || 0;
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  function __gmSchedulePlainLineIndexRebuild(ta) {
+    try {
+      if (!ta) return;
+      if (ta.__gmLineIndexT) {
+        clearTimeout(ta.__gmLineIndexT);
+        ta.__gmLineIndexT = null;
+      }
+      ta.__gmLineIndexT = setTimeout(() => {
+        try { __gmEnsurePlainLineIndex(ta, { force: true }); } catch (e) {}
+      }, 120);
+    } catch (e) {}
+  }
+
   function __gmLineFromTextareaSelection(ta) {
     try {
       if (!ta) return 1;
-      const v = String(ta.value || '');
-      const pos = Math.max(0, Math.min(Number(ta.selectionStart || 0), v.length));
-      return 1 + v.slice(0, pos).split('\n').length - 1;
+      const idx = __gmEnsurePlainLineIndex(ta);
+      const pos = Math.max(0, Math.min(Number(ta.selectionStart || 0), idx ? idx.len : String(ta.value || '').length));
+      return __gmPlainLineFromPos(idx, pos);
     } catch (e) {
       return 1;
     }
@@ -2162,16 +2233,9 @@
   function __gmGotoLineInTextarea(ta, line) {
     try {
       if (!ta) return;
-      const v = String(ta.value || '');
       const ln = Math.max(1, Number(line) || 1);
-      let idx = 0;
-      let cur = 1;
-      while (cur < ln) {
-        const next = v.indexOf('\n', idx);
-        if (next < 0) break;
-        idx = next + 1;
-        cur++;
-      }
+      const idxObj = __gmEnsurePlainLineIndex(ta);
+      const idx = __gmPlainPosFromLine(idxObj, ln);
       ta.selectionStart = ta.selectionEnd = idx;
       const lh = parseFloat(getComputedStyle(ta).lineHeight || '18') || 18;
       ta.scrollTop = Math.max(0, (ln - 1) * lh - ta.clientHeight * 0.35);
@@ -2534,8 +2598,8 @@
       const pos = (posOverride !== undefined && posOverride !== null)
               ? Number(posOverride || 0)
               : Number(ta.selectionStart || 0);
-      const before = v.slice(0, Math.max(0, pos));
-      const line = before.split('\n').length;
+      const idxObj = __gmEnsurePlainLineIndex(ta);
+      const line = __gmPlainLineFromPos(idxObj, Math.max(0, pos));
       const lhRaw = (window.getComputedStyle && window.getComputedStyle(ta)) ? window.getComputedStyle(ta).lineHeight : '';
       let lh = 18;
       try {
@@ -2543,21 +2607,10 @@
         if (Number.isFinite(n) && n > 0) lh = n;
       } catch (e) {}
       const targetTop = Math.max(0, (line - 1) * lh - Math.max(0, (ta.clientHeight - lh) / 2));
-      const prevTaTop = ta.scrollTop;
       ta.scrollTop = targetTop;
 
-      // 兼容：实际滚动容器可能是外层 diffView（因为 diffView 自身 overflow:auto）
-      try {
-        const host = document.getElementById('diffView');
-        if (host) {
-          const taTopInHost = Math.max(0, ta.offsetTop || 0);
-          const want = Math.max(0, taTopInHost + (line - 1) * lh - host.clientHeight * 0.35);
-          // 只要 textarea 没能明显滚动到位，就同步驱动 host 滚动（或 host 本就有滚动条）
-          const taDidNotMove = Math.abs(Number(ta.scrollTop || 0) - Number(targetTop || 0)) > 2;
-          const hostCanScroll = (host.scrollHeight - host.clientHeight) > 2;
-          if (taDidNotMove || hostCanScroll) host.scrollTop = want;
-        }
-      } catch (e3) {}
+      // Plain editor uses textarea as the authoritative scroll container.
+      // Do not force-scroll the outer host (#diffView) to avoid unexpected view jumps.
 
       try {
         const gutter = document.getElementById('plainEditorGutter');
@@ -2705,42 +2758,6 @@
     } else {
       rebuildFindMatches();
     }
-  }
-
-  function __gmCaptureDiffScrollState(){
-    try {
-      const host = document.getElementById('diffView');
-      if (!host) return null;
-      const st = { host: host.scrollTop, sp: [] };
-      try {
-        const panels = host.querySelectorAll ? host.querySelectorAll('.sp') : [];
-        for (let i = 0; i < panels.length; i++) {
-          st.sp.push(panels[i] ? panels[i].scrollTop : 0);
-        }
-      } catch (e2) {}
-      return st;
-    } catch (e) {
-      return null;
-    }
-  }
-
-  function __gmRestoreDiffScrollState(st){
-    try {
-      if (!st) return;
-      const host = document.getElementById('diffView');
-      if (!host) return;
-      try {
-        if (st.host !== undefined && st.host !== null) host.scrollTop = st.host;
-      } catch (e2) {}
-      try {
-        const panels = host.querySelectorAll ? host.querySelectorAll('.sp') : [];
-        for (let i = 0; i < panels.length; i++) {
-          if (!panels[i]) continue;
-          const top = (st.sp && st.sp[i] !== undefined && st.sp[i] !== null) ? st.sp[i] : 0;
-          panels[i].scrollTop = top;
-        }
-      } catch (e2) {}
-    } catch (e) {}
   }
 
   function closeFindBar() {
@@ -3026,6 +3043,7 @@
     if (__gmIsPlainEditorMode()) {
       const ta = document.getElementById('plainEditorTextarea');
       const text = ta ? String(ta.value || '') : '';
+      const idxObj = ta ? __gmEnsurePlainLineIndex(ta) : null;
       const needle = q.toLowerCase();
       const hay = text.toLowerCase();
       let from = 0;
@@ -3036,8 +3054,7 @@
         findMatches.push({ type: 'ta', start: idx, end: idx + q.length });
 
         try {
-          const before = text.slice(0, idx);
-          const ln = before.split('\n').length;
+          const ln = __gmPlainLineFromPos(idxObj, idx);
           if (Number.isFinite(Number(ln)) && Number(ln) > 0) hits.add(Number(ln));
         } catch (e2) {}
 
@@ -3074,13 +3091,13 @@
     else meta.textContent = total ? `${Math.max(1, findPos + 1)}/${total}` : '0/0';
   }
 
-  function gotoFind(nextIndex) {
+  function gotoFind(posDelta) {
     if (!findMatches || findMatches.length === 0) {
       findPos = -1;
       updateFindMeta();
       return;
     }
-    let idx = nextIndex;
+    let idx = findPos + posDelta;
     const n = findMatches.length;
     if (idx < 0) idx = n - 1;
     if (idx >= n) idx = 0;
@@ -3088,32 +3105,25 @@
     findPos = idx;
     const el = findMatches[findPos];
     if (__gmIsPlainEditorMode()) {
-      const inputEl = (findBarEl && findBarEl.querySelector) ? findBarEl.querySelector('#findInput') : null;
-      const keepInputFocus = !!(inputEl && document.activeElement === inputEl);
       const ta = document.getElementById('plainEditorTextarea');
-      if (ta && el && el.type === 'ta') {
-        const s = Math.max(0, Number(el.start || 0));
-        const e = Math.max(s, Number(el.end || s));
-        try { ta.setSelectionRange(s, e); } catch (e2) {}
-        try {
-          const v = String(ta.value || '');
-          const ln = v.slice(0, s).split('\n').length;
-          __gmFlashPlainEditorFindMatchLine(ln);
-        } catch (e2) {}
-        try {
-          requestAnimationFrame(() => {
-            try { __gmScrollTextareaToSelection(ta, s); } catch (e3) {}
-            if (keepInputFocus && inputEl) {
-              try { inputEl.focus({ preventScroll: true }); } catch (e4) { try { inputEl.focus(); } catch (e5) {} }
-              try { inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length); } catch (e6) {}
-            }
-          });
-        } catch (e3) {
-          try { __gmScrollTextareaToSelection(ta, s); } catch (e4) {}
-          if (keepInputFocus && inputEl) {
-            try { inputEl.focus({ preventScroll: true }); } catch (e5) { try { inputEl.focus(); } catch (e6) {} }
-          }
-        }
+      if (!ta) return;
+      const m = findMatches[findPos];
+      if (!m || m.type !== 'ta') return;
+      const s = Number(m.start || 0);
+      const e = Number(m.end || 0);
+      try { ta.focus({ preventScroll: true }); } catch (e2) { try { ta.focus(); } catch (e3) {} }
+      try { ta.setSelectionRange(s, e); } catch (e2) {}
+      try {
+        const idxObj = __gmEnsurePlainLineIndex(ta);
+        const ln = __gmPlainLineFromPos(idxObj, s);
+        __gmFlashPlainEditorFindMatchLine(ln);
+      } catch (e2) {}
+      try {
+        requestAnimationFrame(() => {
+          try { __gmScrollTextareaToSelection(ta, s); } catch (e3) {}
+        });
+      } catch (e3) {
+        try { __gmScrollTextareaToSelection(ta, s); } catch (e4) {}
       }
       updateFindMeta();
       return;
@@ -4320,7 +4330,7 @@
           window.updateLineNumbers();
         }
         
-        try { __gmRestoreDiffScrollState(prevScroll); } catch (e2) {}
+        try { __gmRestoreDiffScrollState(document.getElementById('diffView'), prevScroll); } catch (e2) {}
         const lines = Array.from(host.querySelectorAll('.editable-line'));
         const line = (snap.idx >= 0 && snap.idx < lines.length) ? lines[snap.idx] : (lines[0] || null);
         if (line) {
@@ -4329,7 +4339,7 @@
             const col = Math.max(0, Math.min(Number(snap.col) || 0, (line.textContent || '').length));
             setCaretOffsetNoFocus(line, col);
           } catch (e2) {}
-          try { __gmRestoreDiffScrollState(prevScroll); } catch (e2) {}
+          try { __gmRestoreDiffScrollState(document.getElementById('diffView'), prevScroll); } catch (e2) {}
         }
       } catch (e) {}
     };
@@ -7618,6 +7628,14 @@
   async function handleFilesUpdate(newFiles) {
     console.log('检测到文件变化，更新列表');
 
+    const __gmPlainActive = (() => {
+      try {
+        if (!window.__plainEditorFilename) return false;
+        const ta = document.getElementById('plainEditorTextarea');
+        return !!ta;
+      } catch (e) { return false; }
+    })();
+
     // 保存当前查看的文件路径
     const currentFilePath = curFile !== null && files[curFile] ? files[curFile].path : null;
 
@@ -7661,21 +7679,25 @@
       const newIndex = files.findIndex(f => f.path === currentFilePath);
       if (newIndex >= 0) {
         curFile = newIndex;
-        // 自动加载diff，但只有在shouldAutoRefreshDiff为true时
-        // 这样可以避免在撤回操作后被WebSocket的推送打断
-        if (shouldAutoRefreshDiff) {
-          if (skipNextAutoDiffRefresh) {
-            skipNextAutoDiffRefresh = false;
-            console.log('跳过一次自动刷新diff（本地已主动更新）');
-          } else {
-            console.log('自动刷新当前文件的diff');
-            loadDiff(curFile, { showLoading: false, incremental: true });
+        if (!__gmPlainActive) {
+          // 自动加载diff，但只有在shouldAutoRefreshDiff为true时
+          // 这样可以避免在撤回操作后被WebSocket的推送打断
+          if (shouldAutoRefreshDiff) {
+            if (skipNextAutoDiffRefresh) {
+              skipNextAutoDiffRefresh = false;
+              console.log('跳过一次自动刷新diff（本地已主动更新）');
+            } else {
+              console.log('自动刷新当前文件的diff');
+              loadDiff(curFile, { showLoading: false, incremental: true });
+            }
           }
         }
       } else {
         // 文件已经不在变更列表中（可能已经完全撤回）
         curFile = null;
-        clearDiff();
+        if (!__gmPlainActive) {
+          clearDiff();
+        }
       }
     }
   }
@@ -8030,10 +8052,19 @@
     renderLogList();
     updateStats();
 
-    // 刷新当前 diff
-    if (curFile !== null) {
-      if (curFile < files.length) await loadDiff(curFile);
-      else { curFile = null; clearDiff(); }
+    // 刷新当前 diff（普通编辑器模式下不触碰 diffView，避免闪烁/隐式滚动）
+    const __gmPlainActive = (() => {
+      try {
+        if (!window.__plainEditorFilename) return false;
+        const ta = document.getElementById('plainEditorTextarea');
+        return !!ta;
+      } catch (e) { return false; }
+    })();
+    if (!__gmPlainActive) {
+      if (curFile !== null) {
+        if (curFile < files.length) await loadDiff(curFile);
+        else { curFile = null; clearDiff(); }
+      }
     }
 
     btn.style.opacity = '';
@@ -8420,10 +8451,18 @@
     });
   }
 
-  async function refreshFilesOnly(forceDiffReload=false) {
+  async function refreshFilesOnly(forceDiffReload=false, reloadDiff=true) {
     const fRes = await GET('/api/files');
     if (fRes.error) return;
     const newFiles = fRes.files || [];
+
+    const __gmPlainActive = (() => {
+      try {
+        if (!window.__plainEditorFilename) return false;
+        const ta = document.getElementById('plainEditorTextarea');
+        return !!ta;
+      } catch (e) { return false; }
+    })();
     // Apply accurate per-file stats overrides when available
     newFiles.forEach(file => {
       if (!file || !file.path) return;
@@ -8457,12 +8496,14 @@
     checkedSet = nextChecked;
     renderFileList();
     updateStats();
-    if (curFile !== null) {
-      if (curFile < files.length) await loadDiff(curFile);
-      else { curFile = null; clearDiff(); }
-    } else if (forceDiffReload) {
-      // 处理特殊情况：比如撤回后 curFile 已经被置空，但你仍然希望 UI 立即反映状态
-      clearDiff();
+    if (reloadDiff && !__gmPlainActive) {
+      if (curFile !== null) {
+        if (curFile < files.length) await loadDiff(curFile);
+        else { curFile = null; clearDiff(); }
+      } else if (forceDiffReload) {
+        // 处理特殊情况：比如撤回后 curFile 已经被置空，但你仍然希望 UI 立即反映状态
+        clearDiff();
+      }
     }
   }
 
@@ -8509,6 +8550,9 @@
   }
 
   function scrollToLine(lineNumber) {
+    try {
+      if (window.__plainEditorFilename && document.getElementById('plainEditorTextarea')) return;
+    } catch (e0) {}
     try {
       if (window.__gmSuppressScrollToLine) {
         try {
@@ -8630,7 +8674,7 @@
             delete window.__gmScrollToLineSuppRetry[key];
           }
         } catch (e) {}
-        targetLine.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        if (!window.__plainEditorFilename) targetLine.scrollIntoView({ behavior: 'smooth', block: 'center' });
         flashHighlight(targetLine);
       }
     }
@@ -9203,9 +9247,12 @@
 
   function __gmRestoreDiffScrollState(viewEl, state) {
     try {
+      try {
+        if (window.__plainEditorFilename && document.getElementById('plainEditorTextarea')) return;
+      } catch (e0) {}
       if (!viewEl || !state) return;
       if (state.mode === 'split') {
-        const splitWrap = viewEl.querySelector('.split-wrap');
+        const splitWrap = viewEl ? viewEl.querySelector('.split-wrap') : null;
         if (!splitWrap) return;
         const leftSp = splitWrap.querySelector('.sp:first-child');
         const rightSp = splitWrap.querySelector('.sp:last-child');
@@ -10399,7 +10446,8 @@
             cellText = (columnType === 'left') ? html.oldHtml : html.newHtml;
           }
 
-          return `<div class="dl ${line.type}"${lineIdAttr}>${actions}<span class="ls" contenteditable="false">${s}</span><span class="ln" contenteditable="false">${line.num||''}</span><span${lcAttrs}>${cellText}</span></div>`;
+          const lsHtml = (columnType === 'left') ? '' : `<span class="ls" contenteditable="false">${s}</span>`;
+          return `<div class="dl ${line.type}"${lineIdAttr}>${actions}${lsHtml}<span class="ln" contenteditable="false">${line.num||''}</span><span${lcAttrs}>${cellText}</span></div>`;
         };
 
         const renderHintRow = (columnType, count, showBtn, hunkIndex, startIdx, endIdx) => {
@@ -10426,7 +10474,8 @@
                   `<button class="hint-btn" onclick="askRevertMultiLines('${fpEsc}',${hunkIndex},${startIdx},${endIdx},'${file.status}')">块撤回（${count}）</button>`
                   : '';
           const actions = (columnType === 'right') ? `<span class="dl-actions">${commitCb}${btn}</span>` : '';
-          return `<div class="dl revert-block-hint">${actions}<span class="ls"></span><span class="ln"></span><span class="lc" contenteditable="false"><span class="hint-tag" contenteditable="false">块撤回</span><span class="hint-text" contenteditable="false">已识别为连续变更块（${count}行），可一键撤回</span></span></div>`;
+          const lsHtml = (columnType === 'left') ? '' : '<span class="ls"></span>';
+          return `<div class="dl revert-block-hint">${actions}${lsHtml}<span class="ln"></span><span class="lc" contenteditable="false"><span class="hint-tag" contenteditable="false">块撤回</span><span class="hint-text" contenteditable="false">已识别为连续变更块（${count}行），可一键撤回</span></span></div>`;
         };
 
         while (i < Math.max(leftLines.length, rightLines.length)) {
@@ -10488,8 +10537,9 @@
             // 删除行：右侧视觉上通常为空，但撤回/勾选仍应出现在右侧（使用左侧元数据）
             const isRemoved = (Lj && Lj.type === 'removed');
             const rightRevert = rightShow || isRemoved;
-            // 删除行在右侧用 removed 类型的空占位行，保证 ls/背景色与左侧一致且不受 .empty opacity 影响
-            const rightVisual = Rj || (isRemoved ? {type:'removed', num:'', text:''} : {type:'empty', num:'', text:''});
+            // 删除行在右侧必须用 removed 类型的空占位行（即便 Rj 已存在但为 empty），
+            // 否则会渲染成 .dl.empty 导致没有红色背景和 '-' 标识。
+            const rightVisual = isRemoved ? {type:'removed', num:'', text:''} : (Rj || {type:'empty', num:'', text:''});
             rightParts.push(renderRow(rightVisual, 'right', rightRevert, true, isRemoved ? Lj : null));
           }
           i = j;
@@ -10528,6 +10578,13 @@
         updateAllBlockCheckboxes(view, file.path, hunks);
         setupEditableLineEditing();
         try { if (typeof window.__gmApplyCodeFolding === 'function') window.__gmApplyCodeFolding(); } catch (e) {}
+        try {
+          if (typeof window.__gmAfterDiffRenderHook === 'function') {
+            const fn = window.__gmAfterDiffRenderHook;
+            window.__gmAfterDiffRenderHook = null;
+            fn();
+          }
+        } catch (e) {}
         try {
           const first = view.querySelector('.editable-line');
           if (first && typeof first.focus === 'function') first.focus({ preventScroll: true });
@@ -10995,6 +11052,13 @@
         updateAllBlockCheckboxes(view, file.path, hunks);
         setupEditableLineEditing();
         try { if (typeof window.__gmApplyCodeFolding === 'function') window.__gmApplyCodeFolding(); } catch (e) {}
+        try {
+          if (typeof window.__gmAfterDiffRenderHook === 'function') {
+            const fn = window.__gmAfterDiffRenderHook;
+            window.__gmAfterDiffRenderHook = null;
+            fn();
+          }
+        } catch (e) {}
       });
     }
   }
@@ -11005,6 +11069,11 @@
       const f = files[curFile];
       if (!f || !f.path) return;
       if (filepath && f.path !== filepath) return;
+
+      const viewEl = document.getElementById('diffView');
+      const prevScroll = (typeof window.__gmCaptureDiffScrollState === 'function')
+              ? window.__gmCaptureDiffScrollState(viewEl)
+              : null;
 
       const computeStatsFromHunks = (hunks) => {
         let a = 0, r = 0, m = 0;
@@ -11078,6 +11147,18 @@
       renderFileList();
 
       const changeLocations = buildChangeLocationsFromHunks(curHunks);
+
+      try {
+        window.__gmAfterDiffRenderHook = () => {
+          try {
+            const v2 = document.getElementById('diffView');
+            if (v2 && prevScroll && typeof window.__gmRestoreDiffScrollState === 'function') {
+              window.__gmRestoreDiffScrollState(v2, prevScroll);
+            }
+          } catch (e2) {}
+        };
+      } catch (e) {}
+
       renderDiffWithFullContext(f, curHunks, false, changeLocations);
     } catch (e) {
     }
@@ -11298,9 +11379,39 @@
 
         skipNextAutoDiffRefresh = true;
         if (!wsConnected) {
-          await refreshFilesOnly(false);
+          await refreshFilesOnly(false, false);
         }
-        await refreshCurrentDiffNoFlicker(f.path, files[curFile] ? files[curFile].status : undefined);
+
+        try {
+          const ctxParam = (diffMode === 'unified') ? `&ctx=${encodeURIComponent(changeViewCtx)}` : '';
+          const st = (files[curFile] && files[curFile].status !== undefined) ? files[curFile].status : f.status;
+          const diffRes = await GET(`/api/diff?path=${encodeURIComponent(f.path)}&status=${st}${ctxParam}`);
+          if (!(diffRes && diffRes.error)) {
+            curHunks = (diffRes && diffRes.hunks) ? diffRes.hunks : [];
+            ensureDefaultHunkSelection(f.path, curHunks.length);
+            try {
+              let a = 0, r = 0, m = 0;
+              (curHunks || []).forEach(h => {
+                (h && h.lines ? h.lines : []).forEach(l => {
+                  if (!l || !l.type) return;
+                  if (l.type === 'added') a++;
+                  else if (l.type === 'removed') r++;
+                  else if (l.type === 'modified') m++;
+                });
+              });
+              f.added = a;
+              f.removed = r;
+              f.modified = m;
+              try { fileStatsOverrideByPath.set(f.path, { added: a, removed: r, modified: m }); } catch (e) {}
+            } catch (e) {}
+            updateStats();
+            renderFileList();
+
+            await refreshCurrentDiffNoFlicker(f.path, files[curFile] ? files[curFile].status : undefined);
+          }
+        } catch (e) {
+          await refreshCurrentDiffNoFlicker(f.path, files[curFile] ? files[curFile].status : undefined);
+        }
       } else {
         toast(`保存失败: ${res.msg || res.error}`, 'err');
       }
@@ -12187,6 +12298,9 @@
           const prevPos = (typeof window.__gmGetActiveLineAndCol === 'function') ? window.__gmGetActiveLineAndCol(host) : { idx: -1, col: 0 };
           setTimeout(() => {
             try {
+              try {
+                if (window.__plainEditorFilename && document.getElementById('plainEditorTextarea')) return;
+              } catch (e0) {}
               const host2 = document.getElementById('diffView');
               if (!host2) return;
               host2.scrollTop = prevScrollTop;
@@ -12535,6 +12649,9 @@
           const prevPos = (typeof window.__gmGetActiveLineAndCol === 'function') ? window.__gmGetActiveLineAndCol(host) : { idx: -1, col: 0 };
           setTimeout(() => {
             try {
+              try {
+                if (window.__plainEditorFilename && document.getElementById('plainEditorTextarea')) return;
+              } catch (e0) {}
               const host2 = document.getElementById('diffView');
               if (!host2) return;
               host2.scrollTop = prevScrollTop;
@@ -12748,6 +12865,15 @@
           try {
             await saveFile();
             window.__dirtyEdits = false;
+
+            try {
+              const ctxParam = (diffMode === 'unified') ? `&ctx=${encodeURIComponent(changeViewCtx)}` : '';
+              const diffRes = await GET(`/api/diff?path=${encodeURIComponent(filepath)}&status=${status}${ctxParam}`);
+              if (diffRes && diffRes.hunks) {
+                curHunks = diffRes.hunks;
+              }
+              await refreshCurrentDiffNoFlicker(filepath, status);
+            } catch (e2) {}
           } catch (e) {
             console.error('代码块撤回后立即保存失败:', e);
           }
@@ -12762,6 +12888,9 @@
           // Click-triggered revert may keep focus on the button; restore focus without jumping.
           setTimeout(() => {
             try {
+              try {
+                if (window.__plainEditorFilename && document.getElementById('plainEditorTextarea')) return;
+              } catch (e0) {}
               const host2 = document.getElementById('diffView');
               if (!host2) return;
               host2.scrollTop = prevScrollTop;
@@ -14782,7 +14911,7 @@
     const ta = document.getElementById('plainEditorTextarea');
     let content = ta ? String(ta.value || '') : '';
     const filename = window.__plainEditorFilename;
-    
+
     // 外部文件:尝试使用File System Access API保存
     if (window.__plainEditorIsExternal) {
       // 优先复用已获得的文件句柄；避免每次保存都弹出选择器
@@ -15145,22 +15274,130 @@
       return Math.max(1, t.split('\n').length);
     };
 
+    const __gmGetLineHeightPx = () => {
+      let lh = 18;
+      try {
+        const lhRaw = (window.getComputedStyle && ta) ? window.getComputedStyle(ta).lineHeight : '';
+        const n = parseFloat(String(lhRaw || '').replace('px',''));
+        if (Number.isFinite(n) && n > 0) lh = n;
+      } catch (e) {}
+      return lh;
+    };
+
+    const __gmPlainUseVirtualGutter = () => {
+      try {
+        const n = getLineCount(ta ? ta.value : text);
+        return n > 5000;
+      } catch (e) { return false; }
+    };
+
+    let __gmPlainGutterVirtual = {
+      enabled: false,
+      inner: null,
+      lineHeight: 18,
+      lastFrom: 0,
+      lastTo: 0,
+      lastTop: -1,
+      onScroll: null,
+    };
+
     const renderGutter = () => {
       if (!gutter || !ta) return;
+
       const n = getLineCount(ta.value);
-      let html = '';
-      for (let i = 1; i <= n; i++) {
-        html += `<div class="n">${i}</div>`;
+      const useVirtual = __gmPlainUseVirtualGutter();
+
+      if (!useVirtual) {
+        __gmPlainGutterVirtual.enabled = false;
+        let html = '';
+        for (let i = 1; i <= n; i++) html += `<div class="n">${i}</div>`;
+        gutter.innerHTML = html;
+        return;
       }
-      gutter.innerHTML = html;
+
+      // Virtual gutter: only render visible line numbers (+ buffer) to avoid huge DOM.
+      const dv = document.getElementById('diffView');
+      if (!dv) return;
+
+      __gmPlainGutterVirtual.enabled = true;
+      __gmPlainGutterVirtual.lineHeight = __gmGetLineHeightPx();
+
+      if (!__gmPlainGutterVirtual.inner || __gmPlainGutterVirtual.inner.parentElement !== gutter) {
+        gutter.innerHTML = '';
+        const inner = document.createElement('div');
+        inner.id = 'plainEditorGutterInner';
+        try { inner.style.position = 'relative'; } catch (e) {}
+        try { inner.style.willChange = 'transform'; } catch (e) {}
+        gutter.appendChild(inner);
+        __gmPlainGutterVirtual.inner = inner;
+        __gmPlainGutterVirtual.lastFrom = 0;
+        __gmPlainGutterVirtual.lastTo = 0;
+        __gmPlainGutterVirtual.lastTop = -1;
+      }
+
+      const inner = __gmPlainGutterVirtual.inner;
+      const lh = __gmPlainGutterVirtual.lineHeight;
+      const buffer = 30;
+
+      const update = () => {
+        try {
+          const top = Number(dv.scrollTop || 0);
+          if (Math.abs(top - __gmPlainGutterVirtual.lastTop) < 4) return;
+          __gmPlainGutterVirtual.lastTop = top;
+
+          const viewLines = Math.ceil((dv.clientHeight || 0) / lh) + buffer;
+          const from = Math.max(1, Math.floor(top / lh) + 1 - Math.floor(buffer / 2));
+          const to = Math.min(n, from + viewLines);
+
+          if (from === __gmPlainGutterVirtual.lastFrom && to === __gmPlainGutterVirtual.lastTo) {
+            try { inner.style.transform = `translateY(${(from - 1) * lh}px)`; } catch (e) {}
+            return;
+          }
+
+          __gmPlainGutterVirtual.lastFrom = from;
+          __gmPlainGutterVirtual.lastTo = to;
+
+          let html = '';
+          for (let i = from; i <= to; i++) html += `<div class="n">${i}</div>`;
+          inner.innerHTML = html;
+          try { inner.style.transform = `translateY(${(from - 1) * lh}px)`; } catch (e) {}
+
+          // re-apply find marks for visible nodes only
+          try { __gmApplyPlainEditorGutterMarks(); } catch (e) {}
+        } catch (e) {}
+      };
+
+      // Ensure only one scroll handler is attached
+      try {
+        if (__gmPlainGutterVirtual.onScroll) {
+          dv.removeEventListener('scroll', __gmPlainGutterVirtual.onScroll);
+        }
+      } catch (e) {}
+
+      __gmPlainGutterVirtual.onScroll = () => {
+        try {
+          requestAnimationFrame(() => {
+            try { update(); } catch (e2) {}
+          });
+        } catch (e2) { try { update(); } catch (e3) {} }
+      };
+
+      try { dv.addEventListener('scroll', __gmPlainGutterVirtual.onScroll, { passive: true }); } catch (e) {}
+      update();
     };
+
+    try { window.__gmPlainRenderGutter = renderGutter; } catch (e) {}
 
     const syncScroll = () => {
       if (!gutter) return;
       const dv = document.getElementById('diffView');
       if (!dv) return;
+      // In virtual gutter mode, we don't scroll the gutter itself.
+      if (__gmPlainGutterVirtual && __gmPlainGutterVirtual.enabled) return;
       gutter.scrollTop = dv.scrollTop;
     };
+
+    try { window.__gmPlainSyncScroll = syncScroll; } catch (e) {}
 
     const __gmPlainReplaceRange = (start, end, replacement, selMode) => {
       if (!ta) return;
@@ -15671,8 +15908,8 @@
       try {
         const __gmPlainResizeToContent = () => {
           try {
-            const v = String(ta.value || '');
-            const lines = Math.max(1, v.split('\n').length);
+            const idxObj = __gmEnsurePlainLineIndex(ta);
+            const lines = Math.max(1, idxObj && idxObj.starts ? idxObj.starts.length : 1);
             const cs = window.getComputedStyle ? window.getComputedStyle(ta) : null;
             const lh = parseFloat(cs ? (cs.lineHeight || '18') : '18') || 18;
             const pt = parseFloat(cs ? (cs.paddingTop || '0') : '0') || 0;
@@ -15719,6 +15956,7 @@
       ta.addEventListener('input', (ev) => {
         window.__dirtyEdits = true;
         try { window.__plainEditorExternalStaleWarned = false; } catch (e) {}
+        try { __gmSchedulePlainLineIndexRebuild(ta); } catch (e) {}
 
         try {
           const it = ev && ev.inputType ? String(ev.inputType) : '';
@@ -16207,13 +16445,11 @@
           const gutter = document.getElementById('plainEditorGutter');
           if (ta) {
             ta.value = String(txt || '');
+            try { __gmEnsurePlainLineIndex(ta, { force: true }); } catch (e2) {}
             try {
               if (gutter) {
-                const n = Math.max(1, String(ta.value || '').split('\n').length);
-                let html = '';
-                for (let i = 1; i <= n; i++) html += `<div class="n">${i}</div>`;
-                gutter.innerHTML = html;
-                gutter.scrollTop = ta.scrollTop;
+                if (typeof window.__gmPlainRenderGutter === 'function') window.__gmPlainRenderGutter();
+                if (typeof window.__gmPlainSyncScroll === 'function') window.__gmPlainSyncScroll();
               }
             } catch (e2) {}
             toast('外部文件已更新，已同步到编辑器', 'info');
@@ -16249,7 +16485,7 @@
     let altPressed = false;
     let altTimeout = null;
     let isDragging = false;
-    let scrollInterval = null;
+    let scrollRaf = 0;
     let currentVelocity = { x: 0, y: 0 };
 
     const MAX_DISTANCE = 70; // 摇杆最大拖拽距离（像素）
@@ -16371,17 +16607,20 @@
 
     // 开始连续滚动
     function startScrollLoop() {
-      if (scrollInterval) return;
-      scrollInterval = setInterval(() => {
-        performScroll();
-      }, 16); // 约 60fps
+      if (scrollRaf) return;
+      const loop = () => {
+        try { performScroll(); } catch (e) {}
+        if (!scrollRaf) return;
+        scrollRaf = requestAnimationFrame(loop);
+      };
+      scrollRaf = requestAnimationFrame(loop);
     }
 
     // 停止滚动
     function stopScrollLoop() {
-      if (scrollInterval) {
-        clearInterval(scrollInterval);
-        scrollInterval = null;
+      if (scrollRaf) {
+        try { cancelAnimationFrame(scrollRaf); } catch (e) {}
+        scrollRaf = 0;
       }
       currentVelocity = { x: 0, y: 0 };
     }
