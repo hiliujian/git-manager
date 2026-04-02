@@ -1194,6 +1194,8 @@
     .sp-readonly{border-right:none;}
     .sp-readonly,
     .sp-readonly *{user-select:none;-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;cursor:default;}
+    .sp-readonly .lc,
+    .sp-readonly .lc *{user-select:text;-webkit-user-select:text;-moz-user-select:text;-ms-user-select:text;cursor:text;}
     
     /* 可编辑面板的标题也不可选 */
     .sp-editable > .sp-hdr{user-select:none;-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;cursor:default;}
@@ -2534,7 +2536,21 @@
 
       const nextIdx = Math.max(0, Math.min((oldIdx >= 0 ? oldIdx : 0), recentFiles.length - 1));
       const nextItem = recentFiles[nextIdx];
-      if (!nextItem) return;
+      if (!nextItem) {
+        if (wasActiveExternal) {
+          try { performCloseEditor(p); } catch (e2) {}
+        }
+        if (wasActiveRepo) {
+          try {
+            curFile = null;
+            curHunks = [];
+            curFileContent = '';
+            clearDiff();
+            renderFileList();
+          } catch (e3) {}
+        }
+        return;
+      }
 
       if (nextItem.external) {
         let fh = null;
@@ -12031,6 +12047,10 @@
     try {
       const view = document.getElementById('diffView');
       if (view) {
+        try {
+          const next = Number(__nn(view.__gmRenderToken, 0)) + 1;
+          view.__gmRenderToken = next;
+        } catch (e2) {}
         view.setAttribute('data-ce-host', '0');
         view.setAttribute('contenteditable', 'false');
       }
