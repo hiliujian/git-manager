@@ -7716,6 +7716,7 @@
         }
       }
     }
+    return true;
   }
 
   // ── State ────────────────────────────────────────────────────────────────────
@@ -11430,9 +11431,11 @@
         }
       } else {
         toast(`保存失败: ${res.msg || res.error}`, 'err');
+        return false;
       }
     } catch (error) {
       toast(`保存失败: ${error.message}`, 'err');
+      return false;
     } finally {
       window.__saveFileInFlight = false;
       try { window.__gmJustDidUndoRedo = false; } catch (e) {}
@@ -12106,12 +12109,92 @@
   };
 
   const __gmApplyRevertMultiLinesToContent = (content, hunk, targetLineIdxListDesc) => {
-    let next = content;
-    const idxs = Array.isArray(targetLineIdxListDesc) ? targetLineIdxListDesc : [];
-    for (let i = 0; i < idxs.length; i++) {
-      next = __gmApplyRevertLineToContent(next, hunk, idxs[i]);
+    try {
+      const eol = __gmDetectEol(content);
+      const normalized = String(content || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+      const hadTrailingNewline = /\n$/.test(normalized);
+      const lines = normalized.split('\n');
+      const hLines = (hunk && hunk.lines) ? hunk.lines : [];
+      const idxs = Array.isArray(targetLineIdxListDesc) ? targetLineIdxListDesc : [];
+      const idxSet = new Set(idxs);
+
+      const toInt = (x) => {
+        try {
+          if (x === null || x === undefined) return null;
+          const n = Number(x);
+          if (!Number.isFinite(n)) return null;
+          return Math.trunc(n);
+        } catch (e) {
+          return null;
+        }
+      };
+
+      const findInsertAtForRemoved = (lineIdx) => {
+        let insertAt = null;
+        for (let j = lineIdx + 1; j < hLines.length; j++) {
+          const nxt = hLines[j] || {};
+          const nNew = toInt(nxt.new);
+          if (nNew !== null) {
+            insertAt = Math.max(0, nNew - 1);
+            break;
+          }
+        }
+        if (insertAt === null) {
+          for (let j = lineIdx - 1; j >= 0; j--) {
+            const prv = hLines[j] || {};
+            const pNew = toInt(prv.new);
+            if (pNew !== null) {
+              insertAt = Math.max(0, pNew);
+              break;
+            }
+          }
+        }
+        if (insertAt === null) insertAt = lines.length;
+        insertAt = Math.max(0, Math.min(insertAt, lines.length));
+        return insertAt;
+      };
+
+      // Apply in descending order of impacted positions to keep indexes stable.
+      // For added/modified use `new` line number; for removed use neighbor mapping.
+      const targets = [];
+      idxSet.forEach((li) => {
+        const l = hLines[li];
+        if (!l || !l.type) return;
+        const t = String(l.type || '').toLowerCase();
+        if (t === 'context') return;
+        if (t === 'added' || t === 'modified') {
+          const nNew = toInt(l.new);
+          if (nNew === null) return;
+          targets.push({ li, t, pos: nNew - 1 });
+        } else if (t === 'removed') {
+          const insAt = findInsertAtForRemoved(li);
+          targets.push({ li, t, pos: insAt });
+        }
+      });
+
+      targets.sort((a, b) => b.pos - a.pos);
+
+      for (const it of targets) {
+        const l = hLines[it.li] || {};
+        if (it.t === 'added') {
+          if (it.pos >= 0 && it.pos < lines.length) lines.splice(it.pos, 1);
+        } else if (it.t === 'modified') {
+          if (it.pos >= 0 && it.pos < lines.length) lines[it.pos] = String(__nn(l.old_text, ''));
+        } else if (it.t === 'removed') {
+          const txt = String(__nn(l.text, __nn(l.old_text, '')));
+          lines.splice(Math.min(Math.max(0, it.pos), lines.length), 0, txt);
+        }
+      }
+
+      let out = lines.join('\n');
+      if (!hadTrailingNewline) {
+        out = out.replace(/\n$/, '');
+      }
+      out = out.replace(/\n/g, eol);
+      return out;
+    } catch (e) {
+      return content;
     }
-    return next;
   };
 
   const __gmApplyRevertHunkToContent = (content, hunk) => {
@@ -12231,6 +12314,7 @@
     const originalHunks = JSON.parse(JSON.stringify(curHunks));
     const originalFiles = JSON.parse(JSON.stringify(files));
     const originalSelectedKeys = new Set(getSelectedCommitLinesSet(filepath));
+    const originalContent = curFileContent;
 
     // 2. 立即更新数据结构（这样重新渲染时就是新数据）
     // NOTE: for removed-line revert, we must keep pointer alignment in renderDiffWithFullContext;
@@ -12303,8 +12387,28 @@
       try {
         (async () => {
           try {
-            await saveFile();
-            window.__dirtyEdits = false;
+            const ok = await saveFile();
+            if (ok) {
+              window.__dirtyEdits = false;
+              return;
+            }
+            try {
+              curHunks = originalHunks;
+              files = originalFiles;
+              curFileContent = originalContent;
+              commitLinesSelectedByPath.set(filepath, new Set(originalSelectedKeys));
+              commitLinesInitByPath.set(filepath, true);
+            } catch (e2) {}
+            try {
+              if (curFile !== null && files[curFile]) {
+                const f = files[curFile];
+                const changeLocations = buildChangeLocationsFromHunks(curHunks);
+                renderDiffWithFullContext(f, curHunks, false, changeLocations);
+              }
+              renderFileList();
+              updateStats();
+            } catch (e2) {}
+            toast('保存失败，已回滚撤回操作', 'err');
           } catch (e) {
             console.error('撤回后立即保存失败:', e);
           }
@@ -12575,6 +12679,7 @@
     const originalHunks = JSON.parse(JSON.stringify(curHunks));
     const originalFiles = JSON.parse(JSON.stringify(files));
     const originalSelectedKeys = new Set(getSelectedCommitLinesSet(filepath));
+    const originalContent = curFileContent;
 
     // 2. 立即更新数据结构（从后往前处理，避免索引变化）
     let hunkWasRemoved = false;
@@ -12654,8 +12759,28 @@
       try {
         (async () => {
           try {
-            await saveFile();
-            window.__dirtyEdits = false;
+            const ok = await saveFile();
+            if (ok) {
+              window.__dirtyEdits = false;
+              return;
+            }
+            try {
+              curHunks = originalHunks;
+              files = originalFiles;
+              curFileContent = originalContent;
+              commitLinesSelectedByPath.set(filepath, new Set(originalSelectedKeys));
+              commitLinesInitByPath.set(filepath, true);
+            } catch (e2) {}
+            try {
+              if (curFile !== null && files[curFile]) {
+                const f = files[curFile];
+                const changeLocations = buildChangeLocationsFromHunks(curHunks);
+                renderDiffWithFullContext(f, curHunks, false, changeLocations);
+              }
+              renderFileList();
+              updateStats();
+            } catch (e2) {}
+            toast('保存失败，已回滚块撤回操作', 'err');
           } catch (e) {
             console.error('块撤回后立即保存失败:', e);
           }
@@ -12825,6 +12950,7 @@
     // 1. 保存原始数据
     const originalHunks = JSON.parse(JSON.stringify(curHunks));
     const originalFiles = JSON.parse(JSON.stringify(files));
+    const originalContent = curFileContent;
 
     // 2. 计算这个hunk影响的统计
     let addedCount = 0, removedCount = 0, modifiedCount = 0;
@@ -12883,7 +13009,25 @@
       try {
         (async () => {
           try {
-            await saveFile();
+            const ok = await saveFile();
+            if (!ok) {
+              try {
+                curHunks = originalHunks;
+                files = originalFiles;
+                curFileContent = originalContent;
+              } catch (e2) {}
+              try {
+                if (curFile !== null && files[curFile]) {
+                  const f = files[curFile];
+                  const changeLocations = buildChangeLocationsFromHunks(curHunks);
+                  renderDiffWithFullContext(f, curHunks, false, changeLocations);
+                }
+                renderFileList();
+                updateStats();
+              } catch (e2) {}
+              toast('保存失败，已回滚代码块撤回操作', 'err');
+              return;
+            }
             window.__dirtyEdits = false;
 
             try {

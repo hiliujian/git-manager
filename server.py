@@ -1756,27 +1756,33 @@ def revert_line(filepath: str, hunk_idx: int, line_idx: int, status: str, ctx_li
     if not full:
         return False, "非法路径"
 
+    # Read file with encoding detection and preserve original encoding.
+    # If the file was decoded with replacement (lossy), forbids revert to avoid corrupting bytes.
     try:
-        with open(full, "r", encoding="utf-8", errors="replace", newline="") as f:
-            cur_lines = f.readlines()
+        if _file_decode_lossy.get(filepath):
+            enc_hint = _file_last_encoding.get(filepath) or "unknown"
+            return False, f"该文件读取时发生编码替换（{enc_hint} + replace），无法安全执行撤回写入。请先用正确编码修复文件后再撤回。"
+    except Exception:
+        pass
+
+    try:
+        content, enc = get_file_content(filepath, return_encoding=True)
+        if content is None:
+            return False, "无法读取文件内容"
+        enc_used = enc or "utf-8"
     except Exception as e:
         return False, str(e)
 
-    eol = "\n"
-    for l in cur_lines:
-        if l.endswith("\r\n"):
-            eol = "\r\n"
-            break
-        if l.endswith("\n"):
-            eol = "\n"
-            break
+    # Keep EOL style based on original content
+    normalized = str(content).replace("\r\n", "\n").replace("\r", "\n")
+    eol = "\r\n" if "\r\n" in str(content) else "\n"
+    cur_lines = normalized.split("\n")
 
     def _ensure_eol(s: str) -> str:
         if s is None:
             s = ""
-        if s.endswith("\r\n") or s.endswith("\n"):
-            return s
-        return s + eol
+        s = str(s)
+        return s
 
     t = (dl.get("type") or "").lower()
     if t == "context":
@@ -1800,18 +1806,13 @@ def revert_line(filepath: str, hunk_idx: int, line_idx: int, status: str, ctx_li
             old_text = dl.get("old_text")
             if old_text is None:
                 return False, "缺少 old_text"
-            ending = ""
-            if cur_lines[idx0].endswith("\r\n"):
-                ending = "\r\n"
-            elif cur_lines[idx0].endswith("\n"):
-                ending = "\n"
-            cur_lines[idx0] = (old_text + ending) if ending else _ensure_eol(old_text)
+            cur_lines[idx0] = str(old_text)
 
     elif t == "removed":
         ins_text = dl.get("text")
         if ins_text is None:
             return False, "缺少 text"
-        ins_line = _ensure_eol(ins_text)
+        ins_line = str(ins_text)
 
         insert_at = None
         for j in range(line_idx + 1, len(lines)):
@@ -1843,8 +1844,11 @@ def revert_line(filepath: str, hunk_idx: int, line_idx: int, status: str, ctx_li
         return False, "不支持的行类型"
 
     try:
-        with open(full, "w", encoding="utf-8", errors="replace", newline="") as f:
-            f.writelines(cur_lines)
+        out_txt = "\n".join(cur_lines)
+        out_txt = out_txt.replace("\n", eol)
+        ok, msg = save_file_content(filepath, out_txt, force_encoding=enc_used)
+        if not ok:
+            return False, msg
     except Exception as e:
         return False, str(e)
 
