@@ -607,7 +607,7 @@
     #app.left-collapsed .sidebar .sf-foot{display:none !important;}
 
     #app.right-collapsed #rightPanel{width:34px !important;min-width:34px !important;max-width:34px !important;}
-    #app.right-collapsed #rightPanel .vtabs{justify-content:center;}
+    #app.right-collapsed #rightPanel .vtabs{padding:0 !important;justify-content:center;}
     #app.right-collapsed #rightPanel .vtab,
     #app.right-collapsed #rightPanel .vtabs > div[style]{display:none !important;}
     #app.right-collapsed #rightPanel .vtab-content{display:none !important;}
@@ -1617,8 +1617,10 @@
     /* ── RIGHT PANEL ── */
     .right-panel{width:260px;min-width:180px;max-width:400px;background:var(--bg2);
       border-left:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0;}
-    .vtabs{display:flex;border-bottom:1px solid var(--border);flex-shrink:0;}
-    .vtab{padding:7px 14px;font-size:11px;font-weight:600;color:var(--text2);cursor:pointer;
+    .vtabs{height:30px;min-height:30px;display:flex;align-items:center;padding:0 10px;gap:6px;
+      background:var(--bg3);border-bottom:1px solid var(--border);flex-shrink:0;}
+    .vtab{height:30px;display:flex;align-items:center;justify-content:center;padding:0 14px;
+      font-size:11px;font-weight:600;color:var(--text2);cursor:pointer;
       border-bottom:2px solid transparent;transition:all .12s;flex:1;text-align:center;}
     .vtab:hover{color:var(--text);}
     .vtab.active{color:var(--accent);border-bottom-color:var(--accent);}
