@@ -766,6 +766,12 @@
     .recent-file-status.D{background:#2d0d0d;color:#f27272;}
     .recent-file-status.R{background:#251960;color:#b48ef7;}
     .recent-file-status.U{background:#3d2d0d;color:#f0b429;}
+
+    [data-theme="light"] .recent-file-status.M{background:#d0ebff;color:#1971c2;}
+    [data-theme="light"] .recent-file-status.A{background:#d3f9d8;color:#0ca678;}
+    [data-theme="light"] .recent-file-status.D{background:#ffe3e3;color:#c92a2a;}
+    [data-theme="light"] .recent-file-status.R{background:#e5dbff;color:#7950f2;}
+    [data-theme="light"] .recent-file-status.U{background:#fff3bf;color:#e67700;}
     .recent-file-info{
       flex:1;
       min-width:0;
@@ -1697,6 +1703,11 @@
       word-break:break-word;overflow-wrap:break-word;}
     .modal-btns{display:flex;gap:7px;justify-content:flex-end;}
 
+    [data-theme="light"] .modal{
+      box-shadow:0 24px 64px rgba(0,0,0,0.18);
+      border-color:var(--border2);
+    }
+
     /* ── TOAST ── */
     .toast{position:fixed;bottom:16px;right:16px;background:var(--bg3);
       border:1px solid var(--border);border-radius:6px;padding:9px 14px;
@@ -1706,6 +1717,12 @@
     .toast.err{border-left:3px solid var(--danger);color:var(--danger);}
     .toast.info{border-left:3px solid var(--accent);color:var(--accent);}
     .toast.warn{border-left:3px solid var(--warn);color:var(--warn);}
+
+    [data-theme="light"] .toast{
+      background:#ffffff;
+      border-color:var(--border2);
+      box-shadow:0 12px 34px rgba(0,0,0,0.16);
+    }
     @keyframes tup{from{transform:translateY(8px);opacity:0;}to{transform:translateY(0);opacity:1;}}
     
     /* 拖拽提示Toast */
