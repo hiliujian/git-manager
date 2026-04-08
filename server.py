@@ -82,6 +82,29 @@ _changed_files_cache = {
     "files": None,
 }
 
+
+def invalidate_changed_files_cache():
+    try:
+        _changed_files_cache["ts"] = 0.0
+        _changed_files_cache["files"] = None
+    except Exception:
+        pass
+
+
+def notify_files_updated():
+    try:
+        if not REPO_PATH:
+            return
+        if not ws_clients:
+            return
+        files = get_changed_files_cached(max_age_sec=0)
+        broadcast_to_clients({
+            'type': 'files_updated',
+            'files': files
+        })
+    except Exception:
+        pass
+
 # 最近一次读取文件的编码/是否发生 lossy(replace) 解码。
 # 说明：为保持前端显示体验，读取时可能用 errors="replace"。
 # 但若发生替换，文本已无法无损还原原始字节，此时必须阻止保存以免写坏文件。
@@ -813,10 +836,35 @@ def save_file_content(filepath: str, content: str, force_encoding: str = None):
                 logger.error(f"内容包含无法用 {enc_used} 编码的字符: {filepath} - {e}")
                 return False, f"内容包含无法用 {enc_used} 编码的字符: {e}"
 
-        # Write exact newlines without implicit translation
         logger.debug(f"准备写入文件: {full}, 编码: {enc_used}, 换行符: {repr(target_eol)}, 内容长度: {len(txt)}")
-        with open(full, "w", encoding=enc_used, newline="") as f:
-            f.write(txt)
+
+        tmp_path = None
+        try:
+            base_dir = os.path.dirname(full)
+            tmp_name = f".{os.path.basename(full)}.tmp.{os.getpid()}.{int(time.time() * 1000)}"
+            tmp_path = os.path.join(base_dir, tmp_name)
+
+            data_bytes = txt.encode(enc_used)
+            with open(tmp_path, "wb") as f:
+                f.write(data_bytes)
+                try:
+                    f.flush()
+                except Exception:
+                    pass
+                try:
+                    os.fsync(f.fileno())
+                except Exception:
+                    pass
+
+            os.replace(tmp_path, full)
+            tmp_path = None
+        finally:
+            if tmp_path:
+                try:
+                    if os.path.exists(tmp_path):
+                        os.remove(tmp_path)
+                except Exception:
+                    pass
         
         if transcoded and (enc_used != target_enc):
             logger.info(f"✓ 文件保存成功: {filepath} (编码: {target_enc} -> {enc_used}, 换行符: {repr(target_eol)}, {len(txt)}字符)")
@@ -1068,9 +1116,25 @@ def parse_diff(text):
             pass
 
         try:
-            return difflib.SequenceMatcher(None, a, b, autojunk=False).ratio()
+            seq = difflib.SequenceMatcher(None, a, b, autojunk=False).ratio()
         except Exception:
-            return 0.0
+            seq = 0.0
+
+        # Token similarity: more tolerant for identifier/number tweaks
+        try:
+            ta = re.findall(r"[A-Za-z_][A-Za-z_0-9]*|\d+|\S", a)
+            tb = re.findall(r"[A-Za-z_][A-Za-z_0-9]*|\d+|\S", b)
+            if not ta or not tb:
+                return seq
+            sa = set(ta)
+            sb = set(tb)
+            inter = len(sa & sb)
+            if inter <= 0:
+                return seq
+            token_sim = (2.0 * inter) / (len(sa) + len(sb))
+            return max(seq, token_sim)
+        except Exception:
+            return seq
 
     def flush_change_block():
         nonlocal removed_block, added_block, ol, nl, cur
@@ -1113,7 +1177,18 @@ def parse_diff(text):
             added_lines = added_block[ai:a_end]
 
             sm = difflib.SequenceMatcher(a=removed_lines, b=added_lines, autojunk=False)
-            for tag, i1, i2, j1, j2 in sm.get_opcodes():
+            opcodes = list(sm.get_opcodes())
+            op_i = 0
+            while op_i < len(opcodes):
+                tag, i1, i2, j1, j2 = opcodes[op_i]
+                # Merge adjacent delete+insert into replace (common for single-line modifications)
+                if tag == "delete" and (op_i + 1) < len(opcodes):
+                    t2, ii1, ii2, jj1, jj2 = opcodes[op_i + 1]
+                    if t2 == "insert" and ii1 == i2 and jj1 == j1:
+                        tag = "replace"
+                        j2 = jj2
+                        op_i += 1
+
                 if tag == "equal":
                     for k in range(i2 - i1):
                         cur["lines"].append({"type": "context", "old": ol, "new": nl, "text": removed_lines[i1 + k]})
@@ -1138,11 +1213,13 @@ def parse_diff(text):
                         for txt in a_seg:
                             cur["lines"].append({"type": "added", "old": None, "new": nl, "text": txt})
                             nl += 1
+                        op_i += 1
                         continue
                     if not a_seg:
                         for txt in r_seg:
                             cur["lines"].append({"type": "removed", "old": ol, "new": None, "text": txt})
                             ol += 1
+                        op_i += 1
                         continue
 
 
@@ -1150,7 +1227,7 @@ def parse_diff(text):
                     for rr, r_txt in enumerate(r_seg):
                         for aa, a_txt in enumerate(a_seg):
                             sim = _line_similarity(r_txt, a_txt)
-                            if sim >= 0.25:
+                            if sim >= 0.20:
                                 pairs.append((sim, rr, aa))
 
                     pairs.sort(reverse=True)
@@ -1204,6 +1281,8 @@ def parse_diff(text):
                             cur["lines"].append({"type": "added", "old": None, "new": nl, "text": a_seg[a_i]})
                             nl += 1
                             a_i += 1
+
+                op_i += 1
             
             ri = r_end
             ai = a_end
@@ -2201,12 +2280,59 @@ class Handler(BaseHTTPRequestHandler):
     # 禁用默认的日志输出
     def log_message(self, format, *args):
         # 使用我们的 logger 记录 HTTP 请求
-        logger.info(f"{self.address_string()} - {format % args}")
+        rid = getattr(self, "_req_id", None)
+        if rid:
+            logger.info(f"[{rid}] {self.address_string()} - {format % args}")
+        else:
+            logger.info(f"{self.address_string()} - {format % args}")
+
+    def _ensure_req_id(self):
+        try:
+            rid = getattr(self, "_req_id", None)
+            if rid:
+                return rid
+            rid = (self.headers.get("X-Req-Id") or "").strip()
+            if not rid:
+                rid = f"{int(time.time() * 1000)}-{os.getpid()}-{threading.get_ident()}"
+            self._req_id = rid
+            return rid
+        except Exception:
+            return None
 
     def send_json(self, data, status=200):
         """发送 JSON 响应"""
         try:
-            body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+            rid = self._ensure_req_id()
+
+            payload = data
+            if isinstance(data, dict):
+                try:
+                    if "req_id" not in data and rid:
+                        data["req_id"] = rid
+                except Exception:
+                    pass
+
+                need_wrap = not ("ok" in data and "data" in data and "error" in data)
+                if need_wrap:
+                    err = data.get("error")
+                    if err is None and data.get("ok") is False:
+                        err = data.get("msg") or "请求失败"
+                    ok_val = data.get("ok")
+                    if ok_val is None:
+                        ok_val = (err is None)
+                    payload = {
+                        "ok": bool(ok_val),
+                        "data": data,
+                        "error": err,
+                        "req_id": rid,
+                    }
+                    payload.update(data)
+                else:
+                    if rid and ("req_id" not in data or not data.get("req_id")):
+                        data["req_id"] = rid
+                    payload = data
+
+            body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", len(body))
@@ -2216,9 +2342,15 @@ class Handler(BaseHTTPRequestHandler):
             
             # 记录响应
             if status >= 400:
-                logger.warning(f"响应错误 {status}: {self.path} - {data}")
+                if rid:
+                    logger.warning(f"[{rid}] 响应错误 {status}: {self.path} - {payload}")
+                else:
+                    logger.warning(f"响应错误 {status}: {self.path} - {payload}")
             else:
-                logger.debug(f"响应成功 {status}: {self.path}")
+                if rid:
+                    logger.debug(f"[{rid}] 响应成功 {status}: {self.path}")
+                else:
+                    logger.debug(f"响应成功 {status}: {self.path}")
         except Exception as e:
             logger.error(f"发送 JSON 响应失败: {e}", exc_info=True)
 
@@ -2247,12 +2379,17 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Req-Id")
         self.end_headers()
 
     def do_GET(self):
         """处理 GET 请求"""
-        logger.info(f"收到 GET 请求: {self.path}")
+        self._ensure_req_id()
+        rid = getattr(self, "_req_id", None)
+        if rid:
+            logger.info(f"[{rid}] 收到 GET 请求: {self.path}")
+        else:
+            logger.info(f"收到 GET 请求: {self.path}")
         parsed = urlparse(self.path)
         p  = parsed.path
         qs = parse_qs(parsed.query)
@@ -2386,7 +2523,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         """处理 POST 请求"""
         global REPO_PATH
-        logger.info(f"收到 POST 请求: {self.path}")
+        self._ensure_req_id()
+        rid = getattr(self, "_req_id", None)
+        if rid:
+            logger.info(f"[{rid}] 收到 POST 请求: {self.path}")
+        else:
+            logger.info(f"收到 POST 请求: {self.path}")
         p  = urlparse(self.path).path
         ln = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(ln) if ln else b"{}"
@@ -2440,6 +2582,9 @@ class Handler(BaseHTTPRequestHandler):
                 idx = data.get("hunk_index", -1)
                 st  = data.get("status", "M")
                 ok, msg = revert_hunk(fp, int(idx), st)
+                if ok:
+                    invalidate_changed_files_cache()
+                    notify_files_updated()
                 self.send_json({"ok": ok, "msg": msg})
 
             elif p == "/api/revert_line":
@@ -2454,6 +2599,9 @@ class Handler(BaseHTTPRequestHandler):
                 ctx = data.get("ctx", 5)
                 sig = data.get("signature")
                 ok, msg = revert_line(fp, int(h_idx), int(l_idx), st, ctx, sig)
+                if ok:
+                    invalidate_changed_files_cache()
+                    notify_files_updated()
                 self.send_json({"ok": ok, "msg": msg})
             
             elif p == "/api/revert_multi_lines":
@@ -2468,6 +2616,9 @@ class Handler(BaseHTTPRequestHandler):
                 st  = data.get("status", "M")
                 ctx = data.get("ctx", 5)
                 ok, msg = revert_multi_lines(fp, int(h_idx), int(start_l_idx), int(end_l_idx), st, ctx)
+                if ok:
+                    invalidate_changed_files_cache()
+                    notify_files_updated()
                 self.send_json({"ok": ok, "msg": msg})
             
             elif p == "/api/file_content":
@@ -2502,6 +2653,9 @@ class Handler(BaseHTTPRequestHandler):
                 fp = data.get("path", "")
                 content = data.get("content", "")
                 ok, msg = save_file_content(fp, content)
+                if ok:
+                    invalidate_changed_files_cache()
+                    notify_files_updated()
                 self.send_json({"ok": ok, "msg": msg})
 
             elif p == "/api/delete_file":
@@ -2520,6 +2674,8 @@ class Handler(BaseHTTPRequestHandler):
                         return
                     if os.path.exists(full):
                         os.remove(full)
+                    invalidate_changed_files_cache()
+                    notify_files_updated()
                     self.send_json({"ok": True, "msg": "删除成功"})
                 except Exception as e:
                     logger.error(f"删除文件失败: {fp} - {e}", exc_info=True)
@@ -2531,6 +2687,9 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json({"error":"未打开仓库"}, 400)
                     return
                 ok, msg = revert_file(data.get("path",""), data.get("status","M"))
+                if ok:
+                    invalidate_changed_files_cache()
+                    notify_files_updated()
                 self.send_json({"ok": ok, "msg": msg})
 
             elif p == "/api/revert_all":
@@ -2578,6 +2737,12 @@ class Handler(BaseHTTPRequestHandler):
                     run_git(["clean", "-fd"])
 
                 logger.info(f"还原文件完成，错误数: {len(errors)}")
+                if not errors:
+                    try:
+                        invalidate_changed_files_cache()
+                        notify_files_updated()
+                    except Exception:
+                        pass
                 self.send_json({"ok": not errors, "errors": errors})
 
             elif p == "/api/restore_file":
@@ -2682,6 +2847,11 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json({"error": err or "暂存文件失败"}, 400)
                     return
                 logger.info(f"暂存文件成功: {filepath}")
+                try:
+                    invalidate_changed_files_cache()
+                    notify_files_updated()
+                except Exception:
+                    pass
                 self.send_json({"ok": True})
 
             elif p == "/api/commit":

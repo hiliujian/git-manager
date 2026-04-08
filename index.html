@@ -76,9 +76,12 @@
     [data-theme="light"] .dl.modified .ls {
       color: #1971c2;
     }
-    [data-theme="light"] .ch-add {
+    [data-theme="light"] .im-ch {
       background: rgba(12, 166, 120, 0.2);
       color: #087f5b;
+      border-radius: 3px;
+      padding: 0 1px;
+      white-space: pre;
     }
     [data-theme="light"] .revert-block-hint {
       background: linear-gradient(90deg, rgba(25, 113, 194, 0.08), rgba(201, 42, 42, 0.08), rgba(25, 113, 194, 0.08));
@@ -1549,7 +1552,7 @@
     .dl.removed{background:#240e0e;}
     .dl.removed .ln{background:#301313;}
     .dl.removed .ls{color:#f48771;}
-    .ch-add{background:rgba(78,201,176,.28);color:#b9ffef;border-radius:3px;padding:0 1px;white-space:pre;}
+    .im-ch{background:rgba(78,201,176,.28);color:#b9ffef;border-radius:3px;padding:0 1px;white-space:pre;}
     .dl.modified{background:#1e132e;}
     .dl.modified .ln{background:#2a1a40;}
     .dl.modified .ls{color:#c586c0;}
@@ -2595,6 +2598,7 @@
   let findMatches = [];
   let findPos = -1;
   let findLineHits = null;
+  let __gmFindPreferRoot = '';
   let __gmFindOverlayScrollHandlers = [];
   let __gmFindOverlayRaf = 0;
 
@@ -2603,6 +2607,81 @@
   let findDragStartY = 0;
   let findDragStartLeft = 0;
   let findDragStartTop = 0;
+
+  function __gmFindComputeStartIndex() {
+    try {
+      const n = (findMatches && findMatches.length) ? findMatches.length : 0;
+      if (!n) return 0;
+
+      // Plain editor: start from caret position
+      if (__gmIsPlainEditorMode()) {
+        const ta = document.getElementById('plainEditorTextarea');
+        if (ta) {
+          const cur = Math.max(0, Number(ta.selectionStart || 0));
+          for (let i = 0; i < n; i++) {
+            const m = findMatches[i];
+            if (m && m.type === 'ta') {
+              const s = Math.max(0, Number(m.start || 0));
+              if (s >= cur) return i;
+            }
+          }
+        }
+        return 0;
+      }
+
+      // Diff view: start from current scroll position
+      const dv = document.getElementById('diffView');
+      if (dv) {
+        const top = Math.max(0, Number(dv.scrollTop || 0));
+        const prefer = String(__gmFindPreferRoot || '');
+        const preferSel = prefer ? `#${prefer}` : '';
+
+        // Pass 1: prefer column + visible
+        if (preferSel) {
+          for (let i = 0; i < n; i++) {
+            const el = findMatches[i];
+            if (!el || !el.getBoundingClientRect) continue;
+            if (!(el.closest && el.closest(preferSel))) continue;
+            const y = Math.max(0, Number(el.offsetTop || 0));
+            if (y >= top - 2) return i;
+          }
+          // Pass 2: prefer column + any
+          for (let i = 0; i < n; i++) {
+            const el = findMatches[i];
+            if (!el || !el.getBoundingClientRect) continue;
+            if (el.closest && el.closest(preferSel)) return i;
+          }
+        }
+
+        // Pass 3: any column + visible
+        for (let i = 0; i < n; i++) {
+          const el = findMatches[i];
+          if (!el || !el.getBoundingClientRect) continue;
+          const y = Math.max(0, Number(el.offsetTop || 0));
+          if (y >= top - 2) return i;
+        }
+      }
+      return 0;
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  function gotoFindFromCurrent() {
+    try {
+      if (!findMatches || !findMatches.length) {
+        findPos = -1;
+        updateFindMeta();
+        return;
+      }
+      const startIdx = __gmFindComputeStartIndex();
+      // gotoFind() is delta-based; set base position so that +1 lands on startIdx
+      findPos = Math.max(-1, Math.min(findMatches.length - 1, Number(startIdx) - 1));
+      gotoFind(1);
+    } catch (e) {
+      try { gotoFind(1); } catch (e2) {}
+    }
+  }
 
   function __gmIsPlainEditorMode() {
     const ta = document.getElementById('plainEditorTextarea');
@@ -2722,20 +2801,20 @@
     input.addEventListener('input', () => {
       findQuery = input.value || '';
       rebuildFindMatches();
-      gotoFind(0);
+      gotoFindFromCurrent();
     }, true);
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
         e.preventDefault();
-        if (e.shiftKey) gotoFind(findPos - 1);
-        else gotoFind(findPos + 1);
+        if (e.shiftKey) gotoFind(-1);
+        else gotoFind(1);
       } else if (e.key === 'Escape') {
         e.preventDefault();
         closeFindBar();
       }
     }, true);
-    prevBtn.addEventListener('click', () => gotoFind(findPos - 1));
-    nextBtn.addEventListener('click', () => gotoFind(findPos + 1));
+    prevBtn.addEventListener('click', () => gotoFind(-1));
+    nextBtn.addEventListener('click', () => gotoFind(1));
     closeBtn.addEventListener('click', closeFindBar);
 
     return findBarEl;
@@ -2756,9 +2835,24 @@
           const e = Number(ta.selectionEnd || 0);
           if (e > s) selText = String(ta.value || '').slice(s, e);
         }
+        __gmFindPreferRoot = '';
       } else {
         const sel = window.getSelection ? window.getSelection() : null;
         selText = sel ? String(sel.toString() || '') : '';
+
+        try {
+          let node = sel ? sel.anchorNode : null;
+          let host = null;
+          if (node && node.nodeType === 1) host = node;
+          else if (node && node.parentElement) host = node.parentElement;
+          if (host && host.closest) {
+            if (host.closest('#__gmSplitRight')) __gmFindPreferRoot = '__gmSplitRight';
+            else if (host.closest('#__gmSplitLeft')) __gmFindPreferRoot = '__gmSplitLeft';
+            else __gmFindPreferRoot = '';
+          } else {
+            __gmFindPreferRoot = '';
+          }
+        } catch (e2) { __gmFindPreferRoot = ''; }
       }
 
       selText = String(selText || '').replace(/\s+/g, ' ').trim();
@@ -2772,7 +2866,7 @@
     if (findQuery) {
       input.value = findQuery;
       rebuildFindMatches();
-      if (findPos < 0) gotoFind(0);
+      if (findPos < 0) gotoFindFromCurrent();
     } else {
       rebuildFindMatches();
     }
@@ -2782,6 +2876,7 @@
     if (!findBarEl) return;
     findBarEl.style.display = 'none';
     clearFindHighlights();
+    __gmFindPreferRoot = '';
   }
 
   function isFindBarOpen() {
@@ -7386,10 +7481,10 @@
     if (!snap) return {ok:false, msg:'empty snapshot'};
     if (snap.exists) {
       const res = await POST('/api/save_file', {path: snap.path, content: snap.content});
-      return {ok: !!(res && res.ok), msg: (res && (res.msg || res.error)) || ''};
+      return {ok: !!(res && res.ok), msg: (res && (res.msg || res.error)) || '', req_id: res && res.req_id ? res.req_id : null};
     }
     const res = await POST('/api/delete_file', {path: snap.path});
-    return {ok: !!(res && res.ok), msg: (res && (res.msg || res.error)) || ''};
+    return {ok: !!(res && res.ok), msg: (res && (res.msg || res.error)) || '', req_id: res && res.req_id ? res.req_id : null};
   }
 
   async function undoLastRevert(scopeKey){
@@ -7405,7 +7500,7 @@
       for (const s of snaps) {
         const r = await restoreSnapshot(s);
         if (!r.ok) {
-          toast(`撤销失败: ${r.msg || '未知错误'}`, 'err');
+          __gmToastApiError('撤销失败', r, r.msg || '未知错误');
           await refresh();
           return;
         }
@@ -7415,7 +7510,7 @@
       await refresh();
     } catch (e) {
       console.error('undoLastRevert failed:', e);
-      toast(`撤销失败: ${e.message}`, 'err');
+      __gmToastApiError('撤销失败', null, e.message);
       await refresh();
     } finally {
       try { hideUndoTip(); } catch (e) {}
@@ -7779,18 +7874,75 @@
     renderLogList();
   }, 300);
 
-  // ── API ──────────────────────────────────────────────────────────────────────
-  async function api(path, opts={}) {
+  // ---- API helpers ---------------------------------------------------------
+  const __gmGenReqId = () => {
     try {
-      const r = await fetch(BASE + path, {
-        cache: 'no-store',
-        headers:{'Content-Type':'application/json'}, ...opts
-      });
-      return await r.json();
-    } catch(e) {
-      return {error:'连接失败，请确认 server.py 正在运行'};
+      const r = Math.random().toString(36).slice(2, 8);
+      return `${Date.now().toString(36)}-${r}`;
+    } catch (e) {
+      return String(Date.now());
+    }
+  };
+
+  const __gmNormalizeApiResponse = (raw, reqId) => {
+    try {
+      const obj = (raw && typeof raw === 'object') ? raw : {};
+      const err = obj.error || (obj.ok === false ? (obj.msg || '请求失败') : null);
+      const ok = (obj.ok === undefined) ? (!err) : Boolean(obj.ok);
+      const data = obj;
+      return Object.assign({ ok, data, error: err || null, req_id: reqId || null }, data);
+    } catch (e) {
+      return { ok: false, data: null, error: '响应解析失败', req_id: reqId || null };
+    }
+  };
+
+  const __gmToastApiError = (prefix, res, fallbackMsg) => {
+    try {
+      const p = (prefix !== undefined && prefix !== null && String(prefix).trim()) ? String(prefix).trim() : '';
+      const msg0 = (res && (res.error || res.msg || res.message)) ? (res.error || res.msg || res.message) : (fallbackMsg || '请求失败');
+      const rid = (res && (res.req_id || res.reqId)) ? String(res.req_id || res.reqId) : '';
+      const msg = (p ? (p + ': ') : '') + String(msg0) + (rid ? ` (req_id: ${rid})` : '');
+      toast(msg, 'err');
+    } catch (e) {
+      try {
+        toast((prefix ? (String(prefix) + ': ') : '') + (fallbackMsg || '请求失败'), 'err');
+      } catch (e2) {}
+    }
+  };
+
+  const __gmToastError = (prefix, msg) => {
+    try {
+      const p = (prefix !== undefined && prefix !== null && String(prefix).trim()) ? String(prefix).trim() : '';
+      const m = (msg !== undefined && msg !== null) ? String(msg) : '操作失败';
+      toast((p ? (p + ': ') : '') + m, 'err');
+    } catch (e) {
+      try { toast('操作失败', 'err'); } catch (e2) {}
+    }
+  };
+
+  async function api(path, opts={}){
+    try{
+      const url = path.startsWith('http') ? path : (location.origin + path);
+      const reqId = __gmGenReqId();
+
+      const headers = Object.assign(
+        {'Content-Type':'application/json','X-Req-Id': reqId},
+        (opts && opts.headers) ? opts.headers : {}
+      );
+
+      const res = await fetch(url, Object.assign({headers}, opts));
+      const j   = await res.json();
+      if(!res.ok) {
+        const norm = __gmNormalizeApiResponse(j, reqId);
+        return Object.assign(norm, { ok: false, error: norm.error || res.statusText });
+      }
+      return __gmNormalizeApiResponse(j, reqId);
+    }catch(e){
+      console.error(e);
+      return {ok:false, data:null, error:'连接失败，请确认 server.py 正在运行', req_id:null};
     }
   }
+
   const GET  = p    => {
     const sep = p.includes('?') ? '&' : '?';
     return api(p + sep + '_ts=' + Date.now());
@@ -7805,7 +7957,10 @@
     if (!path) { err.textContent = '请输入路径'; return; }
     err.textContent = '正在打开...';
     const res = await POST('/api/open_repo', {path});
-    if (res.error) { err.textContent = res.error; return; }
+    if (res.error) {
+      err.textContent = res.error + (res.req_id ? ` (req_id: ${res.req_id})` : '');
+      return;
+    }
     err.textContent = '';
     try { localStorage.setItem('lastRepoPath', path); } catch (e) {}
     showApp(res.repo, res.branch);
@@ -7993,7 +8148,7 @@
       return;
     }
 
-    if (err) err.textContent = (res && res.error) ? res.error : '恢复失败';
+    if (err) err.textContent = (res && res.error) ? (res.error + (res.req_id ? ` (req_id: ${res.req_id})` : '')) : '恢复失败';
     try { localStorage.removeItem('lastRepoPath'); } catch (e) {}
   }
 
@@ -8012,7 +8167,7 @@
     ]);
 
     if (fRes.error) {
-      toast(fRes.error,'err');
+      __gmToastApiError('刷新失败', fRes, fRes.error);
       btn.style.opacity='';
       btn.style.pointerEvents='';
       refreshBusy = false;
@@ -8153,7 +8308,7 @@
           return;
         }
         const msg = (res && (res.error || res.msg || res.message || res.output)) ? (res.error || res.msg || res.message || res.output) : '更新失败';
-        toast(msg,'err');
+        __gmToastApiError('更新失败', res, msg);
         await refresh();
         return;
       }
@@ -8205,7 +8360,7 @@
     }
 
     const msg = (res && (res.error || res.msg || res.message || res.output)) ? (res.error || res.msg || res.message || res.output) : '更新失败';
-    toast(msg,'err');
+    __gmToastApiError('更新失败', res, msg);
     await refresh();
   }
 
@@ -8356,7 +8511,7 @@
     }
     
     const msg = (res && (res.error || res.pull_error || res.commit_output || res.message)) ? (res.error || res.pull_error || res.commit_output || res.message) : '操作失败';
-    toast(msg, 'err');
+    __gmToastApiError('操作失败', res, msg);
     await refresh();
   }
 
@@ -8403,7 +8558,7 @@
     }
     
     const msg = (res && (res.error || res.pull_error || res.pop_error || res.message || res.pull_output)) ? (res.error || res.pull_error || res.pop_error || res.message || res.pull_output) : '操作失败';
-    toast(msg, 'err');
+    __gmToastApiError('操作失败', res, msg);
     await refresh();
   }
 
@@ -9323,7 +9478,8 @@
         const omb = lb ? __nn(lb.old_text, '') : '';
 
         const same = (ta === tb) && (xa === xb) && (oa === ob) && (na === nb) && (oma === omb);
-        if (same) continue;
+        // modified 行的字符级高亮 HTML 可能因算法/样式升级需要刷新，即便文本未变化也要重绘
+        if (same && tb !== 'modified') continue;
 
         const key = `${hi}-${li}`;
         const rows = viewEl.querySelectorAll(`[data-line-id="${key}"]`);
@@ -9379,7 +9535,15 @@
                   const oldT = __nn(lb.old_text, '');
                   const newT = __nn(lb.text, '');
                   const html = buildInlineModifiedHtml(oldT, newT);
-                  lc.innerHTML = html.newHtml;
+                  try {
+                    const inSplitLeft = !!(row && row.closest && row.closest('#__gmSplitLeft'));
+                    const inSplitRight = !!(row && row.closest && row.closest('#__gmSplitRight'));
+                    if (inSplitLeft) lc.innerHTML = html.oldHtml;
+                    else if (inSplitRight) lc.innerHTML = html.newHtml;
+                    else lc.innerHTML = html.newHtml;
+                  } catch (e) {
+                    lc.innerHTML = html.newHtml;
+                  }
                 } else if (tb === 'removed') {
                   lc.textContent = '';
                 } else {
@@ -9470,7 +9634,7 @@
       const res = await GET(`/api/diff?path=${encodeURIComponent(f.path)}&status=${f.status}${ctxParam}`);
       console.log('loadDiff: diff response:', res);
       if (res.error) {
-        toast(res.error,'err');
+        __gmToastApiError('加载差异失败', res, res.error);
         console.log('loadDiff: diff error:', res.error);
         document.getElementById('diffView').innerHTML = '<div class="empty-state"><p style="color:var(--text2)">加载失败: ' + res.error + '</p></div>';
         return;
@@ -9494,7 +9658,7 @@
       } catch (e) {}
     } catch (error) {
       console.error('loadDiff: error loading diff hunks:', error);
-      toast('加载差异失败: ' + error.message,'err');
+      __gmToastApiError('加载差异失败', null, error.message);
       document.getElementById('diffView').innerHTML = '<div class="empty-state"><p style="color:var(--text2)">加载失败: ' + error.message + '</p></div>';
       return;
     }
@@ -10459,8 +10623,8 @@
 
           let cellText = (line.type === 'empty') ? '' : (line.type !== 'empty' ? esc(line.text) : '');
           if (!canEdit && line.type === 'modified') {
-            const oldT = (columnType === 'left') ? __nn(line.text, '') : __nn(line.oldText, '');
-            const newT = (columnType === 'left') ? __nn(line.newText, '') : __nn(line.text, '');
+            const oldT = __nn(line.oldText, __nn(line.text, ''));
+            const newT = __nn(line.newText, __nn(line.text, ''));
             const html = buildInlineModifiedHtml(oldT, newT);
             cellText = (columnType === 'left') ? html.oldHtml : html.newHtml;
           }
@@ -11188,11 +11352,11 @@
     const plainEditorTextarea = document.getElementById('plainEditorTextarea');
     if (window.__plainEditorFilename && plainEditorTextarea && !filepath) {
       await savePlainEditorFile();
-      return;
+      return true;
     }
 
-    if (curFile === null && !filepath) return;
-    if (window.__saveFileInFlight) return;
+    if (curFile === null && !filepath) return false;
+    if (window.__saveFileInFlight) return false;
     window.__saveFileInFlight = true;
 
     if (window.__autoSaveTimer) {
@@ -11431,12 +11595,13 @@
         } catch (e) {
           await refreshCurrentDiffNoFlicker(f.path, files[curFile] ? files[curFile].status : undefined);
         }
+        return true;
       } else {
-        toast(`保存失败: ${res.msg || res.error}`, 'err');
+        __gmToastApiError('保存失败', res, (res && (res.msg || res.error)) ? (res.msg || res.error) : '保存失败');
         return false;
       }
     } catch (error) {
-      toast(`保存失败: ${error.message}`, 'err');
+      __gmToastApiError('保存失败', null, error.message);
       return false;
     } finally {
       window.__saveFileInFlight = false;
@@ -12241,7 +12406,7 @@
       toast('正在加入版本控制...', 'info');
       const addRes = await POST('/api/stage_file', { path: filepath });
       if (!addRes || !addRes.ok) {
-        toast(`加入版本控制失败: ${addRes?.error || '未知错误'}`, 'err');
+        __gmToastApiError('加入版本控制失败', addRes, (addRes && addRes.error) ? addRes.error : '未知错误');
         return;
       }
       
@@ -12294,20 +12459,20 @@
     }
 
     if (!hunk) {
-      toast('无法找到该代码块', 'err');
+      __gmToastError('撤回失败', '无法找到该代码块');
       revertLineBusyByPath.set(filepath, false);
       return;
     }
 
     if (!line) {
-      toast('无法找到该行', 'err');
+      __gmToastError('撤回失败', '无法找到该行');
       revertLineBusyByPath.set(filepath, false);
       return;
     }
 
     // 确保只处理支持的行类型
     if (line.type === 'context') {
-      toast('无法撤回上下文行', 'err');
+      __gmToastError('撤回失败', '无法撤回上下文行');
       revertLineBusyByPath.set(filepath, false);
       return;
     }
@@ -12410,7 +12575,7 @@
               renderFileList();
               updateStats();
             } catch (e2) {}
-            toast('保存失败，已回滚撤回操作', 'err');
+            __gmToastError('保存失败', '已回滚撤回操作');
           } catch (e) {
             console.error('撤回后立即保存失败:', e);
           }
@@ -12487,7 +12652,7 @@
           renderFileList();
           updateStats();
 
-          toast('撤回失败，已恢复', 'err');
+          __gmToastError('撤回失败', '已恢复');
         } else {
           // 成功后，从后端获取最新的diff数据和文件统计（保持 ctx 一致，避免行索引映射错位）
           const ctxParam = (diffMode === 'unified') ? `&ctx=${encodeURIComponent(changeViewCtx)}` : '';
@@ -12560,7 +12725,7 @@
 
         renderFileList();
         updateStats();
-        toast('网络错误，已恢复', 'err');
+        __gmToastError('网络错误', '已恢复');
       } finally {
         revertLineBusyByPath.set(filepath, false);
       }
@@ -12584,7 +12749,7 @@
       toast('正在加入版本控制...', 'info');
       const addRes = await POST('/api/stage_file', { path: filepath });
       if (!addRes || !addRes.ok) {
-        toast(`加入版本控制失败: ${addRes?.error || '未知错误'}`, 'err');
+        __gmToastApiError('加入版本控制失败', addRes, (addRes && addRes.error) ? addRes.error : '未知错误');
         return;
       }
       
@@ -12625,7 +12790,7 @@
 
     const hunk = curHunks[hunkIdx];
     if (!hunk) {
-      toast('无法找到该代码块', 'err');
+      __gmToastError('撤回失败', '无法找到该代码块');
       revertLineBusyByPath.set(filepath, false);
       return;
     }
@@ -12640,7 +12805,7 @@
     }
 
     if (linesToRevert.length === 0) {
-      toast('无法找到要撤回的代码行', 'err');
+      __gmToastError('撤回失败', '无法找到要撤回的代码行');
       revertLineBusyByPath.set(filepath, false);
       return;
     }
@@ -12649,7 +12814,7 @@
     const firstType = linesToRevert[0].line.type;
     const allSameType = linesToRevert.every(item => item.line.type === firstType);
     if (!allSameType) {
-      toast('多行撤回要求所有行类型相同', 'err');
+      __gmToastError('撤回失败', '多行撤回要求所有行类型相同');
       revertLineBusyByPath.set(filepath, false);
       return;
     }
@@ -12782,7 +12947,7 @@
               renderFileList();
               updateStats();
             } catch (e2) {}
-            toast('保存失败，已回滚块撤回操作', 'err');
+            __gmToastError('保存失败', '已回滚块撤回操作');
           } catch (e) {
             console.error('块撤回后立即保存失败:', e);
           }
@@ -12852,7 +13017,7 @@
           renderFileList();
           updateStats();
 
-          toast('多行撤回失败，已恢复', 'err');
+          __gmToastError('撤回失败', '多行撤回失败，已恢复');
         } else {
           // 成功后，从后端获取最新的diff数据和文件统计（保持 ctx 一致，避免行索引映射错位）
           const ctxParam = (diffMode === 'unified') ? `&ctx=${encodeURIComponent(changeViewCtx)}` : '';
@@ -12923,7 +13088,7 @@
 
         renderFileList();
         updateStats();
-        toast('网络错误，已恢复', 'err');
+        __gmToastError('网络错误', '已恢复');
       } finally {
         revertLineBusyByPath.set(filepath, false);
       }
@@ -12945,7 +13110,7 @@
     const hunk = curHunks[hunkIdx];
 
     if (!hunk) {
-      toast('无法找到该代码块', 'err');
+      __gmToastError('撤回失败', '无法找到该代码块');
       return;
     }
 
@@ -13027,7 +13192,7 @@
                 renderFileList();
                 updateStats();
               } catch (e2) {}
-              toast('保存失败，已回滚代码块撤回操作', 'err');
+              __gmToastError('保存失败', '已回滚代码块撤回操作');
               return;
             }
             window.__dirtyEdits = false;
@@ -13099,7 +13264,7 @@
 
           renderFileList();
           updateStats();
-          toast('撤回失败，已恢复', 'err');
+          __gmToastError('撤回失败', '已恢复');
         } else {
           // 成功后，从后端获取最新的diff数据和文件统计（保持 ctx 一致，避免行索引映射错位）
           const ctxParam = (diffMode === 'unified') ? `&ctx=${encodeURIComponent(changeViewCtx)}` : '';
@@ -13166,7 +13331,7 @@
 
         renderFileList();
         updateStats();
-        toast('网络错误，已恢复', 'err');
+        __gmToastError('网络错误', '已恢复');
       }
     }, 0);
   }
@@ -13239,12 +13404,12 @@
         curFile = null; clearDiff();
         await refresh();
       } else {
-        toast(`失败: ${res.error||res.msg}`,'err');
+        __gmToastApiError('撤回失败', res, (res && (res.error || res.msg)) ? (res.error || res.msg) : '失败');
         // Restore diff view if revert fails
         if (curFile !== null) await loadDiff(curFile);
       }
     } catch (error) {
-      toast(`失败: ${error.message}`,'err');
+      __gmToastApiError('撤回失败', null, error.message);
       // Restore diff view if error occurs
       if (curFile !== null) await loadDiff(curFile);
     }
@@ -13305,11 +13470,11 @@
         curFile = null; clearDiff();
         await refresh();
       } else {
-        toast(`部分失败: ${(res.errors||[]).slice(0,2).join(', ')}`,'err');
+        __gmToastApiError('撤回失败', res, `部分失败: ${(res.errors||[]).slice(0,2).join(', ')}`);
         await refresh();
       }
     } catch (error) {
-      toast(`失败: ${error.message}`,'err');
+      __gmToastApiError('撤回失败', null, error.message);
       await refresh();
     } finally {
       // Ensure UI and auto-refresh state are restored even if refresh or some files failed.
@@ -13338,9 +13503,9 @@
   // ── Commit ────────────────────────────────────────────────────────────────────
   async function doCommit(push=false) {
     const msg = document.getElementById('commitMsg').value.trim();
-    if (!msg) { toast('请输入提交信息','err'); return; }
+    if (!msg) { __gmToastError('提交失败', '请输入提交信息'); return; }
     const paths = [...checkedSet].map(i=>files[i] && files[i].path).filter(Boolean);
-    if (!paths.length) { toast('请选择要提交的文件','err'); return; }
+    if (!paths.length) { __gmToastError('提交失败', '请选择要提交的文件'); return; }
 
     // Disable buttons during commit
     const commitBtns = document.querySelectorAll('#tabCommit .commit-actions button');
@@ -13417,7 +13582,7 @@
         }
       }
       if (res.error) {
-        toast(`提交失败: ${res.error}`,'err');
+        __gmToastApiError('提交失败', res, res.error);
         return;
       }
       document.getElementById('commitMsg').value='';
@@ -13427,11 +13592,11 @@
         toast('推送中...','warn');
         const pRes = await POST('/api/push',{});
         if (pRes.ok) toast('✓ Push 完成','ok');
-        else toast(`Push 失败: ${pRes.msg}`,'err');
+        else __gmToastApiError('Push 失败', pRes, (pRes && (pRes.msg || pRes.error)) ? (pRes.msg || pRes.error) : 'Push 失败');
       }
       await refresh();
     } catch (error) {
-      toast(`提交失败: ${error.message}`,'err');
+      __gmToastApiError('提交失败', null, error.message);
     } finally {
       commitBtns.forEach((b, idx) => {
         b.disabled = false;
@@ -13550,7 +13715,7 @@
         curFile = null;
         clearDiff();
       }
-      else toast(`Push 失败: ${res.msg||res.error}`,'err');
+      else __gmToastApiError('Push 失败', res, (res && (res.msg || res.error)) ? (res.msg || res.error) : 'Push 失败');
       await refresh();
       if (curCommit && (curCommit.full_hash || curCommit.hash)) {
         await refreshCommitActionButtonsForHash(curCommit.full_hash || curCommit.hash);
@@ -13593,7 +13758,7 @@
         // 返回日志列表视图
         backToLog();
       } else {
-        toast(`撤销失败: ${(res && (res.msg||res.error)) ? (res.msg||res.error) : '未知错误'}`,'err');
+        __gmToastApiError('撤销失败', res, (res && (res.msg || res.error)) ? (res.msg || res.error) : '未知错误');
         await refresh();
         await refreshCommitActionButtonsForHash(fullHash);
       }
@@ -13631,7 +13796,7 @@
           await refreshCommitActionButtonsForHash(fullHash);
         }
       } else {
-        toast(`Revert 失败: ${(res && (res.msg||res.error)) ? (res.msg||res.error) : '未知错误'}`,'err');
+        __gmToastApiError('Revert 失败', res, (res && (res.msg || res.error)) ? (res.msg || res.error) : '未知错误');
         await refresh();
         await refreshCommitActionButtonsForHash(fullHash);
       }
@@ -13651,7 +13816,7 @@
             '<div style="padding:16px;color:var(--text3)"><div class="spin"></div></div>';
 
     const res = await GET(`/api/commit_detail?hash=${encodeURIComponent(fullHash)}`);
-    if (res.error) { toast(res.error,'err'); return; }
+    if (res.error) { __gmToastApiError('加载提交详情失败', res, res.error); return; }
 
     // 后端返回的是扁平结构：{hash, full_hash, subject, message, body, files: [...]}
     const c = res.commit || res || {};
@@ -13716,7 +13881,7 @@
         if (idx >= 0) await selectFile(idx);
         else clearDiff();
       } else {
-        toast(`恢复失败: ${res.msg||res.error}`,'err');
+        __gmToastApiError('恢复失败', res, (res && (res.msg || res.error)) ? (res.msg || res.error) : '恢复失败');
       }
     } finally {
       setButtonBusy(btnEl, false);
@@ -14348,11 +14513,11 @@
     const bSuf = b.slice(b.length - suf);
 
     const oldMidHtml = aMid
-            ? `<span class="ch-add">${esc(aMid)}</span>`
-            : (bMid ? `<span class="ch-add"></span>` : '');
+            ? `<span class="im-ch">${esc(aMid)}</span>`
+            : (bMid ? `<span class="im-ch"></span>` : '');
     const newMidHtml = bMid
-            ? `<span class="ch-add">${esc(bMid)}</span>`
-            : (aMid ? `<span class="ch-add"></span>` : '');
+            ? `<span class="im-ch">${esc(bMid)}</span>`
+            : (aMid ? `<span class="im-ch"></span>` : '');
 
     const oldHtml = `${esc(aPre)}${oldMidHtml}${esc(aSuf)}`;
     const newHtml = `${esc(bPre)}${newMidHtml}${esc(bSuf)}`;
@@ -14797,7 +14962,7 @@
       // 检查文件大小（限制为10MB）
       const maxSize = 10 * 1024 * 1024;
       if (file.size > maxSize) {
-        toast(`文件过大 (${(file.size / 1024 / 1024).toFixed(2)}MB)，请选择小于10MB的文件`, 'err');
+        __gmToastApiError('打开文件失败', null, `文件过大 (${(file.size / 1024 / 1024).toFixed(2)}MB)，请选择小于10MB的文件`);
         return;
       }
       
@@ -14815,7 +14980,7 @@
         toast(`✓ 已打开文件: ${file.name}`, 'ok');
       } catch (error) {
         hideLoadingToast();
-        toast(`读取文件失败: ${error.message}`, 'err');
+        __gmToastApiError('读取文件失败', null, error.message);
       }
     };
 
@@ -15070,7 +15235,7 @@
   // 保存普通编辑器中的文件
   async function savePlainEditorFile() {
     if (!window.__plainEditorFilename) {
-      toast('未找到要保存的文件', 'err');
+      __gmToastApiError('保存失败', null, '未找到要保存的文件');
       return;
     }
     
@@ -15295,10 +15460,10 @@
           try { delete el.dataset.dirty; } catch (e) {}
         });
       } else {
-        toast(`保存失败: ${res.msg || res.error}`, 'err');
+        __gmToastApiError('保存失败', res, (res && (res.msg || res.error)) ? (res.msg || res.error) : '保存失败');
       }
     } catch (error) {
-      toast(`保存失败: ${error.message}`, 'err');
+      __gmToastApiError('保存失败', null, error.message);
     } finally {
       window.__saveFileInFlight = false;
       if (saveBtn) {
@@ -16058,7 +16223,39 @@
               const dy = Number(ev.deltaY || 0) * mul;
               const dx = Number(ev.deltaX || 0) * mul;
               const ddx = (ev.shiftKey && !dx) ? dy : dx;
-              const ddy = (ev.shiftKey && !dx) ? 0 : dy;
+              let ddy = (ev.shiftKey && !dx) ? 0 : dy;
+
+              // Alt + wheel: accelerate scrolling for large files
+              // Keep direction unchanged; only increase speed.
+              if (ev.altKey) {
+                try {
+                  const now = (typeof performance !== 'undefined' && performance && performance.now) ? performance.now() : Date.now();
+                  const lastT = Number(ta.__gmAltWheelLastT || 0);
+                  const dt = (lastT > 0) ? Math.max(0, Math.min(300, now - lastT)) : 999;
+                  ta.__gmAltWheelLastT = now;
+
+                  // 连续滚动越密集，boost 越高；停顿则衰减
+                  let boost = Number.isFinite(Number(ta.__gmAltWheelBoost)) ? Number(ta.__gmAltWheelBoost) : 0;
+                  if (dt < 90) boost = Math.min(16, boost + 1.4);
+                  else if (dt < 160) boost = Math.min(16, boost + 0.7);
+                  else boost = Math.max(0, boost - 2.5);
+
+                  // 对触控板常见的小幅高频输入降低加速，避免“抖/飘”
+                  const mag = Math.abs(Number(ddy) || 0);
+                  const isSmall = mag > 0 && mag < 45;
+                  const smallPenalty = isSmall ? 0.55 : 1;
+
+                  // 基础倍率：随单次滚动幅度缓慢增长（log 曲线），再叠加 boost
+                  const base = 4.5;
+                  const amp = Math.log1p(mag / 60) * 4.2; // ~0..约 10+
+                  let factor = base + amp + boost;
+                  factor = Math.min(26, Math.max(1, factor)) * smallPenalty;
+
+                  ta.__gmAltWheelBoost = boost;
+
+                  if (Number.isFinite(ddy) && ddy) ddy = ddy * factor;
+                } catch (e3) {}
+              }
 
               // Alt 键不改变滚动方向：仍按正常纵向滚动处理，避免出现“按住 Alt 就无法滚动”的问题
               if (Number.isFinite(ddy) && ddy) dv.scrollTop += ddy;
