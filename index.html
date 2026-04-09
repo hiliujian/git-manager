@@ -1392,6 +1392,24 @@
     .file-filter-panel .btnrow .btn:hover{ background:rgba(255,255,255,0.10); }
     [data-theme="light"] .file-filter-panel .btnrow .btn:hover{ background:rgba(0,0,0,0.06); }
 
+    .ctx-menu{position:fixed;z-index:2000;min-width:200px;max-width:340px;
+      background:rgba(26,28,36,.96);border:1px solid rgba(61,66,98,.85);
+      border-radius:12px;box-shadow:0 22px 60px rgba(0,0,0,0.55);
+      padding:5px;display:none;backdrop-filter: blur(10px);}
+    .ctx-menu.show{display:block;}
+    .ctx-item{display:flex;align-items:center;gap:8px;padding:7px 9px;border-radius:9px;
+      color:var(--text);cursor:pointer;font-size:11px;border:1px solid transparent;}
+    .ctx-item:hover{background:rgba(33,36,46,.9);border-color:rgba(61,66,98,.45);}
+    .ctx-item.danger{color:var(--danger);}
+    .ctx-item.danger:hover{background:rgba(242,114,114,.10);border-color:rgba(242,114,114,.25);}
+    .ctx-sep{height:1px;background:rgba(255,255,255,0.08);margin:5px 6px;}
+    .ctx-hint{font-size:10px;color:var(--text3);padding:5px 10px 2px 10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+
+    [data-theme="light"] .ctx-menu{background:rgba(255,255,255,.96);border:1px solid rgba(206,212,218,.9);
+      box-shadow:0 22px 60px rgba(0,0,0,0.15);}
+    [data-theme="light"] .ctx-item:hover{background:rgba(241,243,245,.95);border-color:rgba(206,212,218,.55);}
+    [data-theme="light"] .ctx-sep{background:rgba(0,0,0,0.08);}
+
     #fileCount{ cursor:pointer; transition:all .12s; }
     #fileCount:hover{ background:var(--bg5); color:var(--text); }
     #fileCount.filtered{ box-shadow:0 0 0 1px rgba(255, 255, 255, 0.22) inset; }
@@ -7910,6 +7928,256 @@
   let lastBranchesRes = null;
   let branchMenuQuery = '';
 
+  // ---- File list context menu ----------------------------------------------
+  let __gmFileCtxMenuEl = null;
+  let __gmFileCtxState = null;
+
+  function __gmEnsureFileCtxMenu() {
+    if (__gmFileCtxMenuEl) return __gmFileCtxMenuEl;
+    const el = document.createElement('div');
+    el.className = 'ctx-menu';
+    el.id = '__gmFileCtxMenu';
+    el.innerHTML = `
+      <div class="ctx-hint" id="__gmFileCtxHint"></div>
+      <div class="ctx-item" data-act="copy_rel">复制相对路径</div>
+      <div class="ctx-item" data-act="copy_abs">复制绝对路径</div>
+      <div class="ctx-item" data-act="rename_file">重命名</div>
+      <div class="ctx-sep"></div>
+      <div class="ctx-item" data-act="file_log">查看历史</div>
+      <div class="ctx-item" data-act="pull_file">更新</div>
+      <div class="ctx-sep"></div>
+      <div class="ctx-item" data-act="revert_file">撤回</div>
+      <div class="ctx-item danger" data-act="delete_file">删除</div>
+    `;
+    document.body.appendChild(el);
+    __gmFileCtxMenuEl = el;
+
+    el.addEventListener('click', async (e) => {
+      try {
+        const t = e && e.target;
+        const item = t && t.closest ? t.closest('.ctx-item') : null;
+        if (!item || !el.contains(item)) return;
+        const act = item.getAttribute('data-act') || '';
+        await __gmHandleFileCtxAction(act);
+      } catch (e2) {}
+    }, true);
+
+    // Close on outside click
+    document.addEventListener('mousedown', (e) => {
+      try {
+        if (!__gmFileCtxMenuEl) return;
+        if (!__gmFileCtxMenuEl.classList.contains('show')) return;
+        const t = e && e.target;
+        if (t && (__gmFileCtxMenuEl === t || (__gmFileCtxMenuEl.contains && __gmFileCtxMenuEl.contains(t)))) return;
+        __gmHideFileCtxMenu();
+      } catch (e2) {}
+    }, true);
+
+    // Close on ESC
+    document.addEventListener('keydown', (e) => {
+      try {
+        if (e.key !== 'Escape') return;
+        if (!__gmFileCtxMenuEl || !__gmFileCtxMenuEl.classList.contains('show')) return;
+        __gmHideFileCtxMenu();
+      } catch (e2) {}
+    }, true);
+
+    return el;
+  }
+
+  function __gmHideFileCtxMenu() {
+    const el = __gmFileCtxMenuEl;
+    if (!el) return;
+    el.classList.remove('show');
+    el.style.display = 'none';
+    __gmFileCtxState = null;
+  }
+
+  function __gmShowFileCtxMenu(x, y, state) {
+    const el = __gmEnsureFileCtxMenu();
+    __gmFileCtxState = state;
+    try {
+      const hint = el.querySelector('#__gmFileCtxHint');
+      if (hint) hint.textContent = state && state.path ? String(state.path) : '';
+    } catch (e) {}
+
+    el.style.display = 'block';
+    el.classList.add('show');
+
+    try {
+      const r = el.getBoundingClientRect();
+      const vw = window.innerWidth || document.documentElement.clientWidth || 0;
+      const vh = window.innerHeight || document.documentElement.clientHeight || 0;
+      let left = Number(x || 0);
+      let top = Number(y || 0);
+      left = Math.min(left, Math.max(6, vw - r.width - 6));
+      top = Math.min(top, Math.max(6, vh - r.height - 6));
+      el.style.left = left + 'px';
+      el.style.top = top + 'px';
+    } catch (e) {
+      el.style.left = (x || 10) + 'px';
+      el.style.top = (y || 10) + 'px';
+    }
+  }
+
+  async function __gmCopyTextToClipboard(text) {
+    const v = String(text || '');
+    if (!v) return false;
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(v);
+        return true;
+      }
+    } catch (e) {}
+
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = v;
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      ta.style.top = '0';
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      return !!ok;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function __gmJoinRepoPath(repo, rel) {
+    const base = String(repo || '').replace(/[\\/]+$/g, '');
+    const p = String(rel || '').replace(/^[/\\]+/g, '').replace(/\//g, '\\');
+    if (!base) return p;
+    if (!p) return base;
+    return base + '\\' + p;
+  }
+
+  async function __gmHandleFileCtxAction(act) {
+    const st = __gmFileCtxState;
+    if (!st || !st.path) {
+      __gmHideFileCtxMenu();
+      return;
+    }
+    const path = String(st.path);
+    const status = String(st.status || 'M');
+    __gmHideFileCtxMenu();
+
+    if (act === 'copy_rel') {
+      const ok = await __gmCopyTextToClipboard(path);
+      toast(ok ? '✓ 已复制相对路径' : '复制失败', ok ? 'ok' : 'err');
+      return;
+    }
+    if (act === 'copy_abs') {
+      const repoLabelEl = document.getElementById('repoLabel');
+      const repo = repoLabelEl ? (repoLabelEl.getAttribute('data-repo') || repoLabelEl.textContent || '') : '';
+      const abs = __gmJoinRepoPath(repo, path);
+      const ok = await __gmCopyTextToClipboard(abs);
+      toast(ok ? '✓ 已复制绝对路径' : '复制失败', ok ? 'ok' : 'err');
+      return;
+    }
+    if (act === 'rename_file') {
+      const segs = String(path).replace(/\\/g,'/').split('/');
+      const name = segs.pop() || '';
+      const dir = segs.join('/') + (segs.length ? '/' : '');
+      const def = dir ? (dir + name) : name;
+      const newRelRaw = window.prompt('重命名为（相对仓库路径）', def);
+      const newRel = (newRelRaw || '').trim();
+      if (!newRel || newRel === path) return;
+      const ok = await showConfirm({
+        title: '确认重命名',
+        message: `确认将文件重命名：\n\n${path}\n\n→\n\n${newRel}\n\n此操作会修改工作区文件名，是否继续？`,
+        okText: '重命名',
+      });
+      if (!ok) return;
+      const res = await POST('/api/rename_file', { old_path: path, new_path: newRel });
+      if (res && res.ok) {
+        toast('✓ 重命名成功', 'ok');
+        await refresh();
+      } else {
+        __gmToastApiError('重命名失败', res, (res && (res.msg || res.error)) || '重命名失败');
+        await refresh();
+      }
+      return;
+    }
+    if (act === 'revert_file') {
+      const ok = await showConfirm({
+        title: '确认撤回（整文件）',
+        message: `将工作区文件撤回到 HEAD 版本：\n\n${path}\n\n此操作会覆盖当前工作区内容，是否继续？`,
+        okText: '撤回',
+        danger: true,
+      });
+      if (!ok) return;
+      const res = await POST('/api/revert_file', { path, status });
+      if (res && res.ok) {
+        toast('✓ 撤回成功', 'ok');
+        await refresh();
+      } else {
+        __gmToastApiError('撤回失败', res, (res && (res.msg || res.error)) || '撤回失败');
+        await refresh();
+      }
+      return;
+    }
+    if (act === 'delete_file') {
+      const ok = await showConfirm({
+        title: '确认删除文件',
+        message: `确认从工作区删除该文件？\n\n${path}\n\n注意：此操作不会自动提交。`,
+        okText: '删除',
+        danger: true,
+      });
+      if (!ok) return;
+      const res = await POST('/api/delete_file', { path });
+      if (res && res.ok) {
+        toast('✓ 删除成功', 'ok');
+        await refresh();
+      } else {
+        __gmToastApiError('删除失败', res, (res && (res.msg || res.error)) || '删除失败');
+        await refresh();
+      }
+      return;
+    }
+    if (act === 'file_log') {
+      const res = await GET('/api/file_log?path=' + encodeURIComponent(path));
+      if (res && res.log && Array.isArray(res.log)) {
+        logData = res.log;
+        logMode = 'list';
+        curCommit = null;
+        curCommitFiles = [];
+        curLogFile = null;
+        try { renderLogList(); } catch (e) {}
+        try {
+          const tabs = Array.from(document.querySelectorAll('.right-panel .vtabs .vtab'));
+          const el = tabs[1] || tabs[0];
+          if (el) switchTab('log', el);
+        } catch (e) {}
+        toast('✓ 已加载该文件历史', 'ok');
+      } else {
+        __gmToastApiError('加载历史失败', res, (res && res.error) || '加载历史失败');
+      }
+      return;
+    }
+    if (act === 'pull_file') {
+      const ok = await showConfirm({
+        title: '确认更新（单文件）',
+        message: `将该文件从上游分支更新到工作区：\n\n${path}\n\n此操作会覆盖当前工作区内容，是否继续？`,
+        okText: '更新',
+        danger: true,
+      });
+      if (!ok) return;
+      const res = await POST('/api/pull_file', { path });
+      if (res && res.ok) {
+        toast('✓ 更新成功', 'ok');
+        await refresh();
+      } else {
+        __gmToastApiError('更新失败', res, (res && (res.msg || res.error)) || '更新失败');
+        await refresh();
+      }
+      return;
+    }
+  }
+
   // Debounced functions
   const debouncedFilterFiles = debounce((q) => {
     fileFilter = q;
@@ -9190,6 +9458,21 @@
             }
           } catch (e2) {}
         });
+
+        el.addEventListener('contextmenu', (e) => {
+          try {
+            const t = e && e.target;
+            const row = (t && t.closest) ? t.closest('.fi') : null;
+            if (!row || !el.contains(row)) return;
+            e.preventDefault();
+            try { e.stopPropagation(); } catch (e2) {}
+            const idx = Number(row.dataset ? row.dataset.idx : NaN);
+            const path = row.dataset ? (row.dataset.path || '') : '';
+            const status = row.dataset ? (row.dataset.status || '') : '';
+            if (!Number.isFinite(idx) || !path) return;
+            __gmShowFileCtxMenu(e.clientX, e.clientY, { idx, path, status });
+          } catch (e2) {}
+        }, true);
       }
     } catch (e) {}
     const vis = __gmGetVisibleFiles();
@@ -9215,6 +9498,11 @@
       const dir  = segs.join('/') + (segs.length ? '/' : '');
       const div  = document.createElement('div');
       div.className = 'fi' + (i === curFile ? ' active' : '');
+      try {
+        div.dataset.idx = String(i);
+        div.dataset.path = String(f.path || '');
+        div.dataset.status = String(f.status || 'M');
+      } catch (e) {}
       div.innerHTML = `
       <input type="checkbox" class="fi-cb" data-idx="${i}" ${checkedSet.has(i)?'checked':''}>
       <span class="fi-st ${f.status}">${f.status}</span>

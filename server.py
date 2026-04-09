@@ -1734,6 +1734,46 @@ def revert_file(filepath: str, status: str):
     return True, ""
 
 
+def rename_file(old_path: str, new_path: str):
+    if not REPO_PATH:
+        return False, "未打开仓库"
+
+    old_rel = (old_path or "").replace("\\", "/").lstrip("/")
+    new_rel = (new_path or "").replace("\\", "/").lstrip("/")
+    if not old_rel or not new_rel:
+        return False, "缺少 path"
+    if old_rel == new_rel:
+        return False, "新旧路径相同"
+
+    old_abs = _safe_repo_abspath(old_rel)
+    new_abs = _safe_repo_abspath(new_rel)
+    if not old_abs or not new_abs:
+        return False, "非法路径"
+    if not os.path.exists(old_abs) or os.path.isdir(old_abs):
+        return False, "原文件不存在"
+    if os.path.exists(new_abs):
+        return False, "目标路径已存在"
+
+    parent = os.path.dirname(new_abs)
+    if parent and (not os.path.exists(parent)):
+        os.makedirs(parent, exist_ok=True)
+
+    # Prefer git mv for tracked files
+    out_t, err_t, code_t = run_git(["ls-files", "--error-unmatch", "--", old_rel], timeout=30)
+    if code_t == 0:
+        out, err, code = run_git(["mv", "--", old_rel, new_rel], timeout=120)
+        if code != 0:
+            return False, (err or out or "git mv 失败")
+        return True, ""
+
+    # Untracked file: filesystem rename
+    try:
+        os.replace(old_abs, new_abs)
+        return True, ""
+    except Exception as e:
+        return False, str(e)
+
+
 def revert_hunk(filepath: str, hunk_idx: int, status: str, ctx_lines: int = 5):
     raw_patch, err = _get_raw_file_diff_patch(filepath, status, ctx_lines=ctx_lines)
     if err:
@@ -2048,6 +2088,45 @@ def get_log():
         })
     
     logger.info(f"成功获取提交历史，共 {len(commits)} 条")
+    return commits
+
+
+def get_file_log(filepath: str, limit: int = 50):
+    """Get git log for a single file."""
+    if not REPO_PATH:
+        return []
+    fp = (filepath or "").replace("\\", "/").lstrip("/")
+    if not fp:
+        return []
+
+    try:
+        limit = int(limit)
+    except Exception:
+        limit = 50
+    if limit <= 0:
+        limit = 50
+    if limit > 200:
+        limit = 200
+
+    fmt = "--pretty=format:%H%x00%an%x00%ae%x00%ad%x00%s"
+    out, _, code = run_git(["log", fmt, "--date=iso", f"-{limit}", "--", fp])
+    if code != 0:
+        return []
+
+    commits = []
+    for line in (out or "").splitlines():
+        parts = line.split("\x00")
+        if len(parts) < 5:
+            continue
+        full_hash = parts[0]
+        commits.append({
+            "hash": full_hash[:7],
+            "full_hash": full_hash,
+            "author": parts[1],
+            "email": parts[2],
+            "date": parts[3],
+            "message": parts[4],
+        })
     return commits
 
 
@@ -2480,6 +2559,21 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self.send_json({"log": get_log()})
 
+        elif p == "/api/file_log":
+            logger.debug("处理 /api/file_log 请求")
+            if not REPO_PATH:
+                self.send_json({"error": "未打开仓库"}, 400)
+                return
+            fp = qget("path")
+            if not fp:
+                self.send_json({"error": "缺少 path"}, 400)
+                return
+            try:
+                limit = int(qget("limit") or "50")
+            except Exception:
+                limit = 50
+            self.send_json({"log": get_file_log(fp, limit=limit)})
+
         elif p == "/api/commit_detail":
             logger.debug("处理 /api/commit_detail 请求")
             if not REPO_PATH:
@@ -2694,6 +2788,19 @@ class Handler(BaseHTTPRequestHandler):
                     logger.error(f"删除文件失败: {fp} - {e}", exc_info=True)
                     self.send_json({"ok": False, "msg": str(e)}, 500)
 
+            elif p == "/api/rename_file":
+                logger.info("处理 /api/rename_file 请求")
+                if not REPO_PATH:
+                    self.send_json({"error": "未打开仓库"}, 400)
+                    return
+                oldp = (data.get("old_path") or data.get("path") or "").strip()
+                newp = (data.get("new_path") or "").strip()
+                ok, msg = rename_file(oldp, newp)
+                if ok:
+                    invalidate_changed_files_cache()
+                    notify_files_updated()
+                self.send_json({"ok": ok, "msg": msg})
+
             elif p == "/api/revert_file":
                 logger.info("处理 /api/revert_file 请求")
                 if not REPO_PATH:
@@ -2704,6 +2811,38 @@ class Handler(BaseHTTPRequestHandler):
                     invalidate_changed_files_cache()
                     notify_files_updated()
                 self.send_json({"ok": ok, "msg": msg})
+
+            elif p == "/api/pull_file":
+                logger.info("处理 /api/pull_file 请求")
+                if not REPO_PATH:
+                    self.send_json({"error": "未打开仓库"}, 400)
+                    return
+                fp = (data.get("path") or "").strip()
+                full = _safe_repo_abspath(fp)
+                if not full:
+                    self.send_json({"ok": False, "msg": "非法路径"}, 400)
+                    return
+
+                # Ensure upstream exists and fetch latest.
+                out_u, err_u, code_u = run_git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], timeout=30)
+                if code_u != 0:
+                    self.send_json({"ok": False, "msg": (err_u or "当前分支未设置上游，无法单文件更新")}, 400)
+                    return
+
+                out_f, err_f, code_f = run_git(["fetch", "--all"], timeout=300)
+                if code_f != 0:
+                    self.send_json({"ok": False, "msg": (err_f or out_f or "fetch 失败")}, 500)
+                    return
+
+                # Update the file from upstream tip.
+                out_c, err_c, code_c = run_git(["checkout", "@{u}", "--", fp], timeout=120)
+                if code_c != 0:
+                    self.send_json({"ok": False, "msg": (err_c or out_c or "更新文件失败")}, 500)
+                    return
+
+                invalidate_changed_files_cache()
+                notify_files_updated()
+                self.send_json({"ok": True, "msg": "更新成功"})
 
             elif p == "/api/revert_all":
                 logger.info("处理 /api/revert_all 请求")
