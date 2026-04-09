@@ -76,6 +76,7 @@ logger.info("=" * 60)
 REPO_PATH = None
 WS_PORT = 7843  # WebSocket端口号
 ws_clients = set()  # WebSocket客户端集合
+ws_clients_lock = threading.Lock()
 last_file_state = None  # 上次的文件状态（用于检测变化）
 _changed_files_cache = {
     "ts": 0.0,
@@ -95,8 +96,9 @@ def notify_files_updated():
     try:
         if not REPO_PATH:
             return
-        if not ws_clients:
-            return
+        with ws_clients_lock:
+            if not ws_clients:
+                return
         files = get_changed_files_cached(max_age_sec=0)
         broadcast_to_clients({
             'type': 'files_updated',
@@ -121,7 +123,10 @@ def broadcast_to_clients(message):
         return
     
     disconnected = set()
-    for client in ws_clients.copy():
+    with ws_clients_lock:
+        clients = list(ws_clients)
+
+    for client in clients:
         try:
             client.send(json.dumps(message))
         except Exception as e:
@@ -129,7 +134,9 @@ def broadcast_to_clients(message):
             disconnected.add(client)
     
     # 移除断开的客户端
-    ws_clients.difference_update(disconnected)
+    if disconnected:
+        with ws_clients_lock:
+            ws_clients.difference_update(disconnected)
 
 
 def get_file_state_hash():
@@ -222,7 +229,11 @@ def watch_repository():
     
     while True:
         try:
-            if REPO_PATH and ws_clients:
+            has_clients = False
+            with ws_clients_lock:
+                has_clients = bool(ws_clients)
+
+            if REPO_PATH and has_clients:
                 current_state = get_file_state_hash()
                 if current_state and current_state != last_file_state:
                     logger.debug(f"检测到文件变化: {last_file_state} -> {current_state}")
@@ -246,7 +257,8 @@ def watch_repository():
 def handle_websocket(websocket: ServerConnection):
     """处理WebSocket连接"""
     logger.info(f"新的WebSocket连接: {websocket.remote_address}")
-    ws_clients.add(websocket)
+    with ws_clients_lock:
+        ws_clients.add(websocket)
     
     try:
         # 发送欢迎消息
@@ -289,7 +301,8 @@ def handle_websocket(websocket: ServerConnection):
     except Exception as e:
         logger.error(f"WebSocket连接异常: {e}")
     finally:
-        ws_clients.discard(websocket)
+        with ws_clients_lock:
+            ws_clients.discard(websocket)
         ra = None
         try:
             ra = websocket.remote_address

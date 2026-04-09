@@ -7614,6 +7614,34 @@
   let ws = null;
   let wsReconnectTimer = null;
   let wsConnected = false;
+  let wsConnecting = false;
+  let wsReconnectDelayMs = 5000;
+  const wsReconnectDelayMaxMs = 30000;
+
+  function __gmWsResetReconnectDelay() {
+    wsReconnectDelayMs = 5000;
+  }
+
+  function __gmWsNextReconnectDelayMs() {
+    // Fibonacci-ish growth: add 60% each time, clamp to max
+    const cur = Math.max(1000, Number(wsReconnectDelayMs) || 5000);
+    const next = Math.min(wsReconnectDelayMaxMs, Math.round(cur * 1.6));
+    wsReconnectDelayMs = next;
+    return cur;
+  }
+
+  function __gmWsScheduleReconnect() {
+    if (wsReconnectTimer) return;
+    const base = __gmWsNextReconnectDelayMs();
+    // Small jitter to avoid multi-tab sync reconnect storms
+    const jitter = Math.floor(Math.random() * 600);
+    const waitMs = Math.min(wsReconnectDelayMaxMs, base + jitter);
+    wsReconnectTimer = setTimeout(() => {
+      wsReconnectTimer = null;
+      console.log(`尝试重新连接 WebSocket... (delay=${waitMs}ms)`);
+      connectWebSocket();
+    }, waitMs);
+  }
 
   // 动态获取WebSocket端口号
   async function getWebSocketPort() {
@@ -7667,11 +7695,13 @@
 
   // ── WebSocket 连接管理 ────────────────────────────────────────────────────────
   async function connectWebSocket() {
-    if (ws && ws.readyState === WebSocket.OPEN) {
+    if (wsConnecting) return;
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
       return; // 已经连接
     }
 
     // 先获取WebSocket端口号
+    wsConnecting = true;
     await getWebSocketPort();
 
     try {
@@ -7680,6 +7710,8 @@
       ws.onopen = () => {
         console.log('WebSocket 连接成功');
         wsConnected = true;
+        wsConnecting = false;
+        __gmWsResetReconnectDelay();
         if (wsReconnectTimer) {
           clearTimeout(wsReconnectTimer);
           wsReconnectTimer = null;
@@ -7702,16 +7734,14 @@
       ws.onclose = () => {
         console.log('WebSocket 连接关闭');
         wsConnected = false;
+        wsConnecting = false;
         // 5秒后尝试重连
-        if (!wsReconnectTimer) {
-          wsReconnectTimer = setTimeout(() => {
-            console.log('尝试重新连接 WebSocket...');
-            connectWebSocket();
-          }, 5000);
-        }
+        __gmWsScheduleReconnect();
       };
     } catch (e) {
       console.error('WebSocket 连接失败:', e);
+      wsConnecting = false;
+      __gmWsScheduleReconnect();
       // 回退到轮询模式
       console.log('回退到轮询模式');
     }
@@ -7948,12 +7978,37 @@
       );
 
       const res = await fetch(url, Object.assign({headers}, opts));
-      const j   = await res.json();
-      if(!res.ok) {
-        const norm = __gmNormalizeApiResponse(j, reqId);
-        return Object.assign(norm, { ok: false, error: norm.error || res.statusText });
+
+      let rawText = '';
+      try {
+        rawText = await res.text();
+      } catch (e) {
+        rawText = '';
       }
-      return __gmNormalizeApiResponse(j, reqId);
+
+      let j = null;
+      let parsed = false;
+      try {
+        j = rawText ? JSON.parse(rawText) : null;
+        parsed = true;
+      } catch (e) {
+        j = null;
+        parsed = false;
+      }
+
+      if(!res.ok) {
+        if (parsed) {
+          const norm = __gmNormalizeApiResponse(j, reqId);
+          return Object.assign(norm, { ok: false, error: norm.error || res.statusText });
+        }
+        const snippet = String(rawText || '').trim().slice(0, 320);
+        const msg = snippet ? `HTTP ${res.status} ${res.statusText}: ${snippet}` : (`HTTP ${res.status} ${res.statusText}`);
+        return { ok: false, data: null, error: msg, req_id: reqId || null };
+      }
+
+      if (parsed) return __gmNormalizeApiResponse(j, reqId);
+      const snippet = String(rawText || '').trim().slice(0, 320);
+      return { ok: false, data: null, error: snippet ? (`响应不是JSON: ${snippet}`) : '响应不是JSON', req_id: reqId || null };
     }catch(e){
       console.error(e);
       return {ok:false, data:null, error:'连接失败，请确认 server.py 正在运行', req_id:null};
