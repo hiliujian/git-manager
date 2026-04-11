@@ -13,6 +13,7 @@ from pathlib import Path
 import urllib.request
 import urllib.error
 import uuid
+import py_compile
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs, unquote
 from datetime import datetime
@@ -3985,21 +3986,21 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"ok": True, "hits": hits})
 
         elif p == "/api/ai_chat_history":
-            logger.debug("处理 /api/ai_chat_history 请求")
             pid = qget("profile_id")
             sid = qget("session_id")
             try:
                 limit = int(qget("limit") or "40")
             except Exception:
                 limit = 40
+            logger.info(f"处理 /api/ai_chat_history GET 请求 (profile_id={pid or ''}, session_id={sid or ''}, limit={limit})")
             with ai_history_lock:
                 hist = load_ai_chat_history(pid, limit=limit, session_id=sid)
                 info = list_ai_sessions(pid) if pid else {"active_session_id": "", "sessions": []}
             self.send_json({"ok": True, "messages": hist, "active_session_id": info.get("active_session_id"), "sessions": info.get("sessions")})
 
         elif p == "/api/ai_sessions":
-            logger.debug("处理 /api/ai_sessions 请求")
             pid = qget("profile_id")
+            logger.info(f"处理 /api/ai_sessions GET 请求 (profile_id={pid or ''})")
             with ai_history_lock:
                 info = list_ai_sessions(pid)
             self.send_json({"ok": True, "active_session_id": info.get("active_session_id"), "sessions": info.get("sessions")})
@@ -4127,6 +4128,83 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     self.send_json({"ok": False, "content": None})
 
+            elif p == "/api/open_file":
+                logger.info("处理 /api/open_file 请求")
+                if not self._require_repo():
+                    return
+                name = (data.get("name") or data.get("path") or "").strip()
+                view = (data.get("view") or "editor").strip().lower()
+                if not name:
+                    self.send_json({"ok": False, "msg": "缺少 name"}, 400)
+                    return
+
+                # Normalize view
+                if view not in ("editor", "change", "split", "unified"):
+                    view = "editor"
+
+                pick = ""
+                # If looks like a path, try as-is first.
+                cand = name.replace("\\", "/").lstrip("/")
+                full = _safe_repo_abspath(cand)
+                if full and os.path.isfile(full):
+                    pick = cand
+                else:
+                    # Find by name (basename or partial)
+                    items = find_files_by_name(name, max_results=20)
+                    if not items:
+                        self.send_json({"ok": False, "msg": "未找到文件"}, 404)
+                        return
+                    pick = str(items[0] or "")
+                    nm_lower = name.lower()
+                    for rel in items:
+                        bn = str(rel or "").replace("\\", "/").split("/")[-1]
+                        if bn.lower() == nm_lower:
+                            pick = str(rel or "")
+                            break
+
+                content, encoding = get_file_content(pick, return_encoding=True)
+                if content is None:
+                    self.send_json({"ok": False, "msg": "无法读取文件内容", "path": pick, "view": view}, 400)
+                    return
+                self.send_json({
+                    "ok": True,
+                    "path": pick,
+                    "view": view,
+                    "content": content,
+                    "encoding": encoding,
+                })
+
+            elif p == "/api/verify_python":
+                logger.info("处理 /api/verify_python 请求")
+                if not self._require_repo():
+                    return
+                arr = data.get("paths") or data.get("files") or []
+                if not isinstance(arr, list):
+                    arr = []
+                paths = [str(x or "").strip().lstrip("@") for x in arr]
+                paths = [p for p in paths if p]
+                if not paths:
+                    paths = ["server.py"]
+                if len(paths) > 50:
+                    paths = paths[:50]
+
+                checked = []
+                for rp in paths:
+                    safe = _safe_repo_abspath(rp)
+                    if not safe or (not os.path.isfile(safe)):
+                        self.send_json({"ok": False, "files": checked, "error": f"非法路径或文件不存在: {rp}"}, 400)
+                        return
+                    checked.append(rp.replace("\\", "/"))
+                    try:
+                        py_compile.compile(safe, doraise=True)
+                    except py_compile.PyCompileError as e:
+                        self.send_json({"ok": False, "files": checked, "error": str(e)}, 400)
+                        return
+                    except Exception as e:
+                        self.send_json({"ok": False, "files": checked, "error": str(e)}, 500)
+                        return
+                self.send_json({"ok": True, "files": checked})
+
             elif p == "/api/save_file":
                 logger.info("处理 /api/save_file 请求")
                 if not self._require_repo():
@@ -4209,13 +4287,43 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json(payload, 500)
 
             elif p == "/api/run_cmd":
-                logger.info("处理 /api/run_cmd 请求")
+                logger.warning("处理 /api/run_cmd 请求")
                 if not self._require_repo():
                     return
                 cmd = (data.get("cmd") or "").strip()
                 if not cmd:
                     self.send_json({"ok": False, "msg": "缺少 cmd"}, 400)
                     return
+
+                undo_gid = (self.headers.get("X-Undo-Group") or "").strip()
+
+                def _status_map():
+                    """Return {path: xy} based on git status porcelain (-z)."""
+                    try:
+                        out, _err, code = run_git(["status", "--porcelain=v1", "-u", "-z"], timeout=30)
+                        if code != 0:
+                            return {}
+                        m = {}
+                        entries = (out or "").split("\x00")
+                        i = 0
+                        while i < len(entries):
+                            ent = entries[i]
+                            if not ent or len(ent) < 4:
+                                i += 1
+                                continue
+                            xy = ent[:2]
+                            name0 = ent[3:]
+                            if name0:
+                                m[str(name0).replace("\\", "/")] = xy
+                            # Renames/copies include an extra path entry in -z output.
+                            if xy and xy[0] in ("R", "C"):
+                                i += 1
+                            i += 1
+                        return m
+                    except Exception:
+                        return {}
+
+                pre_map = _status_map() if undo_gid else {}
                 try:
                     timeout = int(data.get("timeout") or 30)
                 except Exception:
@@ -4244,6 +4352,36 @@ class Handler(BaseHTTPRequestHandler):
                         text=True,
                         timeout=timeout,
                     )
+
+                    try:
+                        logger.warning(f"run_cmd 完成 (ok={1 if r.returncode == 0 else 0}, exit_code={int(r.returncode)}, cmd={cmd[:180]})")
+                    except Exception:
+                        pass
+
+                    if undo_gid:
+                        post_map = _status_map()
+                        for rp, post_xy in post_map.items():
+                            pre_xy = pre_map.get(rp)
+                            if pre_xy is None:
+                                # New path in status after cmd: treat as created/first-time-changed; undo deletes it.
+                                _undo_record(undo_gid, {"type": "file_snapshot", "snapshot": {"path": rp, "exists": False, "content": ""}})
+                                continue
+                            # Only record if status code changed; do NOT snapshot pre-existing dirty file when unchanged.
+                            if str(pre_xy) != str(post_xy):
+                                try:
+                                    snap = _undo_capture_file_snapshot(rp)
+                                except Exception:
+                                    snap = None
+                                if snap is not None:
+                                    _undo_record(undo_gid, {"type": "file_snapshot", "snapshot": snap})
+                        # If nothing recorded, this cmd does not affect undo_steps/counter.
+
+                    try:
+                        invalidate_changed_files_cache()
+                        notify_files_updated()
+                    except Exception:
+                        pass
+
                     self.send_json({
                         "ok": (r.returncode == 0),
                         "exit_code": int(r.returncode),
@@ -4376,11 +4514,18 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"ok": True, "group_id": gid})
 
             elif p == "/api/ai_chat":
-                logger.info("处理 /api/ai_chat 请求")
+                t0 = time.time()
                 msgs = data.get("messages") if isinstance(data, dict) else None
                 temp = data.get("temperature") if isinstance(data, dict) else None
                 pid = data.get("profile_id") if isinstance(data, dict) else None
                 sid = data.get("session_id") if isinstance(data, dict) else None
+
+                n_msgs = 0
+                try:
+                    n_msgs = len(msgs) if isinstance(msgs, list) else 0
+                except Exception:
+                    n_msgs = 0
+                logger.info(f"处理 /api/ai_chat 请求 (profile_id={pid or ''}, session_id={sid or ''}, messages={n_msgs})")
 
                 try:
                     key = _rl_make_key(self, profile_id=pid, session_id=sid)
@@ -4408,6 +4553,11 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception:
                     ent = None
                 if ent is not None:
+                    try:
+                        cost_ms = int((time.time() - t0) * 1000)
+                    except Exception:
+                        cost_ms = -1
+                    logger.info(f"/api/ai_chat 命中缓存 (profile_id={pid or ''}, session_id={sid or ''}, cost_ms={cost_ms})")
                     self.send_json({"ok": True, "content": ent.get("resp", ""), "raw": {"cached": True, "hits": int(ent.get("hits") or 0)}})
                     return
 
@@ -4418,8 +4568,18 @@ class Handler(BaseHTTPRequestHandler):
                         _ai_cache_put(user_q, str(content or ""), profile_id=pid)
                     except Exception:
                         pass
+                    try:
+                        cost_ms = int((time.time() - t0) * 1000)
+                    except Exception:
+                        cost_ms = -1
+                    logger.info(f"/api/ai_chat 完成 (ok=1, profile_id={pid or ''}, session_id={sid or ''}, cost_ms={cost_ms}, resp_chars={len(str(content or ''))})")
                     self.send_json({"ok": True, "content": content, "raw": result.get("raw")})
                 else:
+                    try:
+                        cost_ms = int((time.time() - t0) * 1000)
+                    except Exception:
+                        cost_ms = -1
+                    logger.info(f"/api/ai_chat 完成 (ok=0, profile_id={pid or ''}, session_id={sid or ''}, cost_ms={cost_ms}, msg={str(msg or '')[:200]})")
                     self.send_json({"ok": False, "msg": msg}, 400)
 
             elif p == "/api/ai_cache_clear":

@@ -2370,7 +2370,7 @@ flex-shrink:0;cursor:pointer;
           <div class="ai-inputbar">
             <div class="ai-composer-wrap">
               <div class="ai-composer">
-                <span class="ai-composer-counter" id="aiSendCounter">0/0</span>
+                <span class="ai-composer-counter" id="aiSendCounter" title="UndoSteps/Turns">0/0</span>
                 <textarea id="aiChatInput" class="ai-input" placeholder="Ask Hivo anything..." onkeydown="aiChatInputKeydown(event)"></textarea>
                 <button class="ai-send-btn" onclick="sendAiChat()">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -2785,6 +2785,7 @@ flex-shrink:0;cursor:pointer;
           if (Number.isFinite(Number(ln)) && Number(ln) > 0) lastLineByPath.set(String(window.__plainEditorFilename), Number(ln));
           return;
         }
+
       }
 
       if (curFile !== null && files && files[curFile] && files[curFile].path) {
@@ -8792,6 +8793,7 @@ flex-shrink:0;cursor:pointer;
       } catch (e1) { steps = 0; }
 
       el.textContent = `${steps}/${turns}`;
+      el.title = 'UndoSteps/Turns';
       el.style.display = 'inline-flex';
     } catch (e) {}
   }
@@ -9056,7 +9058,7 @@ flex-shrink:0;cursor:pointer;
       const s = String(text || '');
       if (!s) return [];
       const out = [];
-      const maxN = Math.max(1, Math.min(6, Number(maxCount || 3) || 3));
+      const maxN = Math.max(1, Math.min(20, Number(maxCount || 3) || 3));
       let pos = 0;
       while (pos < s.length && out.length < maxN) {
         const hit = __gmAiExtractFirstToolJson(s.slice(pos));
@@ -9110,13 +9112,13 @@ flex-shrink:0;cursor:pointer;
       const s = String(content || '');
       if (!s) return { handled: false, content: s };
 
-      const hits = __gmAiExtractToolJsonList(s, 3);
+      const hits = __gmAiExtractToolJsonList(s, 10);
       if (!hits || !hits.length) {
         const maybeTool = (s.indexOf('"type"') >= 0 || s.indexOf('{"type"') >= 0 || s.indexOf("{'type'") >= 0 || s.indexOf("\"type\"") >= 0)
           && (s.indexOf('save_file') >= 0 || s.indexOf('update_file') >= 0 || s.indexOf('open_file') >= 0 || s.indexOf('api_request') >= 0
             || s.indexOf('delete_file') >= 0 || s.indexOf('revert_file') >= 0 || s.indexOf('stage_file') >= 0 || s.indexOf('stash_pop') >= 0 || s.indexOf('switch_branch') >= 0
             || s.indexOf('run_cmd') >= 0 || s.indexOf('verify_python') >= 0 || s.indexOf('search_code') >= 0 || s.indexOf('read_file_range') >= 0 || s.indexOf('list_dir_tree') >= 0);
-        if (maybeTool) return { handled: true, content: '操作失败\n- 原因：未能解析工具指令（请输出合法 JSON；一次回复最多 3 条指令；每个 JSON 独占一段）' };
+        if (maybeTool) return { handled: true, content: '操作失败\n- 原因：未能解析工具指令（请输出合法 JSON；一次回复最多 10 条指令；每个 JSON 独占一段）' };
         return { handled: false, content: s };
       }
 
@@ -9143,6 +9145,16 @@ flex-shrink:0;cursor:pointer;
         __gmAiLastToolAt = Date.now();
 
         const toolType = String(hit.obj.type || '').trim();
+
+        const tracePrefix = (() => {
+          try {
+            const t = String(toolType || '').trim() || 'unknown';
+            const p = String((hit.obj && (hit.obj.path || hit.obj.name || hit.obj.old_path || hit.obj.new_path)) || '').trim();
+            return p ? (`[${t}] ${p}`) : (`[${t}]`);
+          } catch (e) {
+            return '[tool]';
+          }
+        })();
 
         const isWriteTool = (toolType === 'save_file' || toolType === 'update_file' || toolType === 'delete_file' || toolType === 'rename_file' || toolType === 'revert_file');
         const idemKey = isWriteTool ? __gmAiBuildIdempotencyKey(toolType, hit.obj) : '';
@@ -9191,101 +9203,43 @@ flex-shrink:0;cursor:pointer;
 
             const wantExternal = forceExternal || looksAbsolutePath;
 
-            const tryOpenExternalFromRecent = () => {
-              try {
-                const nm0 = String(nm || '');
-                const nmNorm = nm0.replace(/\\/g, '/');
-                const nmBase = (nmNorm.split('/').pop() || nm0).trim();
-                const item = (recentFiles || []).find(x => {
-                  if (!x || !x.external) return false;
-                  const xp = String(x.path || '');
-                  if (xp === nm0) return true;
-                  const xpNorm = xp.replace(/\\/g, '/');
-                  const xpBase = (xpNorm.split('/').pop() || xp).trim();
-                  return !!nmBase && !!xpBase && nmBase === xpBase;
-                }) || null;
-                if (!item) return false;
-                let fh = null;
-                try {
-                  const p2 = String(item.path || '');
-                  fh = (p2 && window.__externalFileHandleByPath) ? window.__externalFileHandleByPath.get(p2) : null;
-                } catch (e0c) { fh = null; }
-                if (typeof openFileInEditor === 'function') {
-                  openFileInEditor(String(item.path || nm), String(item.content || ''), true, fh);
-                  return true;
-                }
-              } catch (e0b) {}
-              return false;
-            };
-
             if (wantExternal) {
-              const okExt = tryOpenExternalFromRecent();
-              if (okExt) return `已打开并切换：${nm}`;
-              if (typeof window.showOpenFilePicker === 'function') {
-                try {
-                  const handles = await window.showOpenFilePicker({ multiple: false });
-                  const fh = handles && handles.length ? handles[0] : null;
-                  if (fh && typeof fh.getFile === 'function') {
-                    const f2 = await fh.getFile();
-                    const c2 = await readFileAsText(f2);
-                    const fn = String((f2 && f2.name) || '').trim();
-                    const nm0 = String(nm || '');
-                    const nmBase = (nm0.replace(/\\/g, '/').split('/').pop() || nm0).trim();
-                    const labelName = fn || nmBase || nm0 || '外部文件';
-                    openFileInEditor(labelName, String(c2 || ''), true, fh);
-                    return `已打开并切换：${labelName}`;
-                  }
-                } catch (ePick) {
-                  if (ePick && ePick.name === 'AbortError') return '已取消选择外部文件';
-                }
-              }
-              return `打开失败：${nm}\n未找到外部文件记录，且无法打开文件选择器（请使用拖拽打开一次以建立记录）`;
+              return `打开失败：${nm}\n当前仅支持通过接口打开仓库内文件（方案1：统一走接口调度）；外部文件请先拖拽打开`;
             }
 
-            const ff = await GET('/api/find_files?name=' + encodeURIComponent(nm));
-            const list = (ff && ff.ok && Array.isArray(ff.files)) ? ff.files : [];
-            if (!list.length) {
-              const okExt = tryOpenExternalFromRecent();
-              if (okExt) return `已打开并切换：${nm}`;
-              return `打开失败：${nm}\n未找到文件`;
+            const res = await POST('/api/open_file', { name: nm, view });
+            if (!(res && res.ok)) {
+              const em = String((res && (res.msg || res.error)) || '未找到文件');
+              return `打开失败：${nm}\n${em}`;
             }
-            let pick = String(list[0] || '');
-            const nmLower = nm.toLowerCase();
-            for (const rel of list) {
-              const bn = String(rel || '').split('/').pop() || '';
-              if (bn.toLowerCase() === nmLower) { pick = String(rel || ''); break; }
-            }
+            const pick = String(res.path || nm);
+            const view2 = String(res.view || view || 'editor');
+            const c = (res && typeof res.content === 'string') ? String(res.content || '') : '';
 
             let idxInFiles = -1;
             try {
               idxInFiles = (files || []).findIndex(f0 => f0 && String(f0.path || '') === String(pick || ''));
             } catch (eIdx) { idxInFiles = -1; }
 
-            if (idxInFiles >= 0 && (view === 'change' || view === 'split' || view === 'unified')) {
+            if (idxInFiles >= 0 && (view2 === 'change' || view2 === 'split' || view2 === 'unified')) {
               try {
-                if (view === 'unified') {
+                if (view2 === 'unified') {
                   const elU = document.getElementById('dtUnified');
                   if (elU) setDiffMode('unified', elU);
                   else diffMode = 'unified';
                 }
-                if (view === 'split') {
+                if (view2 === 'split') {
                   const elS = document.getElementById('dtSplit');
                   if (elS) setDiffMode('split', elS);
                   else diffMode = 'split';
                 }
               } catch (eDm) {}
               try { await selectFile(idxInFiles); } catch (eSel) { return `打开失败：${pick}`; }
-              if (view === 'split') return `已打开并排对比视图：${pick}`;
-              if (view === 'unified') return `已打开单栏视图：${pick}`;
+              if (view2 === 'split') return `已打开并排对比视图：${pick}`;
+              if (view2 === 'unified') return `已打开单栏视图：${pick}`;
               return `已打开变更视图：${pick}`;
             }
 
-            const fc = await GET('/api/file_content?path=' + encodeURIComponent(pick));
-            if (!(fc && fc.ok)) {
-              const em = String((fc && (fc.error || fc.msg)) || '无法读取内容');
-              return `打开失败：${pick}\n${em}`;
-            }
-            const c = (fc && typeof fc.content === 'string') ? String(fc.content || '') : '';
             try {
               if (typeof openFileInEditor === 'function') {
                 openFileInEditor(String(pick || nm), c, false, null);
@@ -9312,6 +9266,34 @@ flex-shrink:0;cursor:pointer;
           }
           const res = await GET(path);
           return __gmAiFormatApiResult(path, method, body || {}, res);
+        }
+
+        if (toolType === 'run_cmd') {
+          const cmd = String(hit.obj.cmd || hit.obj.command || '').trim();
+          if (!cmd) return `${tracePrefix}\nrun_cmd 失败：缺少 cmd`;
+          const timeout = Number(hit.obj.timeout || 30) || 30;
+          const cwd = (hit.obj.cwd === undefined || hit.obj.cwd === null) ? null : String(hit.obj.cwd || '');
+          try {
+            // Client-side guard (authoritative checks should also be done on server).
+            if (cmd.length > 4000) return `${tracePrefix}\nrun_cmd 失败：cmd 过长`;
+            if (/[\r\n]/.test(cmd)) return `${tracePrefix}\nrun_cmd 失败：不允许换行`;
+            if (/[<>|]/.test(cmd)) return `${tracePrefix}\nrun_cmd 失败：不允许重定向/管道符`;
+            if (/\&\&|\|\|/.test(cmd)) return `${tracePrefix}\nrun_cmd 失败：不允许复合命令`;
+            const res = await postWithUndo('/api/run_cmd', { cmd, timeout, cwd });
+            const ok = Boolean(res && res.ok);
+            const code = (res && res.exit_code !== undefined) ? Number(res.exit_code) : null;
+            const out = String((res && res.stdout) || '').trim();
+            const err = String((res && res.stderr) || '').trim();
+            let text = ok ? '已完成：执行命令' : '命令执行失败';
+            text = `${tracePrefix}\n` + text + `\n- cmd: ${cmd}`;
+            if (code !== null && Number.isFinite(code)) text += `\n- exit_code: ${code}`;
+            if (out) text += `\n\nstdout:\n${out}`;
+            if (err) text += `\n\nstderr:\n${err}`;
+            __gmAiPushExecSummary(`run_cmd -> ${ok ? 'ok' : 'fail'} (${cmd.slice(0, 64)})`);
+            return text;
+          } catch (e2) {
+            return `${tracePrefix}\nrun_cmd 执行失败：${cmd}`;
+          }
         }
 
         if (toolType === 'search_code') {
@@ -9405,51 +9387,22 @@ flex-shrink:0;cursor:pointer;
           }
         }
 
-        if (toolType === 'run_cmd') {
-          const cmd = String(hit.obj.cmd || hit.obj.command || '').trim();
-          if (!cmd) return 'run_cmd 失败：缺少 cmd';
-          const timeout = Number(hit.obj.timeout || 30) || 30;
-          const cwd = (hit.obj.cwd === undefined || hit.obj.cwd === null) ? null : String(hit.obj.cwd || '');
-          try {
-            const res = await POST('/api/run_cmd', { cmd, timeout, cwd });
-            const ok = Boolean(res && res.ok);
-            const code = (res && res.exit_code !== undefined) ? Number(res.exit_code) : null;
-            const out = String((res && res.stdout) || '').trim();
-            const err = String((res && res.stderr) || '').trim();
-            let text = ok ? '已完成：执行命令' : '命令执行失败';
-            text += `\n- cmd: ${cmd}`;
-            if (code !== null && Number.isFinite(code)) text += `\n- exit_code: ${code}`;
-            if (out) text += `\n\nstdout:\n${out}`;
-            if (err) text += `\n\nstderr:\n${err}`;
-            return text;
-          } catch (e2) {
-            return `run_cmd 执行失败：${cmd}`;
-          }
-        }
-
         if (toolType === 'verify_python') {
           const ps = hit.obj && (hit.obj.paths || hit.obj.files);
           const arr = Array.isArray(ps) ? ps : [];
           const paths = arr.map(x => String(x || '').trim()).filter(Boolean).slice(0, 30);
-          const timeout = Number(hit.obj.timeout || 60) || 60;
-          const cwd = (hit.obj.cwd === undefined || hit.obj.cwd === null) ? null : String(hit.obj.cwd || '');
-          const cmd = paths.length
-            ? ('python -m py_compile ' + paths.map(p => (/\s/.test(p) ? ('"' + p.replace(/"/g, '\\"') + '"') : p)).join(' '))
-            : 'python -m py_compile server.py';
           try {
-            const res = await POST('/api/run_cmd', { cmd, timeout, cwd });
+            const res = await POST('/api/verify_python', { paths });
             const ok = Boolean(res && res.ok);
-            const code = (res && res.exit_code !== undefined) ? Number(res.exit_code) : null;
-            const out = String((res && res.stdout) || '').trim();
-            const err = String((res && res.stderr) || '').trim();
             let text = ok ? '✓ Python 语法检查通过' : 'Python 语法检查失败';
-            text += `\n- cmd: ${cmd}`;
-            if (code !== null && Number.isFinite(code)) text += `\n- exit_code: ${code}`;
-            if (out) text += `\n\nstdout:\n${out}`;
-            if (err) text += `\n\nstderr:\n${err}`;
+            if (res && Array.isArray(res.files) && res.files.length) {
+              text += `\n- files: ${res.files.join(', ')}`;
+            }
+            const err = String((res && (res.error || res.msg)) || '').trim();
+            if (err) text += `\n- error: ${err}`;
             return text;
           } catch (e2) {
-            return `verify_python 执行失败：${cmd}`;
+            return `verify_python 执行失败`;
           }
         }
 
@@ -10935,30 +10888,29 @@ flex-shrink:0;cursor:pointer;
 - Verify：若改动了后端/Python，优先追加 verify_python
 - Report：汇总改动点、验证结果、下一步建议（不要重复触发已完成的写操作）`;
 
-      const capability2 = `执行能力（常用）：\n1) 搜索代码：{"type":"search_code","query":"关键字/正则","case_sensitive":false,"max_results":50}\n2) 读取文件片段：{"type":"read_file_range","path":"server.py","start":1,"end":120}\n3) 查看目录树：{"type":"list_dir_tree","path":"","depth":3,"max_entries":500}\n4) 修改后验证(Python)：{"type":"verify_python","paths":["server.py"],"timeout":60,"cwd":""}\n5) 执行命令：{"type":"run_cmd","cmd":"python -m py_compile server.py","timeout":60,"cwd":""}`;
+      const capability2 = `执行能力（常用）：\n1) 搜索代码：{"type":"search_code","query":"关键字/正则","case_sensitive":false,"max_results":50}\n2) 读取文件片段：{"type":"read_file_range","path":"server.py","start":1,"end":120}\n3) 查看目录树：{"type":"list_dir_tree","path":"","depth":3,"max_entries":500}\n4) 修改后验证(Python)：{"type":"verify_python","paths":["server.py"]}\n5) 执行命令(受控)：{"type":"run_cmd","cmd":"git status","timeout":30}`;
 
       const capability3 = `系统接口索引（摘要）：
 
 [Repo/Workspace]
-- POST /api/open_repo {path}
-- GET  /api/status
-- GET  /api/workspace_context
-
-[Raw File]
-- GET  /api/raw_file?path=相对路径 (二进制/媒体文件，支持 Range)
-
-[Files/Diff]
 - GET  /api/files
-- GET  /api/diff?path&status&ctx
-- GET  /api/file_content?path
-- POST /api/file_content {path}
-- POST /api/file_content_head {path}
+- GET  /api/commits
+- GET  /api/commit_detail?hash
+- GET  /api/commit_file_diff?hash&path
+- GET  /api/branches
+- GET  /api/commit_push_status?hash
+- GET  /api/workspace_context
+- GET  /api/ai_chat_history?profile_id&session_id&limit
 
-[Write Ops (支持 X-Undo-Group + X-Idempotency-Key)]
+[Write]
 - POST /api/save_file {path,content}
 - POST /api/delete_file {path}
 - POST /api/rename_file {old_path,new_path}
 - POST /api/revert_file {path,status}
+
+[System]
+- POST /api/open_file {name,view} (必须走接口调度)
+- POST /api/verify_python {paths}
 
 [Git]
 - POST /api/stage_file {path}
@@ -10976,7 +10928,9 @@ flex-shrink:0;cursor:pointer;
 - GET  /api/list_dir_tree?path&depth&max_entries
 
 [Cmd]
-- POST /api/run_cmd {cmd,timeout,cwd?}`;
+- POST /api/run_cmd {cmd,timeout,cwd?}
+- 约束：优先使用 /api/* 完成业务 CRUD；只有在接口确实无法覆盖时才使用 run_cmd；输出必须是单行命令，不允许换行/管道/重定向/复合命令
+`;
 
       let execSummaryBlock = '';
       try {
@@ -18053,7 +18007,30 @@ flex-shrink:0;cursor:pointer;
       const img = document.getElementById('aiMediaPreviewImg');
       if (!modal || !img) return;
       const safeSrc = String(src || '');
+      const frame = modal.querySelector('.ai-media-frame');
+      try {
+        const chatRoot = document.getElementById('aiChatInner') || document.getElementById('aiChatList') || null;
+        const root = chatRoot || document.body;
+        const imgs = Array.from(root.querySelectorAll('.ai-md img'));
+        const uniq = [];
+        const seen = new Set();
+        for (const x of imgs) {
+          let u = '';
+          try {
+            u = String((x && x.getAttribute) ? (x.getAttribute('src') || '') : '');
+            if (!u && x && x.currentSrc) u = String(x.currentSrc || '');
+          } catch (e0u) { u = ''; }
+          if (!u) continue;
+          if (seen.has(u)) continue;
+          seen.add(u);
+          uniq.push(u);
+        }
+        window.__gmAiMediaPreviewList = uniq;
+      } catch (e0) {
+        window.__gmAiMediaPreviewList = [];
+      }
       window.__gmAiMediaPreviewList = Array.isArray(window.__gmAiMediaPreviewList) ? window.__gmAiMediaPreviewList : [];
+      if (safeSrc && window.__gmAiMediaPreviewList.indexOf(safeSrc) < 0) window.__gmAiMediaPreviewList.push(safeSrc);
       if (!window.__gmAiMediaPreviewList.length) window.__gmAiMediaPreviewList = [safeSrc];
       let idx = window.__gmAiMediaPreviewList.indexOf(safeSrc);
       if (idx < 0) {
@@ -18064,7 +18041,11 @@ flex-shrink:0;cursor:pointer;
       img.src = safeSrc;
       modal.classList.add('show');
       window.__gmAiMediaPreviewOpen = true;
+      try { if (frame) frame.classList.add('__show-controls'); } catch (e1c) {}
       try { __gmAiSyncMediaPreviewUi(); } catch (e2) {}
+      try {
+        img.onload = () => { try { if (window.__gmAiMediaPreviewOpen) __gmAiMediaPreviewRefreshLayout(); } catch (e3) {} };
+      } catch (e4) {}
     } catch (e) {}
   }
 
@@ -18263,25 +18244,6 @@ flex-shrink:0;cursor:pointer;
           if (modal && modal.contains(el)) return;
           const src = String(el.getAttribute('src') || '');
           if (!src) return;
-
-          try {
-            const chatRoot = document.getElementById('aiChatInner') || document.getElementById('aiChatList') || null;
-            const root = chatRoot || (el.closest && el.closest('.ai-chat')) || inAiMd;
-            const imgs = Array.from(root.querySelectorAll('.ai-md img'));
-            const uniq = [];
-            const seen = new Set();
-            for (const x of imgs) {
-              const u = String(x && x.getAttribute ? (x.getAttribute('src') || '') : '');
-              if (!u) continue;
-              if (seen.has(u)) continue;
-              seen.add(u);
-              uniq.push(u);
-            }
-            window.__gmAiMediaPreviewList = uniq;
-          } catch (e3) {
-            window.__gmAiMediaPreviewList = [src];
-          }
-
           e.preventDefault();
           __gmAiOpenMediaPreview(src);
           return;
