@@ -4,7 +4,11 @@ Git Manager Backend — 完整修复版 + 完善日志系统 + WebSocket实时�
 python3 server.py  →  http://localhost:7842
 """
 
-import subprocess, os, json, re, sys, logging, threading, hashlib, time, difflib, shutil, mimetypes
+import json
+import time
+import re
+from collections import deque, OrderedDict
+import subprocess, os, sys, logging, threading, hashlib, difflib, shutil, mimetypes
 from pathlib import Path
 import urllib.request
 import urllib.error
@@ -3051,6 +3055,182 @@ def ai_chat(messages: list, temperature: float | None = None, profile_id: str | 
         return False, "解析响应失败", None
 
 
+_rl_lock = threading.Lock()
+_rl_windows: dict[str, deque] = {}
+
+
+def _rl_make_key(handler, profile_id: str | None = None, session_id: str | None = None):
+    ip = ""
+    try:
+        ip = str((handler.client_address or [""])[0] or "")
+    except Exception:
+        ip = ""
+    pid = str(profile_id or "").strip()
+    sid = str(session_id or "").strip()
+    base = sid or pid or ip or "anon"
+    return f"{base}::{ip}"
+
+
+def _rl_conf(level: str):
+    lvl = str(level or "").lower()
+    if lvl == "modify":
+        return 60.0, 5, 8
+    if lvl == "search":
+        return 60.0, 10, 15
+    return 60.0, 20, 30
+
+
+def _rl_check_and_get_delay(key: str, level: str):
+    window_s, soft_n, hard_n = _rl_conf(level)
+    now = time.time()
+    wkey = f"{level}::{key}"
+    with _rl_lock:
+        q = _rl_windows.get(wkey)
+        if q is None:
+            q = deque()
+            _rl_windows[wkey] = q
+        cutoff = now - window_s
+        while q and q[0] < cutoff:
+            q.popleft()
+        cur = len(q)
+        if cur >= hard_n:
+            retry_after = int(max(1.0, (q[0] + window_s) - now)) if q else int(window_s)
+            return False, 0.0, retry_after
+        delay = 0.0
+        if cur >= soft_n:
+            delay = min(3.0, 0.25 * (cur - soft_n + 1))
+        q.append(now)
+        return True, delay, 0
+
+
+_ai_cache_lock = threading.Lock()
+_ai_cache: "OrderedDict[str, dict]" = OrderedDict()
+
+
+def _ai_norm_query(text: str):
+    s = str(text or "").strip().lower()
+    s = re.sub(r"\s+", " ", s)
+    s = re.sub(r"[\u0000-\u001f]", " ", s)
+    s = re.sub(r"[\t\r\n]", " ", s)
+    s = re.sub(r"[\"'`~!@#$%^&*()\-_=+\[\]{};:,./<>?\\|]", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def _ai_keywords(text: str):
+    s = _ai_norm_query(text)
+    if not s:
+        return set()
+    toks = re.findall(r"[a-z0-9]{2,}|[\u4e00-\u9fff]{2,}", s)
+    return set(toks)
+
+
+def _ai_jaccard(a: set, b: set):
+    if not a or not b:
+        return 0.0
+    inter = len(a & b)
+    if inter <= 0:
+        return 0.0
+    uni = len(a | b)
+    return float(inter) / float(uni or 1)
+
+
+def _ai_cache_get(query: str, profile_id: str | None = None):
+    now = time.time()
+    nq = _ai_norm_query(query)
+    if not nq:
+        return None
+    kset = _ai_keywords(nq)
+    prefix = str(profile_id or "").strip() + "::"
+
+    with _ai_cache_lock:
+        dead = []
+        for ck, ent in list(_ai_cache.items()):
+            ttl = float(ent.get("ttl") or 0)
+            ts = float(ent.get("ts") or 0)
+            if ttl > 0 and now - ts > ttl:
+                dead.append(ck)
+        for ck in dead:
+            try:
+                _ai_cache.pop(ck, None)
+            except Exception:
+                pass
+
+        exact_key = prefix + nq
+        ent = _ai_cache.get(exact_key)
+        if ent is not None:
+            ent["hits"] = int(ent.get("hits") or 0) + 1
+            ent["ts"] = now
+            try:
+                _ai_cache.move_to_end(exact_key)
+            except Exception:
+                pass
+            return ent
+
+        best_key = ""
+        best_score = 0.0
+        scan = 0
+        for ck, e in reversed(list(_ai_cache.items())):
+            if prefix and not ck.startswith(prefix):
+                continue
+            scan += 1
+            if scan > 60:
+                break
+            ks = e.get("kw") or set()
+            try:
+                score = _ai_jaccard(kset, set(ks))
+            except Exception:
+                score = 0.0
+            if score > best_score:
+                best_score = score
+                best_key = ck
+        if best_key and best_score >= 0.75:
+            e = _ai_cache.get(best_key)
+            if e is not None:
+                e["hits"] = int(e.get("hits") or 0) + 1
+                e["ts"] = now
+                try:
+                    _ai_cache.move_to_end(best_key)
+                except Exception:
+                    pass
+                return e
+    return None
+
+
+def _ai_cache_put(query: str, response: str, profile_id: str | None = None):
+    now = time.time()
+    nq = _ai_norm_query(query)
+    if not nq:
+        return
+    prefix = str(profile_id or "").strip() + "::"
+    key = prefix + nq
+    kw = _ai_keywords(nq)
+    ent = {
+        "q": nq,
+        "kw": kw,
+        "resp": str(response or ""),
+        "ts": now,
+        "hits": 0,
+        "ttl": 20.0 * 60.0,
+    }
+    with _ai_cache_lock:
+        _ai_cache[key] = ent
+        try:
+            _ai_cache.move_to_end(key)
+        except Exception:
+            pass
+        while len(_ai_cache) > 220:
+            try:
+                _ai_cache.popitem(last=False)
+            except Exception:
+                break
+
+
+def _ai_cache_clear():
+    with _ai_cache_lock:
+        _ai_cache.clear()
+
+
 def get_file_log(filepath: str, limit: int = 50):
     """Get git log for a single file."""
     if not REPO_PATH:
@@ -3755,6 +3935,18 @@ class Handler(BaseHTTPRequestHandler):
             logger.debug("处理 /api/search_code 请求")
             if not self._require_repo():
                 return
+            try:
+                pid = qget("profile_id") or ""
+                sid = qget("session_id") or ""
+                key = _rl_make_key(self, profile_id=pid, session_id=sid)
+                ok_rl, delay_s, retry_after = _rl_check_and_get_delay(key, "search")
+                if not ok_rl:
+                    self.send_json({"ok": False, "msg": f"请求过于频繁，请在 {retry_after} 秒后重试", "retry_after": retry_after}, 429)
+                    return
+                if delay_s > 0:
+                    time.sleep(delay_s)
+            except Exception:
+                pass
             q = qget("query") or qget("q") or ""
             cs = str(qget("case_sensitive") or "").strip().lower() in ("1", "true", "yes", "y")
             try:
@@ -3914,6 +4106,16 @@ class Handler(BaseHTTPRequestHandler):
                 logger.info("处理 /api/save_file 请求")
                 if not self._require_repo():
                     return
+                try:
+                    key = _rl_make_key(self)
+                    ok_rl, delay_s, retry_after = _rl_check_and_get_delay(key, "modify")
+                    if not ok_rl:
+                        self.send_json({"ok": False, "msg": f"请求过于频繁，请在 {retry_after} 秒后重试", "retry_after": retry_after}, 429)
+                        return
+                    if delay_s > 0:
+                        time.sleep(delay_s)
+                except Exception:
+                    pass
                 idem_key = (self.headers.get("X-Idempotency-Key") or "").strip()
                 if idem_key:
                     ent = _idempotency_get(idem_key)
@@ -4060,6 +4262,16 @@ class Handler(BaseHTTPRequestHandler):
                 logger.info("处理 /api/revert_file 请求")
                 if not self._require_repo():
                     return
+                try:
+                    key = _rl_make_key(self)
+                    ok_rl, delay_s, retry_after = _rl_check_and_get_delay(key, "modify")
+                    if not ok_rl:
+                        self.send_json({"ok": False, "msg": f"请求过于频繁，请在 {retry_after} 秒后重试", "retry_after": retry_after}, 429)
+                        return
+                    if delay_s > 0:
+                        time.sleep(delay_s)
+                except Exception:
+                    pass
                 idem_key = (self.headers.get("X-Idempotency-Key") or "").strip()
                 if idem_key:
                     ent = _idempotency_get(idem_key)
@@ -4143,11 +4355,65 @@ class Handler(BaseHTTPRequestHandler):
                 msgs = data.get("messages") if isinstance(data, dict) else None
                 temp = data.get("temperature") if isinstance(data, dict) else None
                 pid = data.get("profile_id") if isinstance(data, dict) else None
+                sid = data.get("session_id") if isinstance(data, dict) else None
+
+                try:
+                    key = _rl_make_key(self, profile_id=pid, session_id=sid)
+                    ok_rl, delay_s, retry_after = _rl_check_and_get_delay(key, "chat")
+                    if not ok_rl:
+                        self.send_json({"ok": False, "msg": f"请求过于频繁，请在 {retry_after} 秒后重试", "retry_after": retry_after}, 429)
+                        return
+                    if delay_s > 0:
+                        time.sleep(delay_s)
+                except Exception:
+                    pass
+
+                user_q = ""
+                try:
+                    if isinstance(msgs, list):
+                        for m in reversed(msgs):
+                            if isinstance(m, dict) and str(m.get("role") or "") == "user":
+                                user_q = str(m.get("content") or "")
+                                break
+                except Exception:
+                    user_q = ""
+
+                try:
+                    ent = _ai_cache_get(user_q, profile_id=pid)
+                except Exception:
+                    ent = None
+                if ent is not None:
+                    self.send_json({"ok": True, "content": ent.get("resp", ""), "raw": {"cached": True, "hits": int(ent.get("hits") or 0)}})
+                    return
+
                 ok, msg, result = ai_chat(msgs, temperature=temp, profile_id=pid)
                 if ok:
-                    self.send_json({"ok": True, "content": result.get("content", ""), "raw": result.get("raw")})
+                    content = result.get("content", "")
+                    try:
+                        _ai_cache_put(user_q, str(content or ""), profile_id=pid)
+                    except Exception:
+                        pass
+                    self.send_json({"ok": True, "content": content, "raw": result.get("raw")})
                 else:
                     self.send_json({"ok": False, "msg": msg}, 400)
+
+            elif p == "/api/ai_cache_clear":
+                logger.info("处理 /api/ai_cache_clear 请求")
+                try:
+                    key = _rl_make_key(self)
+                    ok_rl, delay_s, retry_after = _rl_check_and_get_delay(key, "modify")
+                    if not ok_rl:
+                        self.send_json({"ok": False, "msg": f"请求过于频繁，请在 {retry_after} 秒后重试", "retry_after": retry_after}, 429)
+                        return
+                    if delay_s > 0:
+                        time.sleep(delay_s)
+                except Exception:
+                    pass
+                try:
+                    _ai_cache_clear()
+                except Exception:
+                    pass
+                self.send_json({"ok": True, "msg": "已清空缓存"})
 
             elif p == "/api/ai_chat_history":
                 logger.info("处理 /api/ai_chat_history 请求")
@@ -4198,6 +4464,16 @@ class Handler(BaseHTTPRequestHandler):
                 logger.info("处理 /api/revert_all 请求")
                 if not self._require_repo():
                     return
+                try:
+                    key = _rl_make_key(self)
+                    ok_rl, delay_s, retry_after = _rl_check_and_get_delay(key, "modify")
+                    if not ok_rl:
+                        self.send_json({"ok": False, "msg": f"请求过于频繁，请在 {retry_after} 秒后重试", "retry_after": retry_after}, 429)
+                        return
+                    if delay_s > 0:
+                        time.sleep(delay_s)
+                except Exception:
+                    pass
                 errors = []
                 raw_paths = data.get("paths")
                 paths = None

@@ -2590,6 +2590,22 @@ flex-shrink:0;cursor:pointer;
     }
   }
 
+  let __gmAiSendDebounceTimer = 0;
+  function sendAiChat() {
+    try {
+      if (__gmAiSendDebounceTimer) {
+        clearTimeout(__gmAiSendDebounceTimer);
+        __gmAiSendDebounceTimer = 0;
+      }
+      __gmAiSendDebounceTimer = setTimeout(() => {
+        __gmAiSendDebounceTimer = 0;
+        try { __gmAiSendAiChatNow(); } catch (e2) {}
+      }, 300);
+    } catch (e) {
+      try { __gmAiSendAiChatNow(); } catch (e2) {}
+    }
+  }
+
   function __gmIndentBackspaceDelCount(beforeText, indentUnit) {
     try {
       const IND = (indentUnit !== null && indentUnit !== undefined) ? String(indentUnit) : '    ';
@@ -9259,11 +9275,17 @@ flex-shrink:0;cursor:pointer;
           const caseSensitive = Boolean(hit.obj.case_sensitive);
           const maxResults = Number(hit.obj.max_results || 50) || 50;
           try {
+            const pid = String(__gmAiSelectedProfileId || __gmAiConfig.active_profile_id || '');
+            const sid = String(__gmAiActiveSessionId || '');
             const url = '/api/search_code?query=' + encodeURIComponent(query)
               + '&case_sensitive=' + encodeURIComponent(caseSensitive ? '1' : '0')
-              + '&max_results=' + encodeURIComponent(String(maxResults));
+              + '&max_results=' + encodeURIComponent(String(maxResults))
+              + '&profile_id=' + encodeURIComponent(pid)
+              + '&session_id=' + encodeURIComponent(sid);
             const res = await GET(url);
-            if (!(res && res.ok)) return 'search_code 失败：' + String((res && (res.msg || res.error)) || '搜索失败');
+            if (res && res.ok) {
+              return { ok: true, output: JSON.stringify(res.hits || [], null, 2) };
+            }
             const hits = Array.isArray(res.hits) ? res.hits : [];
             if (!hits.length) return `search_code\n- query: ${query}\n- 结果：0`;
             const lines = hits.slice(0, 50).map(h => {
@@ -10507,7 +10529,7 @@ flex-shrink:0;cursor:pointer;
     } catch (e2) {}
   }
 
-  async function sendAiChat() {
+  async function __gmAiSendAiChatNow() {
     const ta = document.getElementById('aiChatInput');
     const text = ta ? String(ta.value || '').trim() : '';
     if (!text) return;
@@ -10531,7 +10553,7 @@ flex-shrink:0;cursor:pointer;
     try {
       const sys = await __gmBuildAiSystemContext(text);
       const msgs = __gmAiBuildMessagesForApi(sys);
-      const res = await POST('/api/ai_chat', { messages: msgs, profile_id: pid });
+      const res = await POST('/api/ai_chat', { messages: msgs, profile_id: pid, session_id: __gmAiActiveSessionId });
       if (res && res.ok) {
         let content = __gmAiSanitizeAssistantContent(String(res.content || ''));
         try {
@@ -10582,6 +10604,19 @@ flex-shrink:0;cursor:pointer;
       toast('对话失败', 'err');
     }
   }
+
+  window.aiClearAiCache = async function() {
+    try {
+      const res = await POST('/api/ai_cache_clear', {});
+      if (res && res.ok) {
+        toast(String(res.msg || '已清空缓存'), 'ok');
+        return;
+      }
+      toast(String((res && (res.msg || res.error)) || '清空缓存失败'), 'err');
+    } catch (e) {
+      toast('清空缓存失败', 'err');
+    }
+  };
 
   function __gmAiSetMeta(text) {
     try {
