@@ -2446,10 +2446,17 @@ def _ai_config_path():
 
 
 def _ai_history_path():
+    repo = (REPO_PATH or "")
+    repo_key = "global"
+    try:
+        if repo:
+            repo_key = hashlib.sha1(repo.encode("utf-8", errors="ignore")).hexdigest()[:10]
+    except Exception:
+        repo_key = "global"
     appdata = os.environ.get("APPDATA")
     if appdata:
-        return Path(appdata) / "git-manager" / "ai_chat_history.json"
-    return Path.home() / ".git-manager" / "ai_chat_history.json"
+        return Path(appdata) / "git-manager" / f"ai_chat_history_{repo_key}.json"
+    return Path.home() / ".git-manager" / f"ai_chat_history_{repo_key}.json"
 
 
 _AI_GLOBAL_PROFILE_ID = "__global__"
@@ -3068,7 +3075,13 @@ def _rl_make_key(handler, profile_id: str | None = None, session_id: str | None 
     pid = str(profile_id or "").strip()
     sid = str(session_id or "").strip()
     base = sid or pid or ip or "anon"
-    return f"{base}::{ip}"
+    repo_key = "global"
+    try:
+        if REPO_PATH:
+            repo_key = hashlib.sha1(str(REPO_PATH).encode("utf-8", errors="ignore")).hexdigest()[:10]
+    except Exception:
+        repo_key = "global"
+    return f"{repo_key}::{base}::{ip}"
 
 
 def _rl_conf(level: str):
@@ -3141,7 +3154,13 @@ def _ai_cache_get(query: str, profile_id: str | None = None):
     if not nq:
         return None
     kset = _ai_keywords(nq)
-    prefix = str(profile_id or "").strip() + "::"
+    repo_key = "global"
+    try:
+        if REPO_PATH:
+            repo_key = hashlib.sha1(str(REPO_PATH).encode("utf-8", errors="ignore")).hexdigest()[:10]
+    except Exception:
+        repo_key = "global"
+    prefix = repo_key + "::" + str(profile_id or "").strip() + "::"
 
     with _ai_cache_lock:
         dead = []
@@ -3202,7 +3221,13 @@ def _ai_cache_put(query: str, response: str, profile_id: str | None = None):
     nq = _ai_norm_query(query)
     if not nq:
         return
-    prefix = str(profile_id or "").strip() + "::"
+    repo_key = "global"
+    try:
+        if REPO_PATH:
+            repo_key = hashlib.sha1(str(REPO_PATH).encode("utf-8", errors="ignore")).hexdigest()[:10]
+    except Exception:
+        repo_key = "global"
+    prefix = repo_key + "::" + str(profile_id or "").strip() + "::"
     key = prefix + nq
     kw = _ai_keywords(nq)
     ent = {

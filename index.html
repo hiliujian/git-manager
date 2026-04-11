@@ -2590,6 +2590,50 @@ flex-shrink:0;cursor:pointer;
     }
   }
 
+  function __gmAiResetRepoScopedState() {
+    try {
+      if (Array.isArray(__gmAiChatMessages)) {
+        __gmAiChatMessages.length = 0;
+      } else {
+        __gmAiChatMessages = [];
+      }
+    } catch (e) {
+      __gmAiChatMessages = [];
+    }
+
+    try {
+      __gmAiSessions = [];
+      __gmAiActiveSessionId = '';
+    } catch (e) {}
+
+    try {
+      __gmAiReorderState = null;
+      __gmAiSuppressChipClickUntil = 0;
+      __gmAiDragging = false;
+    } catch (e) {}
+
+    try { window.__gmAiCtxSummary = ''; } catch (e) {}
+
+    try {
+      window.__gmAiMediaPreviewOpen = false;
+      window.__gmAiMediaPreviewList = [];
+      window.__gmAiMediaPreviewIdx = 0;
+    } catch (e) {}
+
+    try { __gmAiRenderHistoryChips(); } catch (e) {}
+    try { __gmAiRenderChat(); } catch (e) {}
+    try { __gmAiRefreshSendCounter(); } catch (e) {}
+
+    try {
+      const pid = String(__gmAiSelectedProfileId || (__gmAiConfig && __gmAiConfig.active_profile_id) || '');
+      if (pid) {
+        setTimeout(() => {
+          try { loadAiChatHistory(pid).catch(()=>{}); } catch (e0) {}
+        }, 0);
+      }
+    } catch (e) {}
+  }
+
   let __gmAiSendDebounceTimer = 0;
   function sendAiChat() {
     try {
@@ -8648,6 +8692,7 @@ flex-shrink:0;cursor:pointer;
       const list = document.getElementById('aiChatInner') || document.getElementById('aiChatList');
       if (!list) return;
       if (!Array.isArray(__gmAiChatMessages) || __gmAiChatMessages.length === 0) {
+        try { list.__gmAiMsgCache = []; } catch (e0) {}
         list.innerHTML = `<div class="ai-empty"><div class="ai-empty-card">
           <div class="ai-empty-ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a4 4 0 0 1-4 4H7l-4 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/></svg></div>
           <div class="ai-empty-title">开始一个会话</div>
@@ -9615,11 +9660,24 @@ flex-shrink:0;cursor:pointer;
     }
   }
 
+  function __gmAiRepoScopeKey() {
+    try {
+      const el = document.getElementById('repoLabel');
+      const repo = el ? String(el.getAttribute('data-repo') || el.textContent || '') : '';
+      const s = (repo || '').trim();
+      if (!s) return 'global';
+      return s;
+    } catch (e) {
+      return 'global';
+    }
+  }
+
   function __gmAiCtxKey() {
     try {
+      const repo = __gmAiRepoScopeKey();
       const pid = String(__gmAiSelectedProfileId || __gmAiConfig.active_profile_id || '');
       const sid = String(__gmAiActiveSessionId || '');
-      return `__gm_ai_ctx_summary__${pid}__${sid}`;
+      return `__gm_ai_ctx_summary__${repo}__${pid}__${sid}`;
     } catch (e) {
       return '__gm_ai_ctx_summary__';
     }
@@ -11466,6 +11524,11 @@ flex-shrink:0;cursor:pointer;
     err.textContent = '';
     try { localStorage.setItem('lastRepoPath', path); } catch (e) {}
     showApp(res.repo, res.branch);
+    try { __gmAiResetRepoScopedState(); } catch (e) {}
+    try {
+      const pid = String(__gmAiSelectedProfileId || (__gmAiConfig && __gmAiConfig.active_profile_id) || '');
+      if (pid) loadAiChatHistory(pid).catch(()=>{});
+    } catch (e) {}
     await refresh();
   }
 
@@ -11630,6 +11693,11 @@ flex-shrink:0;cursor:pointer;
         cur = (b && b.current) ? b.current : '';
       } catch (e) { cur = ''; }
       showApp(status.repo, cur);
+      try { __gmAiResetRepoScopedState(); } catch (e) {}
+      try {
+        const pid = String(__gmAiSelectedProfileId || (__gmAiConfig && __gmAiConfig.active_profile_id) || '');
+        if (pid) loadAiChatHistory(pid).catch(()=>{});
+      } catch (e) {}
       await refresh();
       return;
     }
@@ -11646,6 +11714,11 @@ flex-shrink:0;cursor:pointer;
     if (res && !res.error && res.repo) {
       if (err) err.textContent = '';
       showApp(res.repo, res.branch);
+      try { __gmAiResetRepoScopedState(); } catch (e) {}
+      try {
+        const pid = String(__gmAiSelectedProfileId || (__gmAiConfig && __gmAiConfig.active_profile_id) || '');
+        if (pid) loadAiChatHistory(pid).catch(()=>{});
+      } catch (e) {}
       await refresh();
       return;
     }
