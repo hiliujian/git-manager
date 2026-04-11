@@ -766,12 +766,27 @@
     .recent-file-status.D{background:#2d0d0d;color:#f27272;}
     .recent-file-status.R{background:#251960;color:#b48ef7;}
     .recent-file-status.U{background:#3d2d0d;color:#f0b429;}
+    .recent-file-status.W{background:#0d2b33;color:#53c7e8;}
+
+    .gm-editor-kind{font-size:10px;margin-left:6px;}
+    .gm-editor-kind.M{color:#6eb4f7;}
+    .gm-editor-kind.A{color:#5dd6a8;}
+    .gm-editor-kind.D{color:#f27272;}
+    .gm-editor-kind.R{color:#b48ef7;}
+    .gm-editor-kind.U{color:#f0b429;}
 
     [data-theme="light"] .recent-file-status.M{background:#d0ebff;color:#1971c2;}
     [data-theme="light"] .recent-file-status.A{background:#d3f9d8;color:#0ca678;}
     [data-theme="light"] .recent-file-status.D{background:#ffe3e3;color:#c92a2a;}
     [data-theme="light"] .recent-file-status.R{background:#e5dbff;color:#7950f2;}
     [data-theme="light"] .recent-file-status.U{background:#fff3bf;color:#e67700;}
+    [data-theme="light"] .recent-file-status.W{background:#c5f6fa;color:#0b7285;}
+
+    [data-theme="light"] .gm-editor-kind.M{color:#1971c2;}
+    [data-theme="light"] .gm-editor-kind.A{color:#0ca678;}
+    [data-theme="light"] .gm-editor-kind.D{color:#c92a2a;}
+    [data-theme="light"] .gm-editor-kind.R{color:#7950f2;}
+    [data-theme="light"] .gm-editor-kind.U{color:#e67700;}
     .recent-file-info{
       flex:1;
       min-width:0;
@@ -1410,6 +1425,292 @@
     [data-theme="light"] .ctx-item:hover{background:rgba(241,243,245,.95);border-color:rgba(206,212,218,.55);}
     [data-theme="light"] .ctx-sep{background:rgba(0,0,0,0.08);}
 
+    .ai-vtab{font-weight:700;letter-spacing:0;background:none;color:inherit;
+      background-image:linear-gradient(135deg, rgba(0,212,255,0.98), rgba(255,79,216,0.98));
+      -webkit-background-clip:text;background-clip:text;
+      -webkit-text-fill-color:transparent;
+      text-shadow:0 6px 18px rgba(0,212,255,0.14), 0 10px 24px rgba(255,79,216,0.10);
+      filter:saturate(1.12) brightness(1.06);
+    }
+
+    .ai-wrap{height:100%;display:flex;flex-direction:column;}
+    .ai-topbar{display:flex;align-items:center;gap:6px;padding:6px 10px;border-bottom:1px solid var(--border);
+      overflow:hidden;min-height:38px;}
+    [data-theme="light"] .ai-topbar{border-bottom:1px solid var(--border);}
+    .ai-sessions-scroll{display:flex;gap:6px;align-items:center;overflow-x:auto;overflow-y:hidden;
+      flex:1;min-width:0;scrollbar-width:none;-ms-overflow-style:none;padding:1px 36px 1px 0;
+      will-change:scroll-position;}
+    .ai-sessions-scroll::-webkit-scrollbar{display:none;}
+    .ai-session-chip{display:inline-flex;align-items:center;gap:6px;padding:0 8px;height:22px;
+      border-radius:999px;cursor:pointer;
+      background:rgba(255,255,255,0.025);
+      border:1px solid rgba(255,255,255,0.06);
+      color:var(--text2);
+      user-select:none;
+      white-space:nowrap;
+      transition:background .14s,border-color .14s,color .14s,transform .12s,box-shadow .12s,opacity .12s;}
+    [data-theme="light"] .ai-session-chip{background:rgba(0,0,0,0.03);border-color:rgba(0,0,0,0.06);}
+    .ai-session-chip:hover{background:rgba(255,255,255,0.05);border-color:rgba(255,255,255,0.11);color:var(--text);}
+    [data-theme="light"] .ai-session-chip:hover{background:rgba(0,0,0,0.05);border-color:rgba(0,0,0,0.10);}
+    .ai-session-chip.active{background:rgba(110,180,247,0.14);border-color:rgba(110,180,247,0.25);color:var(--text);}
+    .ai-session-chip.dragging{opacity:0.55;transform:scale(.98);box-shadow:0 10px 22px rgba(0,0,0,.28);}
+    .ai-session-chip.drag-over{border-color:rgba(110,180,247,0.55);background:rgba(110,180,247,0.10);transform:translateY(-1px);}
+    .ai-session-chip{font-size:11px;font-weight:500;}
+    .ai-session-drop-end{display:none;align-items:center;justify-content:center;flex-shrink:0;
+      min-width:56px;height:22px;padding:0 10px;box-sizing:border-box;border-radius:999px;
+      border:1px dashed rgba(110,180,247,0.22);
+      background:rgba(110,180,247,0.04);
+      opacity:.55;
+      transition:all .12s;}
+    [data-theme="light"] .ai-session-drop-end{background:rgba(76,166,255,0.05);border-color:rgba(76,166,255,0.22);}
+    .ai-session-drop-end.drag-over{border-color:rgba(110,180,247,0.65);background:rgba(110,180,247,0.10);
+      transform:translateY(-1px);opacity:.95;}
+    .ai-session-chip .t{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:4em;}
+    .ai-session-chip .x{display:inline-flex;align-items:center;justify-content:center;
+      width:16px;height:16px;border-radius:999px;flex-shrink:0;margin-left:6px;
+flex-shrink:0;cursor:pointer;
+      opacity:.45;transition:all .14s;}
+    .ai-session-chip .x{margin-left:auto;}
+    .ai-session-chip:hover .x{opacity:.95;}
+    .ai-session-chip .x:hover{opacity:1;color:var(--danger);}
+    .ai-new-session-btn{display:inline-flex;align-items:center;justify-content:center;
+      width:22px;height:22px;border-radius:6px;cursor:pointer;background:transparent;
+      border:1px solid var(--border);color:var(--text2);flex-shrink:0;
+      transition:all 0.15s ease;font-size:16px;font-weight:300;}
+    .ai-new-session-btn:hover{background:var(--bg4);color:var(--accent);}
+
+    .ai-composer-wrap{width:100%;max-width:900px;margin:0 auto;display:flex;flex-direction:column;gap:6px;position:relative;}
+    .ai-composer{display:flex;gap:6px;align-items:flex-end;padding:4px;border-radius:8px;position:relative;
+      background:var(--bg3);
+      border:1px solid var(--border);
+      transition:all 0.15s ease;}
+    .ai-composer:focus-within{border-color:var(--accent);
+      box-shadow:0 0 0 1px var(--accent);}
+    [data-theme="light"] .ai-composer{background:var(--bg3);}
+    [data-theme="light"] .ai-composer:focus-within{border-color:var(--accent);}
+    .ai-input{flex:1;min-height:36px;max-height:300px;resize:none;border:none;outline:none;background:transparent;
+      color:var(--text);padding:6px;margin:0;line-height:1.5;font-size:12px;font-family:inherit;}
+    .ai-send-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;
+      padding:6px;border-radius:6px;font-size:12px;font-weight:600;
+      white-space:nowrap;background:var(--accent);color:var(--on-accent);border:none;
+      cursor:pointer;transition:all 0.15s ease;}
+    .ai-send-btn svg{display:block;}
+    .ai-send-btn:hover{opacity:0.9;transform:translateY(-1px);}
+    .ai-send-btn:active{transform:translateY(0);}
+
+    .ai-composer-counter{position:absolute;right:6px;top:6px;min-width:0;height:14px;
+      padding:0;border-radius:999px;background:transparent;color:var(--text2);
+      border:none;font-size:10px;line-height:14px;
+      display:inline-flex;align-items:center;justify-content:center;pointer-events:none;
+      font-variant-numeric:tabular-nums;}
+
+    .ai-under{display:flex;align-items:center;gap:8px;padding:0 4px;}
+    .ai-add-ctx-btn{display:inline-flex;align-items:center;justify-content:center;
+      width:22px;height:22px;border-radius:6px;cursor:pointer;background:transparent;
+      border:1px solid transparent;color:var(--text2);flex-shrink:0;
+      transition:all 0.15s ease;font-size:13px;line-height:1;font-family:inherit;}
+    .ai-add-ctx-btn:hover{background:var(--bg4);border-color:var(--border);color:var(--accent);}
+    .ai-add-ctx-btn svg{width:14px;height:14px;display:block;}
+
+    .ai-undo-btn{display:inline-flex;align-items:center;justify-content:center;
+      width:22px;height:22px;border-radius:6px;cursor:pointer;background:transparent;
+      border:1px solid transparent;color:var(--text2);flex-shrink:0;
+      transition:all 0.15s ease;font-size:13px;line-height:1;font-family:inherit;}
+    .ai-undo-btn:hover{background:var(--bg4);border-color:var(--border);color:var(--accent);}
+    .ai-undo-btn svg{width:14px;height:14px;display:block;}
+
+    :root{--ai-menu-minw:260px;--ai-menu-maxw:340px;}
+
+    .ai-mention-menu{position:fixed;z-index:2300;min-width:var(--ai-menu-minw);max-width:var(--ai-menu-maxw);display:none;
+      background:rgba(26,28,36,.96);border:1px solid rgba(61,66,98,.85);border-radius:12px;
+      box-shadow:0 22px 60px rgba(0,0,0,0.55);padding:6px;backdrop-filter: blur(10px);
+      overflow:auto;}
+    .ai-mention-menu.show{display:block;}
+    [data-theme="light"] .ai-mention-menu{background:rgba(255,255,255,.96);border:1px solid rgba(206,212,218,.9);
+      box-shadow:0 22px 60px rgba(0,0,0,0.15);}
+    .ai-mention-item{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:10px;
+      color:var(--text);cursor:pointer;font-size:12px;border:1px solid transparent;}
+    .ai-mention-item:hover{background:var(--bg4);border-color:var(--border);}
+    .ai-mention-item.active{background:rgba(110,168,254,0.12);border-color:rgba(110,168,254,0.28);}
+    [data-theme="light"] .ai-mention-item.active{background:rgba(76,166,255,0.10);border-color:rgba(76,166,255,0.20);}
+    .ai-mention-item .nm{font-weight:800;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+    .ai-model-selector{display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border-radius:6px;
+      background:transparent;border:1px solid transparent;color:var(--text2);
+      cursor:pointer;transition:all 0.15s ease;font-size:11px;
+      max-width:220px;min-width:0;overflow:hidden;flex:0 1 auto;
+      white-space:nowrap;text-overflow:ellipsis;}
+    .ai-model-selector:hover{background:var(--bg4);border-color:var(--border);}
+    .ai-model-icon{width:14px;height:14px;opacity:0.6;}
+    .ai-model-name{font-size:11px;color:var(--text2);font-weight:500;max-width:100%;
+      white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex:1;}
+
+    .ai-model-menu{position:fixed;z-index:2200;min-width:var(--ai-menu-minw);max-width:var(--ai-menu-maxw);display:none;
+      background:rgba(26,28,36,.96);border:1px solid rgba(61,66,98,.85);border-radius:12px;
+      box-shadow:0 22px 60px rgba(0,0,0,0.55);padding:6px;backdrop-filter: blur(10px);
+      overflow:auto;}
+    .ai-model-menu.show{display:block;}
+    [data-theme="light"] .ai-model-menu{background:rgba(255,255,255,.96);border:1px solid rgba(206,212,218,.9);
+      box-shadow:0 22px 60px rgba(0,0,0,0.15);}
+    .ai-model-mi{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:10px;
+      color:var(--text);cursor:pointer;font-size:12px;border:1px solid transparent;}
+    .ai-model-mi:hover{background:var(--bg4);border-color:var(--border);}
+    .ai-model-mi.active{background:rgba(110,168,254,0.12);border-color:rgba(110,168,254,0.28);}
+    .ai-model-mi.active:hover{background:var(--bg4);border-color:var(--border);}
+    [data-theme="light"] .ai-model-mi.active{background:rgba(76,166,255,0.10);border-color:rgba(76,166,255,0.20);}
+    [data-theme="light"] .ai-model-mi.active:hover{background:var(--bg4);border-color:var(--border);}
+    .ai-model-mi .nm{font-weight:800;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+    .ai-model-mi .sub{display:none;}
+    .ai-model-sep{height:1px;background:rgba(255,255,255,0.08);margin:6px 6px;}
+    [data-theme="light"] .ai-model-sep{background:rgba(0,0,0,0.08);}
+    
+    /* 删除不再使用的样式 */
+
+    .ai-chat{flex:1;overflow:auto;padding:8px;display:flex;flex-direction:column;gap:6px;}
+    .ai-chat-inner{width:100%;max-width:880px;margin:0 auto;display:flex;flex-direction:column;gap:6px;}
+    .ai-empty{flex:1;min-height:260px;display:flex;align-items:center;justify-content:center;}
+    .ai-empty-card{width:100%;max-width:560px;border-radius:14px;padding:18px 16px;
+      background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.08);
+      display:flex;flex-direction:column;align-items:center;gap:10px;}
+    [data-theme="light"] .ai-empty-card{background:rgba(0,0,0,0.015);border:1px solid rgba(0,0,0,0.10);}
+    .ai-empty-ic{width:42px;height:42px;border-radius:12px;display:flex;align-items:center;justify-content:center;
+      background:rgba(110,168,254,0.10);border:1px solid rgba(110,168,254,0.18);color:var(--accent);}
+    [data-theme="light"] .ai-empty-ic{background:rgba(76,166,255,0.10);border-color:rgba(76,166,255,0.18);}
+    .ai-empty-title{font-weight:800;color:var(--text);font-size:13px;}
+    .ai-empty-sub{font-size:12px;color:var(--text2);text-align:center;line-height:1.7;}
+    .ai-empty-sub code{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--accent);}
+    .ai-msg{display:flex;flex-direction:column;gap:0;max-width:78%;}
+    .ai-msg.user{align-self:flex-end;}
+    .ai-msg.assistant{align-self:flex-start;}
+    .ai-meta{display:none;}
+    .ai-bubble{position:relative;padding:7px 9px;border-radius:12px;border:1px solid rgba(255,255,255,0.08);
+      background:rgba(255,255,255,0.04);white-space:normal;word-break:break-word;line-height:1.55;}
+    .ai-md{font-size:11px;}
+    .ai-md p{margin:0 0 8px 0;}
+    .ai-md p:last-child{margin-bottom:0;}
+    .ai-md h1,.ai-md h2,.ai-md h3{margin:10px 0 8px 0;line-height:1.25;}
+    .ai-md h1{font-size:15px;}
+    .ai-md h2{font-size:14px;}
+    .ai-md h3{font-size:13px;}
+    .ai-md ul,.ai-md ol{margin:6px 0 6px 18px;padding:0;}
+    .ai-md li{margin:3px 0;}
+    .ai-md a{color:var(--accent);text-decoration:none;}
+    .ai-md a:hover{text-decoration:underline;}
+    .ai-md code{font-family:'JetBrains Mono',monospace;font-size:11px;background:rgba(255,255,255,0.06);
+      border:1px solid rgba(255,255,255,0.08);padding:1px 4px;border-radius:6px;}
+    [data-theme="light"] .ai-md code{background:rgba(0,0,0,0.04);border-color:rgba(0,0,0,0.10);}
+    .ai-md pre{margin:8px 0;padding:10px 10px;border-radius:10px;overflow:auto;
+      background:rgba(0,0,0,0.28);border:1px solid rgba(255,255,255,0.08);}
+    [data-theme="light"] .ai-md pre{background:rgba(0,0,0,0.06);border-color:rgba(0,0,0,0.10);}
+    .ai-md pre code{background:none;border:none;padding:0;font-size:11px;}
+    .ai-md blockquote{margin:8px 0;padding:6px 10px;border-left:3px solid rgba(110,168,254,0.45);
+      color:var(--text2);background:rgba(110,168,254,0.06);border-radius:10px;}
+    [data-theme="light"] .ai-md blockquote{background:rgba(76,166,255,0.08);}
+    .ai-md hr{border:none;border-top:1px solid rgba(255,255,255,0.10);margin:10px 0;}
+    [data-theme="light"] .ai-md hr{border-top:1px solid rgba(0,0,0,0.10);}
+    .ai-md img{max-width:100%;height:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.10);}
+    [data-theme="light"] .ai-md img{border-color:rgba(0,0,0,0.10);}
+    .ai-md video,.ai-md audio{max-width:100%;width:100%;margin:6px 0;}
+    .ai-md .ai-media{margin:6px 0;}
+
+    .ai-media-overlay{z-index:650;background:rgba(0,0,0,0.78);}
+    .ai-media-overlay .ai-media-frame{width:min(92vw, 1080px);height:92vh;display:flex;align-items:center;justify-content:center;position:relative;}
+    .ai-media-overlay img{max-width:100%;max-height:100%;object-fit:contain;border-radius:12px;border:1px solid rgba(255,255,255,0.16);
+      background:rgba(0,0,0,0.25);}
+    [data-theme="light"] .ai-media-overlay img{border-color:rgba(0,0,0,0.18);background:rgba(255,255,255,0.55);}
+    .ai-media-overlay .ai-media-nav{position:absolute;top:50%;transform:translateY(-50%);
+      width:52px;height:52px;border-radius:999px;border:1px solid rgba(255,255,255,0.18);
+      background:rgba(0,0,0,0.38);color:#fff;display:flex;align-items:center;justify-content:center;
+      cursor:pointer;user-select:none;opacity:0;transition:opacity 0.15s ease, background 0.15s ease;
+      font-size:28px;font-weight:900;line-height:1;}
+    .ai-media-overlay .ai-media-frame.__show-controls .ai-media-nav{opacity:1;}
+    .ai-media-overlay .ai-media-nav:hover{background:rgba(0,0,0,0.60);}
+    .ai-media-overlay .ai-media-nav.prev{left:12px;}
+    .ai-media-overlay .ai-media-nav.next{right:12px;}
+    .ai-media-overlay .ai-media-tools{position:absolute;left:50%;transform:translateX(-50%);
+      top:12px;display:flex;gap:8px;align-items:center;padding:6px 8px;border-radius:999px;
+      border:1px solid rgba(255,255,255,0.16);background:rgba(0,0,0,0.35);
+      backdrop-filter:blur(8px);opacity:0;transition:opacity 0.15s ease, background 0.15s ease;}
+    .ai-media-overlay .ai-media-frame.__show-controls .ai-media-tools{opacity:1;}
+    .ai-media-overlay .ai-media-tools .btnx{height:28px;padding:0 10px;border-radius:999px;border:1px solid rgba(255,255,255,0.16);
+      background:rgba(255,255,255,0.06);color:#fff;cursor:pointer;font-size:12px;}
+    .ai-media-overlay .ai-media-tools .btnx:hover{background:rgba(255,255,255,0.14);}
+    .ai-media-overlay .ai-media-counter{font-size:12px;color:rgba(255,255,255,0.88);padding:0 4px;}
+    .ai-bubble .ai-msg-actions{position:absolute;top:6px;right:6px;display:flex;gap:4px;opacity:0;
+      transition:opacity 0.15s ease;}
+    .ai-bubble:hover .ai-msg-actions{opacity:0.9;}
+    .ai-msg-actions button{width:18px;height:18px;border-radius:6px;border:1px solid transparent;
+      background:transparent;color:var(--text3);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;
+      padding:0;font-size:12px;line-height:1;}
+    .ai-msg-actions button:hover{background:var(--bg4);border-color:var(--border);color:var(--danger);}
+    .ai-msg.user .ai-bubble{background:linear-gradient(135deg, rgba(76,166,255,0.22), rgba(177,151,252,0.16));
+      border-color:rgba(110,168,254,0.28);}
+    .ai-msg.assistant .ai-bubble{background:rgba(255,255,255,0.035);}
+    [data-theme="light"] .ai-bubble{border:1px solid rgba(0,0,0,0.10);background:rgba(0,0,0,0.02);}
+    [data-theme="light"] .ai-msg.user .ai-bubble{background:linear-gradient(135deg, rgba(76,166,255,0.14), rgba(177,151,252,0.10));
+      border-color:rgba(76,166,255,0.20);}
+
+    @keyframes __gmAiUserGlow {
+      0%{box-shadow:0 0 0 rgba(110,180,247,0.0), 0 0 0 rgba(177,151,252,0.0);}
+      45%{box-shadow:0 0 14px rgba(110,180,247,0.35), 0 0 26px rgba(177,151,252,0.18);}
+      100%{box-shadow:0 0 0 rgba(110,180,247,0.0), 0 0 0 rgba(177,151,252,0.0);}
+    }
+    .ai-bubble.user-loading{animation:__gmAiUserGlow 1.25s ease-in-out infinite;}
+
+    .ai-bubble.pending .ai-msg-actions{display:none;}
+    .ai-bubble.pending .ai-md{min-height:18px;}
+    .ai-bubble.pending .ai-md::before{content:'···';display:inline-block;color:var(--text3);
+      letter-spacing:2px;animation:__gmAiDots 1.1s ease-in-out infinite;}
+    @keyframes __gmAiDots{
+      0%{opacity:.25;transform:translateY(0);}
+      50%{opacity:1;transform:translateY(-1px);}
+      100%{opacity:.25;transform:translateY(0);}
+    }
+
+    .ai-inputbar{padding:6px 10px;border-top:1px solid var(--border);display:flex;align-items:flex-end;margin:0;}
+    [data-theme="light"] .ai-inputbar{border-top:1px solid var(--border);}
+
+    .ai-config{flex:1;overflow:auto;padding:12px;display:flex;flex-direction:column;gap:12px;}
+    .ai-config-top{display:flex;align-items:center;gap:10px;margin-bottom:12px;}
+    .ai-config-top .t{font-weight:900;color:var(--text);}
+    .ai-config-top .sp{margin-left:auto;}
+    .ai-form input{width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:8px;
+      padding:8px 10px;color:var(--text);font-family:inherit;font-size:13px;outline:none;}
+    .ai-form input:focus{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent);}
+    .ai-grid{display:flex;flex-direction:column;gap:12px;}
+    @media (max-width: 980px){ .ai-grid{flex-direction:column;} }
+    .ai-card{border-radius:12px;padding:12px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.08);
+      transition:background .14s,border-color .14s,box-shadow .14s,transform .12s;}
+    [data-theme="light"] .ai-card{background:rgba(0,0,0,0.015);border:1px solid rgba(0,0,0,0.10);}
+    .ai-card:hover{background:rgba(255,255,255,0.028);border-color:rgba(255,255,255,0.12);box-shadow:0 10px 26px rgba(0,0,0,0.20);}
+    [data-theme="light"] .ai-card:hover{background:rgba(0,0,0,0.020);border-color:rgba(0,0,0,0.16);box-shadow:0 10px 26px rgba(0,0,0,0.08);}
+    .ai-card-hd{display:flex;align-items:center;gap:10px;margin-bottom:14px;}
+    .ai-card-title{font-weight:800;color:var(--text);font-size:12px;}
+    .ai-list{display:flex;flex-direction:column;gap:6px;}
+    .ai-item{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:12px;cursor:pointer;
+      border:1px solid transparent;background:transparent;}
+    .ai-item:hover{background:rgba(255,255,255,0.04);border-color:rgba(255,255,255,0.08);}
+    .ai-li{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:12px;cursor:pointer;
+      border:1px solid transparent;background:transparent;transition:background .14s,border-color .14s,transform .12s;}
+    .ai-li:hover{background:rgba(255,255,255,0.04);border-color:rgba(255,255,255,0.08);transform:translateY(-1px);}
+    [data-theme="light"] .ai-li:hover{background:rgba(0,0,0,0.03);border-color:rgba(0,0,0,0.10);}
+    .ai-li.editing{background:rgba(110,180,247,0.12);border-color:rgba(110,180,247,0.25);box-shadow:none;transform:none;}
+    [data-theme="light"] .ai-li.editing{background:rgba(76,166,255,0.10);border-color:rgba(76,166,255,0.20);}
+    .ai-li.active{}
+    .ai-li .t{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+    .ai-li .tag{margin-left:auto;font-size:10px;color:var(--text3);padding:1px 6px;border-radius:999px;
+      border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.03);}
+    [data-theme="light"] .ai-li .tag{border:1px solid rgba(0,0,0,0.10);background:rgba(0,0,0,0.02);}
+    [data-theme="light"] .ai-item:hover{background:rgba(0,0,0,0.03);border-color:rgba(0,0,0,0.08);}
+    .ai-item.active{background:rgba(110,168,254,0.12);border-color:rgba(110,168,254,0.28);}
+    [data-theme="light"] .ai-item.active{background:rgba(76,166,255,0.10);border-color:rgba(76,166,255,0.20);}
+    .ai-item .nm{font-weight:800;font-size:12px;color:var(--text);max-width:210px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .ai-item .sub{font-size:11px;color:var(--text3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .ai-item .tag{margin-left:auto;font-size:10px;color:var(--text3);}
+    .ai-form{display:flex;flex-direction:column;gap:12px;}
+    .ai-form label{font-size:12px;color:var(--text2);}
+    .ai-form input{width:100%;}
+    .ai-row{display:flex;gap:8px;align-items:center;}
+
     #fileCount{ cursor:pointer; transition:all .12s; }
     #fileCount:hover{ background:var(--bg5); color:var(--text); }
     #fileCount.filtered{ box-shadow:0 0 0 1px rgba(255, 255, 255, 0.22) inset; }
@@ -1993,7 +2294,8 @@
   <div class="right-panel" id="rightPanel">
     <div class="vtabs">
       <div class="vtab active" onclick="switchTab('commit',this)">提交</div>
-      <div class="vtab" onclick="switchTab('log',this)">历史日志</div>
+      <div class="vtab" onclick="switchTab('log',this)">日志</div>
+      <div class="vtab ai-vtab" onclick="switchTab('ai',this)">Hivo</div>
       <div style="margin-left:auto"></div>
       <button class="collapse-btn" id="toggleRightBtn" title="收起右侧栏" onclick="toggleRightPanel()">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -2050,6 +2352,102 @@
       </div>
       <div class="log-file-list" id="ldFileList"></div>
     </div>
+
+    <!-- AI -->
+    <div class="vtab-content" id="tabAi">
+      <div class="ai-wrap">
+        <!-- 顶部会话栏 - 可滚动的会话列表 + 固定的新建按钮 -->
+        <div class="ai-topbar">
+          <div class="ai-sessions-scroll" id="aiSessionsScroll"></div>
+          <button class="ai-new-session-btn" title="新建会话" onclick="newAiSession()">+</button>
+        </div>
+
+        <div id="aiChatView" style="display:flex;flex-direction:column;flex:1;min-height:0;">
+          <!-- 聊天消息区 -->
+          <div id="aiChatList" class="ai-chat"><div class="ai-chat-inner" id="aiChatInner"></div></div>
+          
+          <!-- 底部输入栏 -->
+          <div class="ai-inputbar">
+            <div class="ai-composer-wrap">
+              <div class="ai-composer">
+                <span class="ai-composer-counter" id="aiSendCounter">0/0</span>
+                <textarea id="aiChatInput" class="ai-input" placeholder="Ask Hivo anything..." onkeydown="aiChatInputKeydown(event)"></textarea>
+                <button class="ai-send-btn" onclick="sendAiChat()">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="22" y1="2" x2="11" y2="13"></line>
+                    <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                  </svg>
+                </button>
+              </div>
+              <div class="ai-under">
+                <button class="ai-add-ctx-btn" title="Add Context" onclick="aiAddContext()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg></button>
+                <button class="ai-undo-btn" title="撤回上一轮" onclick="aiUndoLastTurn()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14l-4-4 4-4"/><path d="M5 10h10a4 4 0 0 1 0 8h-1"/></svg></button>
+                <div class="ai-model-selector" onclick="openAiModelMenu(event)" title="选择模型">
+                  <svg class="ai-model-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="3"/>
+                    <path d="M12 1v6m0 6v6m5.2-13.2l-4.2 4.2m-1.4 1.4l-4.2 4.2m10.6.6l-4.2-4.2m-1.4-1.4l-4.2-4.2"/>
+                  </svg>
+                  <span class="ai-model-name" id="aiModelName">未选择</span>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="6 9 12 15 18 9"/>
+                  </svg>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 配置面板 -->
+        <div id="aiConfigView" style="display:none;flex:1;min-height:0;flex-direction:column;">
+          <div class="ai-config">
+            <div class="ai-config-top">
+              <div class="t">模型配置</div>
+              <div class="sp"></div>
+              <button class="btn" title="返回" aria-label="返回" style="width:22px;height:22px;padding:0;display:inline-flex;align-items:center;justify-content:center" onclick="showAiChatPanel()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></button>
+            </div>
+            <div class="ai-grid">
+              <div class="ai-card">
+                <div class="ai-card-hd">
+                  <div class="ai-card-title">模型配置</div>
+                  <div style="margin-left:auto"></div>
+                  <button class="btn" style="padding:2px 10px" onclick="addAiProfile()">新增</button>
+                </div>
+                <div id="aiProfileList" class="ai-list"></div>
+              </div>
+
+              <div class="ai-card">
+                <div class="ai-card-hd">
+                  <div class="ai-card-title">编辑配置</div>
+                  <div style="margin-left:auto"></div>
+                  <button class="btn red" id="aiDeleteProfileBtn" style="padding:2px 10px;display:none" onclick="deleteAiProfile()">删除</button>
+                </div>
+                <div class="ai-form">
+                  <div>
+                    <label>API Base URL</label>
+                    <input id="aiProfBaseUrl" type="text" placeholder="https://api.openai.com" />
+                  </div>
+                  <div>
+                    <label>API Key</label>
+                    <div class="ai-row">
+                      <input id="aiApiKey" type="password" placeholder="sk-..." style="flex:1;min-width:0;" />
+                    </div>
+                  </div>
+                  <div>
+                    <label>Model</label>
+                    <input id="aiModel" type="text" placeholder="gpt-4.1-mini / qwen2.5 ..." />
+                  </div>
+                  <div class="ai-row">
+                    <button class="btn" style="flex:1;justify-content:center" onclick="setAiProfileActive()">设为当前</button>
+                    <button class="btn green" style="flex:1;justify-content:center" onclick="saveAiProfiles()">保存</button>
+                  </div>
+                  <div id="aiConfigMeta" style="font-size:11px;color:var(--text3);"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -2105,6 +2503,20 @@
       <button class="btn" id="promptCancelBtn">取消</button>
       <button class="btn blue" id="promptOkBtn">确定</button>
     </div>
+  </div>
+</div>
+
+<div class="overlay ai-media-overlay" id="aiMediaPreviewModal">
+  <div class="ai-media-frame">
+    <div class="ai-media-tools">
+      <button class="btnx" id="aiMediaPreviewOpenBtn" type="button">打开</button>
+      <button class="btnx" id="aiMediaPreviewDownloadBtn" type="button">下载</button>
+      <span class="ai-media-counter" id="aiMediaPreviewCounter">1/1</span>
+      <button class="btnx" id="aiMediaPreviewCloseBtn" type="button">关闭</button>
+    </div>
+    <div class="ai-media-nav prev" id="aiMediaPreviewPrev" title="上一张">‹</div>
+    <img id="aiMediaPreviewImg" src="" alt="" />
+    <div class="ai-media-nav next" id="aiMediaPreviewNext" title="下一张">›</div>
   </div>
 </div>
 
@@ -2175,6 +2587,23 @@
       return idx;
     } catch (e) {
       return null;
+    }
+  }
+
+  function __gmIndentBackspaceDelCount(beforeText, indentUnit) {
+    try {
+      const IND = (indentUnit !== null && indentUnit !== undefined) ? String(indentUnit) : '    ';
+      const before = String(beforeText || '');
+      if (!before) return 1;
+      if (before.endsWith('\t')) return 1;
+      const m = before.match(/[ ]+$/);
+      const spaces = m ? String(m[0] || '').length : 0;
+      if (spaces <= 0) return 1;
+      const w = Math.max(1, IND.length);
+      const mod = spaces % w;
+      return (mod === 0) ? w : mod;
+    } catch (e) {
+      return 1;
     }
   }
 
@@ -2477,7 +2906,7 @@
     recentFiles.forEach((file, idx) => {
       const isExternal = !!file.external;
       // 检查文件是否还在当前文件列表中
-      const currentIndex = files.findIndex(f => f.path === file.path);
+      const currentIndex = isExternal ? -1 : files.findIndex(f => f.path === file.path);
       const isActive = (!isExternal && currentIndex === curFile);
       const exists = currentIndex >= 0;
 
@@ -2527,7 +2956,26 @@
             <button class="recent-file-remove" title="从最近列表移除" onclick="removeRecentFileByPath('${esc(String(file.path||'')).replace(/'/g,'\\\'')}'); event.stopPropagation();">×</button>
           </div>
         `;
+        return;
       }
+
+      // 工作区文件（不在变更列表）：编辑器模式最近打开
+      try {
+        const isActiveRepoPlain = !!(window.__plainEditorFilename && !window.__plainEditorIsExternal && String(window.__plainEditorFilename) === String(file.path));
+        html += `
+          <div class="recent-file-item ${isActiveRepoPlain ? 'active' : ''}" 
+               onclick="openRepoRecentFile(${idx}); event.stopPropagation();">
+            <span class="recent-file-status W">W</span>
+            <div class="recent-file-info">
+              <div class="recent-file-name" title="${esc(file.path)}">${esc(name)}</div>
+              <div class="recent-file-stats">
+                <span class="lines">工作区文件</span>
+              </div>
+            </div>
+            <button class="recent-file-remove" title="从最近列表移除" onclick="removeRecentFileByPath('${esc(String(file.path||'')).replace(/'/g,'\\\'')}'); event.stopPropagation();">×</button>
+          </div>
+        `;
+      } catch (e) {}
     });
 
     html += '</div>';
@@ -2625,6 +3073,28 @@
         fh = (p && window.__externalFileHandleByPath) ? window.__externalFileHandleByPath.get(p) : null;
       } catch (e2) { fh = null; }
       openFileInEditor(String(item.path || '外部文件'), String(item.content || ''), true, fh);
+    } catch (e) {}
+  }
+
+  async function openRepoRecentFile(idx) {
+    try {
+      const item = recentFiles && recentFiles[idx];
+      if (!item || item.external) return;
+      hideRecentFilesDropdown();
+
+      const p = String(item.path || '').trim();
+      if (!p) return;
+
+      const cached = (item && typeof item.content === 'string') ? String(item.content || '') : null;
+      if (cached !== null) {
+        openFileInEditor(p, cached, false, null);
+        return;
+      }
+
+      const fc = await GET('/api/file_content?path=' + encodeURIComponent(p));
+      if (!(fc && fc.ok)) return;
+      const c = (fc && typeof fc.content === 'string') ? String(fc.content || '') : '';
+      openFileInEditor(p, c, false, null);
     } catch (e) {}
   }
 
@@ -5240,6 +5710,60 @@
           const sel = window.getSelection ? window.getSelection() : null;
           if (!sel || sel.rangeCount === 0) return;
 
+          if (isEnter) {
+            e.preventDefault();
+            try { e.stopImmediatePropagation(); } catch (e2) {}
+            try { e.stopPropagation(); } catch (e2) {}
+            try {
+              let line = null;
+              try {
+                const node = (sel.focusNode || sel.anchorNode || (sel.rangeCount ? sel.getRangeAt(0).startContainer : null));
+                const el = node ? ((node.nodeType === Node.ELEMENT_NODE) ? node : (node.parentElement || null)) : null;
+                if (el && el.closest) line = el.closest('.editable-line');
+              } catch (e2) {}
+              if (line && host.contains(line)) {
+                try { __enableLineEditing(line); } catch (e2) {}
+                try { __gmSplitLineOnEnter(line); } catch (e2) {}
+              }
+            } catch (e2) {}
+            return;
+          }
+
+          if (k === 'Backspace' && sel.isCollapsed) {
+            try {
+              let line = null;
+              try {
+                const node = (sel.focusNode || sel.anchorNode || (sel.rangeCount ? sel.getRangeAt(0).startContainer : null));
+                const el = node ? ((node.nodeType === Node.ELEMENT_NODE) ? node : (node.parentElement || null)) : null;
+                if (el && el.closest) line = el.closest('.editable-line');
+              } catch (e2) {}
+              if (line && host.contains(line)) {
+                const col0 = Math.max(0, Number(getCaretOffset(line) || 0));
+                const raw0 = String(line.textContent || '').replace(/[\r\n\u2028\u2029]/g, '');
+                const m0 = raw0.match(/^[\t ]*/);
+                const indentLen0 = m0 ? String(m0[0] || '').length : 0;
+                if (col0 > 0 && col0 <= indentLen0) {
+                  e.preventDefault();
+                  try { e.stopImmediatePropagation(); } catch (e2) {}
+                  try { e.stopPropagation(); } catch (e2) {}
+                  try {
+                    if (typeof __gmPushEditorSnapshot === 'function') __gmPushEditorSnapshot(host);
+                  } catch (e2) {}
+                  const IND = '    ';
+                  const before = raw0.slice(0, col0);
+                  const del = __gmIndentBackspaceDelCount(before, IND);
+                  const nextText = raw0.slice(0, Math.max(0, col0 - del)) + raw0.slice(col0);
+                  line.textContent = nextText;
+                  try { setCaretOffsetNoFocus(line, Math.max(0, col0 - del)); } catch (e2) { try { setCaretOffset(line, Math.max(0, col0 - del)); } catch (e3) {} }
+                  try { line.dataset.dirty = '1'; } catch (e2) {}
+                  try { window.__dirtyEdits = true; } catch (e2) {}
+                  try { if (typeof scheduleAutoSave === 'function') scheduleAutoSave(); } catch (e2) {}
+                  return;
+                }
+              }
+            } catch (e2) {}
+          }
+
           // 修复：在存在选区时，Backspace/Delete 应删除选中内容（多行/跨行）。
           // 注意：ce-host 下浏览器默认删除会直接改 DOM，且可能误伤 UI 列；这里复用现有的
           // __handleMultiLineSelectionReplace('') 做“受控删除”。
@@ -5764,10 +6288,33 @@
         if (!line || !host.contains(line)) return;
 
         const it = String(e.inputType || '');
-        const isInsertText = (it === 'insertText');
+        const isInsertText = (it === 'insertText' || it === 'insertCompositionText' || it === 'insertFromPaste');
         const isBackspace = (it === 'deleteContentBackward');
         const isDelete = (it === 'deleteContentForward');
         if (!isInsertText && !isBackspace && !isDelete) return;
+
+        if (isInsertText) {
+          try {
+            const sel = window.getSelection ? window.getSelection() : null;
+            if (sel && sel.rangeCount && !sel.isCollapsed) {
+              let data = (e.data !== null && e.data !== undefined) ? String(e.data) : '';
+              if (!data && it === 'insertFromPaste') {
+                try {
+                  if (e.dataTransfer && typeof e.dataTransfer.getData === 'function') {
+                    data = String(e.dataTransfer.getData('text/plain') || '');
+                  }
+                } catch (e3) {}
+              }
+              const ok = __handleMultiLineSelectionReplace(data);
+              if (ok) {
+                e.preventDefault();
+                try { e.stopImmediatePropagation(); } catch (e2) {}
+                try { e.stopPropagation(); } catch (e2) {}
+                return;
+              }
+            }
+          } catch (e2) {}
+        }
 
         e.preventDefault();
         try { e.stopImmediatePropagation(); } catch (e2) {}
@@ -6850,6 +7397,28 @@
         const sel = window.getSelection ? window.getSelection() : null;
         if (sel && !sel.isCollapsed) return;
 
+        try {
+          const col0 = Math.max(0, Number(getCaretOffset(t) || 0));
+          const raw0 = String(t.textContent || '').replace(/[\r\n\u2028\u2029]/g, '');
+          const m0 = raw0.match(/^[\t ]*/);
+          const indentLen0 = m0 ? String(m0[0] || '').length : 0;
+          if (col0 > 0 && col0 <= indentLen0) {
+            e.preventDefault();
+            __gmPushDiffSnap();
+            const IND = '    ';
+            const del = __gmIndentBackspaceDelCount(raw0.slice(0, col0), IND);
+            const nextText = raw0.slice(0, Math.max(0, col0 - del)) + raw0.slice(col0);
+            t.textContent = nextText;
+            try { t.dispatchEvent(new Event('input', { bubbles: true })); } catch (e2) {}
+            try { t.dataset.dirty = '1'; } catch (e2) {}
+            try { window.__dirtyEdits = true; } catch (e2) {}
+            try { if (typeof scheduleAutoSave === 'function') scheduleAutoSave(); } catch (e2) {}
+            const caret = Math.max(0, col0 - del);
+            try { setCaretOffsetNoFocus(t, caret); } catch (e2) { try { setCaretOffset(t, caret); } catch (e3) {} }
+            return;
+          }
+        } catch (e2) {}
+
         const col = getCaretOffset(t);
         const raw = (t.textContent || '');
         const normalized = raw
@@ -7928,6 +8497,2564 @@
   let lastBranchesRes = null;
   let branchMenuQuery = '';
 
+  let __gmAiConfigLoadedOnce = false;
+  let __gmAiPanel = 'chat';
+  let __gmAiChatMessages = [];
+  let __gmAiConfig = { active_profile_id: '', profiles: [] };
+  let __gmAiSelectedProfileId = '';
+  let __gmAiEditingProfileId = '';
+  let __gmAiLastUndoGroupId = '';
+  let __gmAiSessions = [];
+  let __gmAiActiveSessionId = '';
+
+  let __gmAiTempProfileIds = new Set();
+
+  let __gmAiModelMenuEl = null;
+
+  let __gmAiMentionMenuEl = null;
+  let __gmAiMentionActive = false;
+  let __gmAiMentionItems = [];
+  let __gmAiMentionIndex = 0;
+  let __gmAiMentionQuery = '';
+  let __gmAiMentionAnchor = null;
+  let __gmAiMentionReqId = 0;
+
+  function __gmAiEnsureModelMenu() {
+    if (__gmAiModelMenuEl) return __gmAiModelMenuEl;
+    const el = document.createElement('div');
+    el.id = 'aiModelMenu';
+    el.className = 'ai-model-menu';
+    el.addEventListener('click', (e) => {
+      try { e.stopPropagation(); } catch (e2) {}
+    });
+    document.body.appendChild(el);
+    document.addEventListener('click', () => {
+      closeAiModelMenu();
+    });
+    __gmAiModelMenuEl = el;
+    return el;
+  }
+
+  function __gmAiRenderModelMenu() {
+    const el = __gmAiEnsureModelMenu();
+    const profiles = Array.isArray(__gmAiConfig.profiles) ? __gmAiConfig.profiles : [];
+    const active = String(__gmAiSelectedProfileId || __gmAiConfig.active_profile_id || '');
+    const items = [];
+    profiles.forEach(p => {
+      const id = String(p && p.id || '');
+      if (!id) return;
+      const model = String((p.model || p.name || 'Model') || '');
+      const nm = __gmAiPrettyModelName(model) || model;
+      const cls = 'ai-model-mi' + (id === active ? ' active' : '');
+      items.push(`<div class="${cls}" onclick="selectAiProfile('${esc(id)}')"><div class="nm">${esc(nm)}</div><div class="sub"></div></div>`);
+    });
+    items.push('<div class="ai-model-sep"></div>');
+    items.push('<div class="ai-model-mi" onclick="showAiConfigPanel()"><div class="nm">打开模型配置</div><div class="sub">管理</div></div>');
+    el.innerHTML = items.join('');
+  }
+
+  function __gmAiGetChatPanelWidth() {
+    try {
+      const el = document.querySelector('.ai-composer-wrap') || document.getElementById('aiChatView') || document.getElementById('aiWrap');
+      const r = el && el.getBoundingClientRect ? el.getBoundingClientRect() : null;
+      const w = r ? Number(r.width || 0) : 0;
+      if (w && w > 0) return Math.min(w, window.innerWidth - 16);
+    } catch (e) {}
+    return Math.min(900, window.innerWidth - 16);
+  }
+
+  function __gmAiGetChatPanelHeight() {
+    try {
+      const el = document.getElementById('aiChatView') || document.querySelector('.ai-composer-wrap') || document.getElementById('aiWrap');
+      const r = el && el.getBoundingClientRect ? el.getBoundingClientRect() : null;
+      const h = r ? Number(r.height || 0) : 0;
+      if (h && h > 0) return Math.min(h, window.innerHeight - 16);
+    } catch (e) {}
+    return Math.min(520, window.innerHeight - 16);
+  }
+
+  function openAiModelMenu(ev) {
+    try { if (ev) ev.stopPropagation(); } catch (e) {}
+    const el = __gmAiEnsureModelMenu();
+    __gmAiRenderModelMenu();
+    try {
+      try {
+        const w = __gmAiGetChatPanelWidth();
+        const maxH = Math.max(120, __gmAiGetChatPanelHeight() - 16);
+        el.style.width = w + 'px';
+        el.style.minWidth = w + 'px';
+        el.style.maxWidth = w + 'px';
+        el.style.maxHeight = maxH + 'px';
+      } catch (e0) {}
+      let anchor = null;
+      if (ev && ev.currentTarget) {
+        anchor = ev.currentTarget;
+      }
+      const r = (anchor && anchor.getBoundingClientRect) ? anchor.getBoundingClientRect() : null;
+      if (r) {
+        el.style.left = '0px';
+        el.style.top = '-99999px';
+        el.classList.add('show');
+        const mw = Math.max(220, Math.min(__gmAiGetChatPanelWidth(), el.offsetWidth || 320));
+        const mh = Math.min(__gmAiGetChatPanelHeight() - 16, (el.offsetHeight || 220));
+        const left = Math.max(8, Math.min(window.innerWidth - mw - 8, r.left));
+        const preferBottom = r.bottom + 4;
+        const top = (preferBottom + mh <= window.innerHeight - 8) ? preferBottom : Math.max(8, r.top - mh - 4);
+        el.style.left = left + 'px';
+        el.style.top = top + 'px';
+        return;
+      }
+    } catch (e2) {}
+    el.classList.add('show');
+  }
+
+  function closeAiModelMenu() {
+    try {
+      const el = __gmAiModelMenuEl;
+      if (el) el.classList.remove('show');
+    } catch (e) {}
+  }
+
+  async function selectAiProfile(profileId) {
+    const pid = String(profileId || '');
+    if (!pid) return;
+    try { await __gmAiSaveHistoryNow(); } catch (e0) {}
+    closeAiModelMenu();
+    __gmAiSelectedProfileId = pid;
+    __gmAiConfig.active_profile_id = pid;
+    __gmAiRenderProfileModelName();
+    try { await POST('/api/ai_config', { config: __gmAiConfig }); } catch (e) {}
+    try { await loadAiChatHistory(pid); } catch (e) {}
+  }
+
+  function __gmAiRenderChat() {
+    try {
+      const list = document.getElementById('aiChatInner') || document.getElementById('aiChatList');
+      if (!list) return;
+      if (!Array.isArray(__gmAiChatMessages) || __gmAiChatMessages.length === 0) {
+        list.innerHTML = `<div class="ai-empty"><div class="ai-empty-card">
+          <div class="ai-empty-ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a4 4 0 0 1-4 4H7l-4 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/></svg></div>
+          <div class="ai-empty-title">开始一个会话</div>
+          <div class="ai-empty-sub">在下面输入问题即可开始。你也可以输入 <code>@</code> 选择仓库文件作为上下文。</div>
+        </div></div>`;
+        return;
+      }
+      const len = (__gmAiChatMessages || []).length;
+      const last = len ? (__gmAiChatMessages[len - 1] || null) : null;
+      const lastIsPendingAssistant = Boolean(last && String(last.role || '') === 'assistant' && last.pending);
+      let lastUserIdx = -1;
+      if (lastIsPendingAssistant) {
+        for (let i = len - 2; i >= 0; i--) {
+          const mm = __gmAiChatMessages[i];
+          if (mm && String(mm.role || '') === 'user') { lastUserIdx = i; break; }
+        }
+      }
+
+      const prevCache = Array.isArray(list.__gmAiMsgCache) ? list.__gmAiMsgCache : [];
+      const nextCache = [];
+      const children = Array.from(list.children || []);
+      const ensureNode = (idx) => {
+        let n = children[idx] || null;
+        if (!n) {
+          n = document.createElement('div');
+          list.appendChild(n);
+          children[idx] = n;
+        }
+        return n;
+      };
+
+      for (let idx = 0; idx < len; idx++) {
+        const m = __gmAiChatMessages[idx];
+        const role = String(m && m.role ? m.role : '');
+        const content = String(m && m.content ? m.content : '');
+        const isUser = role === 'user';
+        const isPending = Boolean(m && m.pending);
+        const userLoading = Boolean(isUser && lastIsPendingAssistant && idx === lastUserIdx);
+        const sig = `${role}|${isPending ? 1 : 0}|${userLoading ? 1 : 0}|${content}`;
+        nextCache.push(sig);
+
+        const prevSig = prevCache[idx];
+        const node = ensureNode(idx);
+        if (prevSig === sig) {
+          if (node.className !== ('ai-msg ' + (isUser ? 'user' : 'assistant'))) {
+            node.className = 'ai-msg ' + (isUser ? 'user' : 'assistant');
+          }
+          continue;
+        }
+
+        node.className = 'ai-msg ' + (isUser ? 'user' : 'assistant');
+        node.innerHTML = `<div class="ai-meta">${esc(isUser ? '你' : 'AI')}</div><div class="ai-bubble${userLoading ? ' user-loading' : ''}${isPending ? ' pending' : ''}"><div class="ai-msg-actions"><button title="删除" onclick="aiDeleteMsg(${idx})">×</button></div><div class="ai-md">${isPending ? '' : aiRenderMarkdown(content)}</div></div>`;
+      }
+
+      for (let i = children.length - 1; i >= len; i--) {
+        try { children[i].remove(); } catch (e2) {}
+      }
+      list.__gmAiMsgCache = nextCache;
+      const outer = document.getElementById('aiChatList');
+      if (outer) outer.scrollTop = outer.scrollHeight;
+    } catch (e) {}
+  }
+
+  async function __gmAiSaveHistoryNow() {
+    try {
+      const pid = String(__gmAiSelectedProfileId || __gmAiConfig.active_profile_id || '');
+      if (!pid) return;
+      const h = await POST('/api/ai_chat_history', { profile_id: pid, session_id: __gmAiActiveSessionId, messages: __gmAiChatMessages });
+      if (h && h.ok) {
+        if (Array.isArray(h.sessions)) __gmAiSessions = h.sessions;
+        if (h.active_session_id) __gmAiActiveSessionId = String(h.active_session_id || '');
+        __gmAiRenderHistoryChips();
+        return;
+      }
+      toast('保存会话失败：' + String((h && (h.msg || h.error)) || '保存失败'), 'err');
+    } catch (e) {
+      toast('保存会话失败', 'err');
+    }
+  }
+
+  async function __gmAiRefreshSendCounter() {
+    try {
+      const el = document.getElementById('aiSendCounter');
+      if (!el) return;
+      let turns = 0;
+      try {
+        const base = Array.isArray(__gmAiChatMessages) ? __gmAiChatMessages : [];
+        for (const m of base) {
+          if (m && String(m.role || '') === 'user') turns++;
+        }
+      } catch (e0) { turns = 0; }
+
+      let steps = 0;
+      try {
+        const res = await GET('/api/undo_stats');
+        steps = Number(res && (res.undo_steps !== undefined ? res.undo_steps : (res.data && res.data.undo_steps))) || 0;
+      } catch (e1) { steps = 0; }
+
+      el.textContent = `${steps}/${turns}`;
+      el.style.display = 'inline-flex';
+    } catch (e) {}
+  }
+
+  function aiDeleteMsg(idx) {
+    try {
+      const i = Number(idx);
+      if (!Number.isFinite(i)) return;
+      if (!Array.isArray(__gmAiChatMessages)) return;
+      if (i < 0 || i >= __gmAiChatMessages.length) return;
+      __gmAiChatMessages.splice(i, 1);
+      __gmAiRenderChat();
+      __gmAiSaveHistoryNow();
+    } catch (e) {}
+  }
+
+  async function aiUndoLastTurn() {
+    try {
+      if (!Array.isArray(__gmAiChatMessages) || !__gmAiChatMessages.length) return;
+      const msgs = __gmAiChatMessages;
+      let lastUser = -1;
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        const r = String(msgs[i] && msgs[i].role || '');
+        if (r === 'user') { lastUser = i; break; }
+      }
+      if (lastUser < 0) return;
+
+      let undoOk = false;
+      try {
+        const u = await POST('/api/undo', {});
+        undoOk = Boolean(u && u.ok);
+        if (!undoOk) {
+          const m = String((u && (u.msg || u.error)) || '无可撤销操作');
+          if (m && m.indexOf('无可撤销') < 0) toast('撤销失败：' + m, 'err');
+        }
+      } catch (eU) {}
+
+      try {
+        const next = msgs[lastUser + 1] || null;
+        if (next && String(next.role || '') === 'assistant' && next.pending) {
+          msgs.splice(lastUser + 1, 1);
+        }
+      } catch (e0) {}
+      const lastUserText = String(msgs[lastUser] && msgs[lastUser].content || '');
+      msgs.splice(lastUser);
+      __gmAiRenderChat();
+      __gmAiSaveHistoryNow();
+      try {
+        const ta = document.getElementById('aiChatInput');
+        if (ta) {
+          ta.value = lastUserText;
+          ta.focus();
+          try { ta.setSelectionRange(ta.value.length, ta.value.length); } catch (e2) {}
+          try { __gmAiUpdateMentionMenu(); } catch (e3) {}
+        }
+      } catch (e4) {}
+      if (undoOk) {
+        try { toast('✓ 已撤销上一轮数据操作', 'ok'); } catch (eT) {}
+      }
+      try { await __gmAiRefreshSendCounter(); } catch (eC) {}
+    } catch (e) {}
+  }
+
+  function __gmAiExtractJsonObjectAroundType(text, type) {
+    try {
+      const s = String(text || '');
+      if (!s) return null;
+      const idxType = s.indexOf(type);
+      if (idxType < 0) return null;
+      let start = s.lastIndexOf('{', idxType);
+      if (start < 0) return null;
+      let depth = 0;
+      let inStr = false;
+      let esc0 = false;
+      for (let i = start; i < s.length; i++) {
+        const ch = s[i];
+        if (inStr) {
+          if (esc0) { esc0 = false; continue; }
+          if (ch === '\\') { esc0 = true; continue; }
+          if (ch === '"') { inStr = false; continue; }
+          continue;
+        }
+        if (ch === '"') { inStr = true; continue; }
+        if (ch === '{') depth++;
+        else if (ch === '}') {
+          depth--;
+          if (depth === 0) {
+            const raw = s.slice(start, i + 1);
+            try {
+              const obj = JSON.parse(raw);
+              if (obj && obj.type === type) {
+                return { obj, raw, start, end: i + 1 };
+              }
+            } catch (e2) {}
+            return null;
+          }
+        }
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  let __gmAiLastToolRaw = '';
+  let __gmAiLastToolAt = 0;
+
+  const __gmAiIdempotencyCache = new Map();
+  const __gmAiRecentExecSummaries = [];
+
+  function __gmAiStableHash(str) {
+    try {
+      const s = String(str || '');
+      let h = 2166136261;
+      for (let i = 0; i < s.length; i++) {
+        h ^= s.charCodeAt(i);
+        h = Math.imul(h, 16777619);
+      }
+      return (h >>> 0).toString(16);
+    } catch (e) {
+      return String(Date.now());
+    }
+  }
+
+  function __gmAiBuildIdempotencyKey(type, obj) {
+    try {
+      const t = String(type || '').trim();
+      const sid = String((window.__gmAiActiveSessionId !== undefined ? window.__gmAiActiveSessionId : (__gmAiActiveSessionId || '')) || '').trim();
+      const p0 = (obj && (obj.path || obj.name)) ? String(obj.path || obj.name || '') : '';
+      const p = String(p0 || '').replace(/^@/, '').trim();
+      const c = (obj && (obj.content !== undefined && obj.content !== null)) ? String(obj.content) : '';
+      const core = `${sid}|${t}|${p}|${__gmAiStableHash(c)}`;
+      return 'ai:' + __gmAiStableHash(core) + ':' + __gmAiStableHash(core + '2');
+    } catch (e) {
+      return 'ai:' + String(Date.now());
+    }
+  }
+
+  function __gmAiPushExecSummary(text) {
+    try {
+      const s = String(text || '').trim();
+      if (!s) return;
+      __gmAiRecentExecSummaries.unshift(s);
+      if (__gmAiRecentExecSummaries.length > 6) __gmAiRecentExecSummaries.length = 6;
+    } catch (e) {}
+  }
+
+  function __gmAiExtractFirstToolJson(text) {
+    try {
+      const s = String(text || '');
+      if (!s) return null;
+      const allow = new Set([
+        'save_file', 'update_file', 'delete_file', 'api_request', 'open_file', 'revert_file',
+        'stage_file', 'commit', 'pull', 'push', 'stash_and_pull', 'commit_and_pull',
+        'switch_branch', 'stash_and_switch', 'commit_and_switch', 'stash_pop',
+        'run_cmd', 'verify_python', 'search_code', 'read_file_range', 'list_dir_tree'
+      ]);
+
+      const normalizeJsonText = (raw) => {
+        try {
+          const s0 = String(raw || '');
+          if (!s0) return s0;
+          let out = '';
+          let inStr = false;
+          let esc = false;
+          for (let i = 0; i < s0.length; i++) {
+            const ch = s0[i];
+            if (inStr) {
+              if (esc) { out += ch; esc = false; continue; }
+              if (ch === '\\') { out += ch; esc = true; continue; }
+              if (ch === '"') { out += ch; inStr = false; continue; }
+              if (ch === '\r') { out += '\\n'; continue; }
+              if (ch === '\n') { out += '\\n'; continue; }
+              out += ch;
+              continue;
+            }
+            if (ch === '"') { out += ch; inStr = true; continue; }
+            if (ch === '\r') continue;
+            out += ch;
+          }
+          return out;
+        } catch (e) {
+          return String(raw || '');
+        }
+      };
+
+      const tryParseToolJson = (raw) => {
+        try {
+          const obj = JSON.parse(normalizeJsonText(raw));
+          return obj;
+        } catch (e0) {}
+        try {
+          const t = String(raw || '');
+          if (t.indexOf("'type'") < 0 && t.indexOf('"type"') < 0) return null;
+          let p = normalizeJsonText(t);
+          p = p.replace(/\,\s*([}\]])/g, '$1');
+          p = p.replace(/\s+/g, (m) => m);
+          p = p.replace(/'([^'\\]*(?:\\.[^'\\]*)*)'/g, (m, g1) => {
+            try {
+              const inner = String(g1 || '').replace(/\\"/g, '"');
+              const esc = inner.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+              return '"' + esc + '"';
+            } catch (e2) {
+              return m;
+            }
+          });
+          p = p.replace(/\"([^\"]+)\"\s*:\s*/g, (m) => m);
+          p = p.replace(/\b([A-Za-z_][A-Za-z0-9_]*)\s*:/g, (m, k1) => {
+            if (!k1) return m;
+            if (k1 === 'true' || k1 === 'false' || k1 === 'null') return m;
+            return '"' + k1 + '":';
+          });
+          const obj2 = JSON.parse(normalizeJsonText(p));
+          return obj2;
+        } catch (e1) {
+          return null;
+        }
+      };
+
+      for (let pos = 0; pos < s.length; pos++) {
+        const start = s.indexOf('{', pos);
+        if (start < 0) break;
+        let depth = 0;
+        let inStr = false;
+        let inStrSingle = false;
+        let esc0 = false;
+        for (let i = start; i < s.length; i++) {
+          const ch = s[i];
+          if (inStr || inStrSingle) {
+            if (esc0) { esc0 = false; continue; }
+            if (ch === '\\') { esc0 = true; continue; }
+            if (inStr && ch === '"') { inStr = false; continue; }
+            if (inStrSingle && ch === "'") { inStrSingle = false; continue; }
+            continue;
+          }
+          if (ch === '"') { inStr = true; continue; }
+          if (ch === "'") { inStrSingle = true; continue; }
+          if (ch === '{') depth++;
+          else if (ch === '}') {
+            depth--;
+            if (depth === 0) {
+              const raw = s.slice(start, i + 1);
+              try {
+                const obj = tryParseToolJson(raw);
+                if (!obj) { pos = i; break; }
+                const tp = String(obj && obj.type || '').trim();
+                if (tp && allow.has(tp)) {
+                  return { obj, raw, start, end: i + 1 };
+                }
+              } catch (e2) {}
+              pos = i;
+              break;
+            }
+          }
+        }
+        pos = start;
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  function __gmAiExtractToolJsonList(text, maxCount) {
+    try {
+      const s = String(text || '');
+      if (!s) return [];
+      const out = [];
+      const maxN = Math.max(1, Math.min(6, Number(maxCount || 3) || 3));
+      let pos = 0;
+      while (pos < s.length && out.length < maxN) {
+        const hit = __gmAiExtractFirstToolJson(s.slice(pos));
+        if (!hit || !hit.obj) break;
+        const abs = {
+          obj: hit.obj,
+          raw: hit.raw,
+          start: pos + (hit.start || 0),
+          end: pos + (hit.end || 0),
+        };
+        out.push(abs);
+        pos = abs.end;
+      }
+      return out;
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function __gmAiFormatApiRequestResult(method, path, body, res) {
+    try {
+      const ok = !!(res && res.ok);
+      const msg = String((res && (res.msg || res.error)) || (ok ? '操作成功' : '操作失败'));
+      const bodyObj = (body && typeof body === 'object') ? body : {};
+      const p0 = String(bodyObj.path || bodyObj.old_path || bodyObj.new_path || '').trim();
+
+      if (path === '/api/delete_file' && method === 'POST') {
+        return ok ? (`已完成：删除文件\n- ${p0 || '（未指定）'}`) : (`删除失败\n- 文件：${p0 || '（未指定）'}\n- 原因：${msg}`);
+      }
+      if (path === '/api/save_file' && method === 'POST') {
+        return ok ? (`已完成：保存文件\n- ${p0 || '（未指定）'}`) : (`保存失败\n- 文件：${p0 || '（未指定）'}\n- 原因：${msg}`);
+      }
+      if (path === '/api/rename_file' && method === 'POST') {
+        const op = String(bodyObj.old_path || '').trim();
+        const np = String(bodyObj.new_path || '').trim();
+        const label = (op && np) ? `${op} → ${np}` : (p0 || '（未指定）');
+        return ok ? (`已完成：重命名\n- ${label}`) : (`重命名失败\n- 操作：${label}\n- 原因：${msg}`);
+      }
+      if (path === '/api/revert_file' && method === 'POST') {
+        return ok ? (`已完成：撤回修改\n- ${p0 || '（未指定）'}`) : (`撤回失败\n- 文件：${p0 || '（未指定）'}\n- 原因：${msg}`);
+      }
+
+      return ok ? (`已完成：${msg}`) : (`操作失败\n- 原因：${msg}`);
+    } catch (e) {
+      return '操作失败\n- 原因：结果解析失败';
+    }
+  }
+
+  async function __gmAiTryHandleAgentToolCall(content) {
+    try {
+      const s = String(content || '');
+      if (!s) return { handled: false, content: s };
+
+      const hits = __gmAiExtractToolJsonList(s, 3);
+      if (!hits || !hits.length) {
+        const maybeTool = (s.indexOf('"type"') >= 0 || s.indexOf('{"type"') >= 0 || s.indexOf("{'type'") >= 0 || s.indexOf("\"type\"") >= 0)
+          && (s.indexOf('save_file') >= 0 || s.indexOf('update_file') >= 0 || s.indexOf('open_file') >= 0 || s.indexOf('api_request') >= 0
+            || s.indexOf('delete_file') >= 0 || s.indexOf('revert_file') >= 0 || s.indexOf('stage_file') >= 0 || s.indexOf('stash_pop') >= 0 || s.indexOf('switch_branch') >= 0
+            || s.indexOf('run_cmd') >= 0 || s.indexOf('verify_python') >= 0 || s.indexOf('search_code') >= 0 || s.indexOf('read_file_range') >= 0 || s.indexOf('list_dir_tree') >= 0);
+        if (maybeTool) return { handled: true, content: '操作失败\n- 原因：未能解析工具指令（请输出合法 JSON；一次回复最多 3 条指令；每个 JSON 独占一段）' };
+        return { handled: false, content: s };
+      }
+
+      const preface = s.slice(0, hits[0].start).trim();
+      const results = [];
+
+      const undoGid = String(__gmAiLastUndoGroupId || '').trim();
+      const postWithUndo = async (path, body, extraHeaders) => {
+        const h = Object.assign({}, (extraHeaders || {}));
+        if (undoGid) h['X-Undo-Group'] = undoGid;
+        const opts = Object.keys(h).length ? { headers: h } : {};
+        return POST(path, body, opts);
+      };
+
+      const execOne = async (hit) => {
+        if (!hit || !hit.obj) return '操作失败\n- 原因：工具指令为空';
+        if (hit.raw && __gmAiLastToolRaw && String(hit.raw) === String(__gmAiLastToolRaw)) {
+          const now = Date.now();
+          if (__gmAiLastToolAt && (now - __gmAiLastToolAt) < 500) {
+            return '操作已执行（重复指令已忽略）';
+          }
+        }
+        __gmAiLastToolRaw = String(hit.raw || '');
+        __gmAiLastToolAt = Date.now();
+
+        const toolType = String(hit.obj.type || '').trim();
+
+        const isWriteTool = (toolType === 'save_file' || toolType === 'update_file' || toolType === 'delete_file' || toolType === 'rename_file' || toolType === 'revert_file');
+        const idemKey = isWriteTool ? __gmAiBuildIdempotencyKey(toolType, hit.obj) : '';
+        if (isWriteTool && idemKey) {
+          const prev = __gmAiIdempotencyCache.get(idemKey);
+          if (prev && typeof prev === 'string') {
+            return prev;
+          }
+        }
+
+        if (toolType === 'open_file') {
+          let nm = String(hit.obj.name || hit.obj.path || '').trim();
+          if (!nm) return 'open_file 失败：缺少 name';
+          if (nm.startsWith('@')) nm = nm.slice(1);
+          nm = nm.trim();
+          try {
+            const forceExternal = Boolean(hit.obj.external);
+            let view = String(hit.obj.view || 'editor').trim().toLowerCase();
+            try {
+              const v0 = view;
+              const v = v0.replace(/\s+/g, '');
+              const vDash = v0.replace(/\s+/g, '-');
+              if (v.indexOf('并排') >= 0 || v.indexOf('对比') >= 0 || v.indexOf('split') >= 0 || v.indexOf('side-by-side') >= 0
+                || v.indexOf('sidebyside') >= 0 || v.indexOf('side_by_side') >= 0 || vDash.indexOf('side-by-side') >= 0) {
+                view = 'split';
+              } else if (v.indexOf('单栏') >= 0 || v.indexOf('统一') >= 0 || v.indexOf('unified') >= 0) {
+                view = 'unified';
+              } else if (v.indexOf('变更') >= 0 || v.indexOf('diff') >= 0 || v.indexOf('change') >= 0) {
+                view = 'change';
+              } else if (v.indexOf('编辑') >= 0 || v.indexOf('editor') >= 0) {
+                view = 'editor';
+              }
+            } catch (eV) {}
+
+            const looksAbsolutePath = (() => {
+              try {
+                const p = String(nm || '').trim();
+                if (!p) return false;
+                if (/^[a-zA-Z]:[\\/]/.test(p)) return true;
+                if (p.startsWith('\\\\')) return true;
+                return false;
+              } catch (e) {
+                return false;
+              }
+            })();
+
+            const wantExternal = forceExternal || looksAbsolutePath;
+
+            const tryOpenExternalFromRecent = () => {
+              try {
+                const nm0 = String(nm || '');
+                const nmNorm = nm0.replace(/\\/g, '/');
+                const nmBase = (nmNorm.split('/').pop() || nm0).trim();
+                const item = (recentFiles || []).find(x => {
+                  if (!x || !x.external) return false;
+                  const xp = String(x.path || '');
+                  if (xp === nm0) return true;
+                  const xpNorm = xp.replace(/\\/g, '/');
+                  const xpBase = (xpNorm.split('/').pop() || xp).trim();
+                  return !!nmBase && !!xpBase && nmBase === xpBase;
+                }) || null;
+                if (!item) return false;
+                let fh = null;
+                try {
+                  const p2 = String(item.path || '');
+                  fh = (p2 && window.__externalFileHandleByPath) ? window.__externalFileHandleByPath.get(p2) : null;
+                } catch (e0c) { fh = null; }
+                if (typeof openFileInEditor === 'function') {
+                  openFileInEditor(String(item.path || nm), String(item.content || ''), true, fh);
+                  return true;
+                }
+              } catch (e0b) {}
+              return false;
+            };
+
+            if (wantExternal) {
+              const okExt = tryOpenExternalFromRecent();
+              if (okExt) return `已打开并切换：${nm}`;
+              if (typeof window.showOpenFilePicker === 'function') {
+                try {
+                  const handles = await window.showOpenFilePicker({ multiple: false });
+                  const fh = handles && handles.length ? handles[0] : null;
+                  if (fh && typeof fh.getFile === 'function') {
+                    const f2 = await fh.getFile();
+                    const c2 = await readFileAsText(f2);
+                    const fn = String((f2 && f2.name) || '').trim();
+                    const nm0 = String(nm || '');
+                    const nmBase = (nm0.replace(/\\/g, '/').split('/').pop() || nm0).trim();
+                    const labelName = fn || nmBase || nm0 || '外部文件';
+                    openFileInEditor(labelName, String(c2 || ''), true, fh);
+                    return `已打开并切换：${labelName}`;
+                  }
+                } catch (ePick) {
+                  if (ePick && ePick.name === 'AbortError') return '已取消选择外部文件';
+                }
+              }
+              return `打开失败：${nm}\n未找到外部文件记录，且无法打开文件选择器（请使用拖拽打开一次以建立记录）`;
+            }
+
+            const ff = await GET('/api/find_files?name=' + encodeURIComponent(nm));
+            const list = (ff && ff.ok && Array.isArray(ff.files)) ? ff.files : [];
+            if (!list.length) {
+              const okExt = tryOpenExternalFromRecent();
+              if (okExt) return `已打开并切换：${nm}`;
+              return `打开失败：${nm}\n未找到文件`;
+            }
+            let pick = String(list[0] || '');
+            const nmLower = nm.toLowerCase();
+            for (const rel of list) {
+              const bn = String(rel || '').split('/').pop() || '';
+              if (bn.toLowerCase() === nmLower) { pick = String(rel || ''); break; }
+            }
+
+            let idxInFiles = -1;
+            try {
+              idxInFiles = (files || []).findIndex(f0 => f0 && String(f0.path || '') === String(pick || ''));
+            } catch (eIdx) { idxInFiles = -1; }
+
+            if (idxInFiles >= 0 && (view === 'change' || view === 'split' || view === 'unified')) {
+              try {
+                if (view === 'unified') {
+                  const elU = document.getElementById('dtUnified');
+                  if (elU) setDiffMode('unified', elU);
+                  else diffMode = 'unified';
+                }
+                if (view === 'split') {
+                  const elS = document.getElementById('dtSplit');
+                  if (elS) setDiffMode('split', elS);
+                  else diffMode = 'split';
+                }
+              } catch (eDm) {}
+              try { await selectFile(idxInFiles); } catch (eSel) { return `打开失败：${pick}`; }
+              if (view === 'split') return `已打开并排对比视图：${pick}`;
+              if (view === 'unified') return `已打开单栏视图：${pick}`;
+              return `已打开变更视图：${pick}`;
+            }
+
+            const fc = await GET('/api/file_content?path=' + encodeURIComponent(pick));
+            if (!(fc && fc.ok)) {
+              const em = String((fc && (fc.error || fc.msg)) || '无法读取内容');
+              return `打开失败：${pick}\n${em}`;
+            }
+            const c = (fc && typeof fc.content === 'string') ? String(fc.content || '') : '';
+            try {
+              if (typeof openFileInEditor === 'function') {
+                openFileInEditor(String(pick || nm), c, false, null);
+                return `已打开并切换：${pick}`;
+              }
+            } catch (e1) {}
+
+            let c2 = c;
+            if (c2.length > 8000) c2 = c2.slice(0, 8000);
+            return `已打开：${pick}\n\n${c2}`;
+          } catch (e) {
+            return `open_file 执行失败：${nm}`;
+          }
+        }
+
+        if (toolType === 'api_request') {
+          const method = String(hit.obj.method || 'GET').toUpperCase();
+          const path = String(hit.obj.path || hit.obj.url || '').trim();
+          const body = (hit.obj.body && typeof hit.obj.body === 'object') ? hit.obj.body : (hit.obj.body || null);
+          if (!path) return 'api_request 失败：缺少 path';
+          if (method === 'POST') {
+            const res = await postWithUndo(path, body || {});
+            return __gmAiFormatApiResult(path, method, body || {}, res);
+          }
+          const res = await GET(path);
+          return __gmAiFormatApiResult(path, method, body || {}, res);
+        }
+
+        if (toolType === 'search_code') {
+          const query = String(hit.obj.query || hit.obj.q || '').trim();
+          if (!query) return 'search_code 失败：缺少 query';
+          const caseSensitive = Boolean(hit.obj.case_sensitive);
+          const maxResults = Number(hit.obj.max_results || 50) || 50;
+          try {
+            const url = '/api/search_code?query=' + encodeURIComponent(query)
+              + '&case_sensitive=' + encodeURIComponent(caseSensitive ? '1' : '0')
+              + '&max_results=' + encodeURIComponent(String(maxResults));
+            const res = await GET(url);
+            if (!(res && res.ok)) return 'search_code 失败：' + String((res && (res.msg || res.error)) || '搜索失败');
+            const hits = Array.isArray(res.hits) ? res.hits : [];
+            if (!hits.length) return `search_code\n- query: ${query}\n- 结果：0`;
+            const lines = hits.slice(0, 50).map(h => {
+              const p = String(h && h.path || '');
+              const ln = Number(h && h.line || 0) || 0;
+              const tx = String(h && h.text || '');
+              return `${p}:${ln}  ${tx}`;
+            });
+            return `search_code\n- query: ${query}\n- 结果：${hits.length}\n\n` + lines.join('\n');
+          } catch (e2) {
+            return 'search_code 执行失败：' + query;
+          }
+        }
+
+        if (toolType === 'read_file_range') {
+          let p0 = String(hit.obj.path || hit.obj.name || '').trim();
+          if (p0.startsWith('@')) p0 = p0.slice(1);
+          p0 = p0.trim();
+          if (!p0) return 'read_file_range 失败：缺少 path';
+          const start = Number(hit.obj.start || 1) || 1;
+          const end = Number(hit.obj.end || (start + 200)) || (start + 200);
+          try {
+            const url = '/api/read_file_range?path=' + encodeURIComponent(p0)
+              + '&start=' + encodeURIComponent(String(start))
+              + '&end=' + encodeURIComponent(String(end));
+            const res = await GET(url);
+            if (!(res && res.ok && res.data)) return 'read_file_range 失败：' + String((res && (res.msg || res.error)) || '读取失败');
+            const d = res.data;
+            const lines = Array.isArray(d.lines) ? d.lines : [];
+            const s0 = Number(d.start || start) || start;
+            const out = lines.map((t, i) => `${s0 + i}| ${String(t || '')}`).join('\n');
+            return `read_file_range\n- ${String(d.path || p0)}\n- 行：${s0}-${Number(d.end || end) || end}\n\n` + out;
+          } catch (e2) {
+            return `read_file_range 执行失败：${p0}`;
+          }
+        }
+
+        if (toolType === 'list_dir_tree') {
+          let p0 = String(hit.obj.path || hit.obj.dir || '').trim();
+          if (p0.startsWith('@')) p0 = p0.slice(1);
+          p0 = p0.trim();
+          const depth = Number(hit.obj.depth || 3) || 3;
+          const maxEntries = Number(hit.obj.max_entries || 500) || 500;
+          try {
+            const url = '/api/list_dir_tree?path=' + encodeURIComponent(p0)
+              + '&depth=' + encodeURIComponent(String(depth))
+              + '&max_entries=' + encodeURIComponent(String(maxEntries));
+            const res = await GET(url);
+            if (!(res && res.ok)) return 'list_dir_tree 失败：' + String((res && (res.msg || res.error)) || '生成失败');
+            const tree = String(res.tree || '').trim();
+            return `list_dir_tree\n- path: ${p0 || '.'}\n- depth: ${depth}\n\n` + (tree || '(empty)');
+          } catch (e2) {
+            return `list_dir_tree 执行失败：${p0 || '.'}`;
+          }
+        }
+
+        if (toolType === 'delete_file') {
+          let p0 = String(hit.obj.path || hit.obj.name || '').trim();
+          if (p0.startsWith('@')) p0 = p0.slice(1);
+          p0 = p0.trim();
+          if (!p0) return 'delete_file 失败：缺少 path';
+          try {
+            const res = await postWithUndo('/api/delete_file', { path: p0 }, idemKey ? { 'X-Idempotency-Key': idemKey } : null);
+            const ok = Boolean(res && res.ok);
+            const msg = String((res && (res.msg || res.error)) || (ok ? '删除成功' : '删除失败'));
+            const out = ok ? (`已完成：删除文件\n- ${p0}`) : (`删除失败\n- 文件：${p0}\n- 原因：${msg}`);
+            if (idemKey) __gmAiIdempotencyCache.set(idemKey, out);
+            __gmAiPushExecSummary(`delete_file ${p0} -> ${ok ? 'ok' : 'fail'}`);
+            return out;
+          } catch (e2) {
+            return `delete_file 执行失败：${p0}`;
+          }
+        }
+
+        if (toolType === 'run_cmd') {
+          const cmd = String(hit.obj.cmd || hit.obj.command || '').trim();
+          if (!cmd) return 'run_cmd 失败：缺少 cmd';
+          const timeout = Number(hit.obj.timeout || 30) || 30;
+          const cwd = (hit.obj.cwd === undefined || hit.obj.cwd === null) ? null : String(hit.obj.cwd || '');
+          try {
+            const res = await POST('/api/run_cmd', { cmd, timeout, cwd });
+            const ok = Boolean(res && res.ok);
+            const code = (res && res.exit_code !== undefined) ? Number(res.exit_code) : null;
+            const out = String((res && res.stdout) || '').trim();
+            const err = String((res && res.stderr) || '').trim();
+            let text = ok ? '已完成：执行命令' : '命令执行失败';
+            text += `\n- cmd: ${cmd}`;
+            if (code !== null && Number.isFinite(code)) text += `\n- exit_code: ${code}`;
+            if (out) text += `\n\nstdout:\n${out}`;
+            if (err) text += `\n\nstderr:\n${err}`;
+            return text;
+          } catch (e2) {
+            return `run_cmd 执行失败：${cmd}`;
+          }
+        }
+
+        if (toolType === 'verify_python') {
+          const ps = hit.obj && (hit.obj.paths || hit.obj.files);
+          const arr = Array.isArray(ps) ? ps : [];
+          const paths = arr.map(x => String(x || '').trim()).filter(Boolean).slice(0, 30);
+          const timeout = Number(hit.obj.timeout || 60) || 60;
+          const cwd = (hit.obj.cwd === undefined || hit.obj.cwd === null) ? null : String(hit.obj.cwd || '');
+          const cmd = paths.length
+            ? ('python -m py_compile ' + paths.map(p => (/\s/.test(p) ? ('"' + p.replace(/"/g, '\\"') + '"') : p)).join(' '))
+            : 'python -m py_compile server.py';
+          try {
+            const res = await POST('/api/run_cmd', { cmd, timeout, cwd });
+            const ok = Boolean(res && res.ok);
+            const code = (res && res.exit_code !== undefined) ? Number(res.exit_code) : null;
+            const out = String((res && res.stdout) || '').trim();
+            const err = String((res && res.stderr) || '').trim();
+            let text = ok ? '✓ Python 语法检查通过' : 'Python 语法检查失败';
+            text += `\n- cmd: ${cmd}`;
+            if (code !== null && Number.isFinite(code)) text += `\n- exit_code: ${code}`;
+            if (out) text += `\n\nstdout:\n${out}`;
+            if (err) text += `\n\nstderr:\n${err}`;
+            return text;
+          } catch (e2) {
+            return `verify_python 执行失败：${cmd}`;
+          }
+        }
+
+        if (toolType === 'revert_file') {
+          let p0 = String(hit.obj.path || '').trim();
+          if (!p0) p0 = String(hit.obj.name || '').trim();
+          if (p0.startsWith('@')) p0 = p0.slice(1);
+          p0 = p0.trim();
+          if (!p0) return 'revert_file 失败：缺少 path';
+          const stRaw = String(hit.obj.status || hit.obj.kind || hit.obj.type2 || '').trim().toLowerCase();
+          const st = (stRaw === 'untracked' || stRaw === 'u') ? 'U' : 'M';
+          try {
+            const res = await postWithUndo('/api/revert_file', { path: p0, status: st }, idemKey ? { 'X-Idempotency-Key': idemKey } : null);
+            const ok = Boolean(res && res.ok);
+            const msg = String((res && (res.msg || res.error)) || (ok ? '撤回成功' : '撤回失败'));
+            const out = ok ? (`已撤回：${p0}`) : (`撤回失败：${p0}\n${msg}`);
+            if (idemKey) __gmAiIdempotencyCache.set(idemKey, out);
+            __gmAiPushExecSummary(`revert_file ${p0} -> ${ok ? 'ok' : 'fail'}`);
+            return out;
+          } catch (e2) {
+            return `revert_file 执行失败：${p0}`;
+          }
+        }
+
+        if (toolType === 'stage_file') {
+          let p0 = String(hit.obj.path || '').trim();
+          if (!p0) p0 = String(hit.obj.name || '').trim();
+          if (p0.startsWith('@')) p0 = p0.slice(1);
+          p0 = p0.trim();
+          if (!p0) return 'stage_file 失败：缺少 path';
+          try {
+            const res = await postWithUndo('/api/stage_file', { path: p0 });
+            if (res && res.ok) return `已暂存：${p0}`;
+            const msg = String((res && (res.error || res.msg)) || '暂存失败');
+            return `暂存失败：${p0}\n${msg}`;
+          } catch (e2) {
+            return `stage_file 执行失败：${p0}`;
+          }
+        }
+
+        if (toolType === 'commit') {
+          const message = String(hit.obj.message || '').trim();
+          const fs = hit.obj.files;
+          if (!message) return 'commit 失败：缺少 message';
+          const body = { message };
+          if (Array.isArray(fs)) body.files = fs;
+          try {
+            const res = await postWithUndo('/api/commit', body);
+            if (res && res.ok) {
+              const h = String(res.hash || res.full_hash || '').trim();
+              return h ? `提交成功：${h}` : '提交成功';
+            }
+            const msg = String((res && (res.error || res.msg)) || '提交失败');
+            return `提交失败\n${msg}`;
+          } catch (e2) {
+            return 'commit 执行失败';
+          }
+        }
+
+        if (toolType === 'pull') {
+          try {
+            const res = await postWithUndo('/api/pull', {});
+            let out = '';
+            try { out = JSON.stringify(res); } catch (e0) { out = String(res || ''); }
+            if (out.length > 6000) out = out.slice(0, 6000);
+            return `pull\n\n${out}`;
+          } catch (e2) {
+            return 'pull 执行失败';
+          }
+        }
+
+        if (toolType === 'push') {
+          try {
+            const res = await postWithUndo('/api/push', {});
+            let out = '';
+            try { out = JSON.stringify(res); } catch (e0) { out = String(res || ''); }
+            if (out.length > 6000) out = out.slice(0, 6000);
+            return `push\n\n${out}`;
+          } catch (e2) {
+            return 'push 执行失败';
+          }
+        }
+
+        if (toolType === 'stash_and_pull') {
+          try {
+            const res = await postWithUndo('/api/stash_and_pull', {});
+            let out = '';
+            try { out = JSON.stringify(res); } catch (e0) { out = String(res || ''); }
+            if (out.length > 6000) out = out.slice(0, 6000);
+            return `stash_and_pull\n\n${out}`;
+          } catch (e2) {
+            return 'stash_and_pull 执行失败';
+          }
+        }
+
+        if (toolType === 'commit_and_pull') {
+          const message = String(hit.obj.message || '').trim();
+          if (!message) return 'commit_and_pull 失败：缺少 message';
+          try {
+            const res = await postWithUndo('/api/commit_and_pull', { message });
+            let out = '';
+            try { out = JSON.stringify(res); } catch (e0) { out = String(res || ''); }
+            if (out.length > 6000) out = out.slice(0, 6000);
+            return `commit_and_pull\n\n${out}`;
+          } catch (e2) {
+            return 'commit_and_pull 执行失败';
+          }
+        }
+
+        if (toolType === 'switch_branch') {
+          const branch = String(hit.obj.branch || '').trim();
+          const detached = Boolean(hit.obj.detached);
+          if (!branch) return 'switch_branch 失败：缺少 branch';
+          try {
+            const res = await postWithUndo('/api/switch_branch', { branch, detached });
+            let out = '';
+            try { out = JSON.stringify(res); } catch (e0) { out = String(res || ''); }
+            if (out.length > 6000) out = out.slice(0, 6000);
+            return `switch_branch\n\n${out}`;
+          } catch (e2) {
+            return 'switch_branch 执行失败';
+          }
+        }
+
+        if (toolType === 'stash_and_switch') {
+          const branch = String(hit.obj.branch || '').trim();
+          if (!branch) return 'stash_and_switch 失败：缺少 branch';
+          try {
+            const res = await postWithUndo('/api/stash_and_switch', { branch });
+            let out = '';
+            try { out = JSON.stringify(res); } catch (e0) { out = String(res || ''); }
+            if (out.length > 6000) out = out.slice(0, 6000);
+            return `stash_and_switch\n\n${out}`;
+          } catch (e2) {
+            return 'stash_and_switch 执行失败';
+          }
+        }
+
+        if (toolType === 'commit_and_switch') {
+          const branch = String(hit.obj.branch || '').trim();
+          const message = String(hit.obj.message || '').trim();
+          if (!branch) return 'commit_and_switch 失败：缺少 branch';
+          if (!message) return 'commit_and_switch 失败：缺少 message';
+          try {
+            const res = await postWithUndo('/api/commit_and_switch', { branch, message });
+            let out = '';
+            try { out = JSON.stringify(res); } catch (e0) { out = String(res || ''); }
+            if (out.length > 6000) out = out.slice(0, 6000);
+            return `commit_and_switch\n\n${out}`;
+          } catch (e2) {
+            return 'commit_and_switch 执行失败';
+          }
+        }
+
+        if (toolType === 'stash_pop') {
+          try {
+            const res = await postWithUndo('/api/stash_pop', {});
+            let out = '';
+            try { out = JSON.stringify(res); } catch (e0) { out = String(res || ''); }
+            if (out.length > 6000) out = out.slice(0, 6000);
+            return `stash_pop\n\n${out}`;
+          } catch (e2) {
+            return 'stash_pop 执行失败';
+          }
+        }
+
+        // 默认：save_file / update_file（两者都走 /api/save_file）
+        let p = String(hit.obj.path || '').trim();
+        if (p.startsWith('@')) p = p.slice(1);
+        p = p.trim();
+        const c = (hit.obj.content === undefined || hit.obj.content === null) ? '' : String(hit.obj.content);
+        if (!p) return '保存失败\n- 原因：缺少 path';
+        const res = await postWithUndo('/api/save_file', { path: p, content: c }, idemKey ? { 'X-Idempotency-Key': idemKey } : null);
+        const ok = Boolean(res && res.ok);
+        const msg = String((res && (res.msg || res.error)) || (ok ? '保存成功' : '保存失败'));
+        const out = ok
+          ? (`已保存：${p}`)
+          : (`保存失败\n- 文件：${p}\n- 原因：${msg}`);
+        if (idemKey) __gmAiIdempotencyCache.set(idemKey, out);
+        __gmAiPushExecSummary(`save_file ${p} -> ${ok ? 'ok' : 'fail'}`);
+        return out;
+      };
+
+      for (const h of hits) {
+        const r = await execOne(h);
+        if (r) results.push(String(r));
+      }
+
+      const outText = (preface ? (preface + '\n\n') : '') + results.join('\n\n');
+      return { handled: true, content: outText.trim() };
+    } catch (e) {
+      return { handled: true, content: '操作失败\n- 原因：工具指令解析或执行异常' };
+    }
+  }
+
+  function __gmAiSanitizeAssistantContent(text) {
+    try {
+      let s = String(text || '');
+      if (!s) return s;
+      // strip leaked chat-template tokens (llama / hf style)
+      s = s.replace(/<\|start_header_id\|>\s*assistant\s*<\|end_header_id\|>\s*/gi, '');
+      s = s.replace(/<\|start_header_id\|>[^<]*<\|end_header_id\|>\s*/gi, '');
+      s = s.replace(/<\|eot_id\|>\s*/gi, '');
+      s = s.replace(/^\s*assistant\s*:\s*/i, '');
+      return s.trim();
+    } catch (e) {
+      return String(text || '');
+    }
+  }
+
+  function __gmAiCtxKey() {
+    try {
+      const pid = String(__gmAiSelectedProfileId || __gmAiConfig.active_profile_id || '');
+      const sid = String(__gmAiActiveSessionId || '');
+      return `__gm_ai_ctx_summary__${pid}__${sid}`;
+    } catch (e) {
+      return '__gm_ai_ctx_summary__';
+    }
+  }
+
+  function __gmAiGetCtxSummary() {
+    try {
+      if (typeof window.__gmAiCtxSummary === 'string' && window.__gmAiCtxSummary) return window.__gmAiCtxSummary;
+      const k = __gmAiCtxKey();
+      const v = localStorage.getItem(k) || '';
+      window.__gmAiCtxSummary = String(v || '');
+      return window.__gmAiCtxSummary;
+    } catch (e) {
+      return String(window.__gmAiCtxSummary || '');
+    }
+  }
+
+  function __gmAiSetCtxSummary(text) {
+    try {
+      const v = String(text || '').trim();
+      window.__gmAiCtxSummary = v;
+      const k = __gmAiCtxKey();
+      try { localStorage.setItem(k, v); } catch (e2) {}
+    } catch (e) {}
+  }
+
+  function __gmAiEstimateTokensByChars(text) {
+    try {
+      const n = String(text || '').length;
+      return Math.ceil(n / 4);
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  function __gmAiScoreLine(line) {
+    try {
+      const s = String(line || '').trim();
+      if (!s) return 0;
+      let score = 1;
+      if (/(需求|目标|期望|必须|不要|请你|帮我|修复|bug|优化|实现|方案|约定|规范|规则|保持|不能|需要)/.test(s)) score += 4;
+      if (/(已完成|完成|已修复|修复了|结论|原因|根因|下一步|TODO|待办|计划|状态)/.test(s)) score += 3;
+      if (/\b(api|endpoint|range|markdown|token|context|summary|system|prompt)\b/i.test(s)) score += 2;
+      if (/```/.test(s)) score -= 1;
+      if (s.length > 180) score += 1;
+      return score;
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  function __gmAiExtractKeyLines(text, maxLines = 16) {
+    try {
+      const raw = String(text || '').replace(/\r\n/g, '\n');
+      const lines = raw.split('\n').map(x => String(x || '').trim()).filter(Boolean);
+      const scored = [];
+      for (const ln of lines) {
+        const sc = __gmAiScoreLine(ln);
+        if (sc <= 0) continue;
+        scored.push({ sc, ln });
+      }
+      scored.sort((a, b) => (b.sc - a.sc));
+      const out = [];
+      const seen = new Set();
+      for (const it of scored) {
+        const t = it.ln;
+        if (!t) continue;
+        if (seen.has(t)) continue;
+        seen.add(t);
+        out.push(t);
+        if (out.length >= maxLines) break;
+      }
+      return out;
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function __gmAiParseStructuredSummary(text) {
+    try {
+      const s = String(text || '');
+      const out = { goal: [], constraints: [], status: [], next: [] };
+      const lines = s.replace(/\r\n/g, '\n').split('\n');
+      let sec = '';
+      for (const raw of lines) {
+        const ln = String(raw || '').trim();
+        if (!ln) continue;
+        if (/^【目标】/.test(ln)) { sec = 'goal'; continue; }
+        if (/^【约束】/.test(ln)) { sec = 'constraints'; continue; }
+        if (/^【当前状态】/.test(ln)) { sec = 'status'; continue; }
+        if (/^【下一步】/.test(ln)) { sec = 'next'; continue; }
+        const m = ln.match(/^[-*]\s+(.*)$/);
+        const item = (m ? String(m[1] || '').trim() : ln);
+        if (!item) continue;
+        if (sec && out[sec]) out[sec].push(item);
+      }
+      return out;
+    } catch (e) {
+      return { goal: [], constraints: [], status: [], next: [] };
+    }
+  }
+
+  function __gmAiStructuredSummaryToText(obj) {
+    try {
+      const goal = Array.isArray(obj && obj.goal) ? obj.goal : [];
+      const constraints = Array.isArray(obj && obj.constraints) ? obj.constraints : [];
+      const status = Array.isArray(obj && obj.status) ? obj.status : [];
+      const next = Array.isArray(obj && obj.next) ? obj.next : [];
+      const lines = [];
+      lines.push('【目标】');
+      for (const x of goal) lines.push(`- ${x}`);
+      lines.push('');
+      lines.push('【约束】');
+      for (const x of constraints) lines.push(`- ${x}`);
+      lines.push('');
+      lines.push('【当前状态】');
+      for (const x of status) lines.push(`- ${x}`);
+      lines.push('');
+      lines.push('【下一步】');
+      for (const x of next) lines.push(`- ${x}`);
+      return lines.join('\n').trim();
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function __gmAiDedupeList(items, limit = 60) {
+    try {
+      const out = [];
+      const seen = new Set();
+      for (const x0 of (items || [])) {
+        const x = String(x0 || '').trim();
+        if (!x) continue;
+        const k = x.toLowerCase();
+        if (seen.has(k)) continue;
+        seen.add(k);
+        out.push(x);
+        if (out.length >= limit) break;
+      }
+      return out;
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function __gmAiMergeStructuredSummaries(aText, bText) {
+    try {
+      const a = __gmAiParseStructuredSummary(aText);
+      const b = __gmAiParseStructuredSummary(bText);
+      const merged = {
+        goal: __gmAiDedupeList([].concat(a.goal || [], b.goal || []), 30),
+        constraints: __gmAiDedupeList([].concat(a.constraints || [], b.constraints || []), 40),
+        status: __gmAiDedupeList([].concat(a.status || [], b.status || []), 40),
+        next: __gmAiDedupeList([].concat(a.next || [], b.next || []), 30),
+      };
+      return __gmAiStructuredSummaryToText(merged);
+    } catch (e) {
+      return String(bText || aText || '');
+    }
+  }
+
+  function __gmAiClassifyKeyLine(line) {
+    try {
+      const s = String(line || '').trim();
+      if (!s) return '';
+      if (/(下一步|待办|todo|接下来|后续|计划|建议)/i.test(s)) return 'next';
+      if (/(必须|不要|禁止|仅|优先|不得|规范|约定|规则|约束)/.test(s)) return 'constraints';
+      if (/(已完成|完成|已修复|修复了|当前|现状|状态|进展|结果|验证)/.test(s)) return 'status';
+      if (/(目标|需求|希望|期望|要做|实现|支持)/.test(s)) return 'goal';
+      return '';
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function __gmAiSummarizeOldMessages(msgs) {
+    try {
+      const goal = [];
+      const constraints = [];
+      const status = [];
+      const next = [];
+      for (const m of (msgs || [])) {
+        if (!m) continue;
+        const content = String(m.content || '');
+        if (!content.trim()) continue;
+        const keyLines = __gmAiExtractKeyLines(content, 12);
+        for (const ln of keyLines) {
+          const sec = __gmAiClassifyKeyLine(ln);
+          if (sec === 'goal') goal.push(ln);
+          else if (sec === 'constraints') constraints.push(ln);
+          else if (sec === 'status') status.push(ln);
+          else if (sec === 'next') next.push(ln);
+          else status.push(ln);
+        }
+      }
+      const obj = {
+        goal: __gmAiDedupeList(goal, 18),
+        constraints: __gmAiDedupeList(constraints, 26),
+        status: __gmAiDedupeList(status, 26),
+        next: __gmAiDedupeList(next, 18),
+      };
+      return __gmAiStructuredSummaryToText(obj);
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function __gmAiBuildContextManagedMessages(sysText, baseMessages) {
+    try {
+      const cleaned = (baseMessages || []).filter(m => !(m && m.pending));
+
+      const MAX_INPUT_TOKENS = 12000;
+      const RESERVED_FOR_REPLY = 2500;
+      const BUDGET = Math.max(2000, MAX_INPUT_TOKENS - RESERVED_FOR_REPLY);
+
+      const ctxSummary = __gmAiGetCtxSummary();
+      const summaryBlock = ctxSummary
+        ? (`长期记忆摘要（来自更早对话，已压缩；必要时可要求用户确认）：\n${ctxSummary}`)
+        : '';
+
+      const sysWithSummary = summaryBlock
+        ? (String(sysText || '') + `\n\n${summaryBlock}`)
+        : String(sysText || '');
+
+      const estSys = __gmAiEstimateTokensByChars(sysWithSummary);
+
+      const RECENT_TURNS = 10;
+      const recent = cleaned.slice(Math.max(0, cleaned.length - RECENT_TURNS));
+      const older = cleaned.slice(0, Math.max(0, cleaned.length - RECENT_TURNS));
+
+      let keep = recent.slice();
+      let total = estSys;
+      for (const m of keep) total += __gmAiEstimateTokensByChars(String(m && m.content || '')) + 8;
+
+      if (total <= BUDGET) {
+        return sysWithSummary
+          ? ([{ role: 'system', content: sysWithSummary }].concat(keep))
+          : keep;
+      }
+
+      // Budget exceeded: compress older into summary (heuristic extract), and if still too big, trim older recent.
+      if (older.length) {
+        const extra = __gmAiSummarizeOldMessages(older);
+        if (extra) {
+          const merged = ctxSummary ? __gmAiMergeStructuredSummaries(ctxSummary, extra) : String(extra || '');
+          const bounded = merged.length > 6000 ? merged.slice(0, 6000) : merged;
+          __gmAiSetCtxSummary(bounded);
+        }
+      }
+
+      const ctxSummary2 = __gmAiGetCtxSummary();
+      const sysWithSummary2 = ctxSummary2
+        ? (String(sysText || '') + `\n\n长期记忆摘要（来自更早对话，已压缩；必要时可要求用户确认）：\n${ctxSummary2}`)
+        : String(sysText || '');
+
+      let total2 = __gmAiEstimateTokensByChars(sysWithSummary2);
+      for (const m of keep) total2 += __gmAiEstimateTokensByChars(String(m && m.content || '')) + 8;
+
+      while (keep.length > 2 && total2 > BUDGET) {
+        const drop = keep.shift();
+        total2 -= (__gmAiEstimateTokensByChars(String(drop && drop.content || '')) + 8);
+      }
+
+      return sysWithSummary2
+        ? ([{ role: 'system', content: sysWithSummary2 }].concat(keep))
+        : keep;
+    } catch (e) {
+      const cleaned = (baseMessages || []).filter(m => !(m && m.pending));
+      if (sysText) return ([{ role: 'system', content: sysText }].concat(cleaned));
+      return cleaned;
+    }
+  }
+
+  function __gmAiBuildMessagesForApi(sysText) {
+    const base = Array.isArray(__gmAiChatMessages) ? __gmAiChatMessages : [];
+    return __gmAiBuildContextManagedMessages(sysText, base);
+  }
+
+  function __gmAiEnsureMentionMenu() {
+    if (__gmAiMentionMenuEl) return __gmAiMentionMenuEl;
+    const el = document.createElement('div');
+    el.id = 'aiMentionMenu';
+    el.className = 'ai-mention-menu';
+    el.addEventListener('click', (e) => {
+      try { e.stopPropagation(); } catch (e2) {}
+    });
+    document.body.appendChild(el);
+    document.addEventListener('click', () => {
+      __gmAiCloseMentionMenu();
+    });
+    __gmAiMentionMenuEl = el;
+    return el;
+  }
+
+  function __gmAiCloseMentionMenu() {
+    try {
+      const el = __gmAiMentionMenuEl;
+      if (el) el.classList.remove('show');
+    } catch (e) {}
+    __gmAiMentionActive = false;
+    __gmAiMentionItems = [];
+    __gmAiMentionIndex = 0;
+    __gmAiMentionQuery = '';
+    __gmAiMentionAnchor = null;
+  }
+
+  let __gmAiCaretMirrorEl = null;
+
+  function __gmAiGetCaretRect(ta) {
+    try {
+      if (!ta) return null;
+      const sel = (typeof ta.selectionStart === 'number') ? ta.selectionStart : String(ta.value || '').length;
+      const text = String(ta.value || '');
+
+      if (!__gmAiCaretMirrorEl) {
+        const d = document.createElement('div');
+        d.style.position = 'fixed';
+        d.style.visibility = 'hidden';
+        d.style.whiteSpace = 'pre-wrap';
+        d.style.wordWrap = 'break-word';
+        d.style.overflow = 'auto';
+        d.style.zIndex = '-1';
+        document.body.appendChild(d);
+        __gmAiCaretMirrorEl = d;
+      }
+
+      const st = window.getComputedStyle(ta);
+      const d = __gmAiCaretMirrorEl;
+      d.style.left = ta.getBoundingClientRect().left + 'px';
+      d.style.top = ta.getBoundingClientRect().top + 'px';
+      d.style.width = ta.clientWidth + 'px';
+      d.style.height = ta.clientHeight + 'px';
+      try { d.scrollTop = ta.scrollTop || 0; } catch (e0) {}
+      try { d.scrollLeft = ta.scrollLeft || 0; } catch (e0b) {}
+      d.style.fontFamily = st.fontFamily;
+      d.style.fontSize = st.fontSize;
+      d.style.fontWeight = st.fontWeight;
+      d.style.lineHeight = st.lineHeight;
+      d.style.letterSpacing = st.letterSpacing;
+      d.style.padding = st.padding;
+      d.style.border = st.border;
+      d.style.boxSizing = st.boxSizing;
+      d.style.textAlign = st.textAlign;
+
+      const before = text.slice(0, sel);
+      const after = text.slice(sel);
+      const safeBefore = esc(before).replace(/\n/g, '<br/>').replace(/ {2}/g, ' &nbsp;');
+      const safeAfter = esc(after).replace(/\n/g, '<br/>').replace(/ {2}/g, ' &nbsp;');
+      d.innerHTML = safeBefore + '<span id="__gmAiCaretSpan">\u200b</span>' + safeAfter;
+
+      const span = d.querySelector('#__gmAiCaretSpan');
+      if (!span) return null;
+      const r = span.getBoundingClientRect();
+      return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function __gmAiRenderMentionMenu() {
+    const el = __gmAiEnsureMentionMenu();
+    const items = Array.isArray(__gmAiMentionItems) ? __gmAiMentionItems : [];
+    if (!items.length) {
+      __gmAiCloseMentionMenu();
+      return;
+    }
+    const html = items.map((it, i) => {
+      const cls = 'ai-mention-item' + (i === __gmAiMentionIndex ? ' active' : '');
+      const nm = String(it && it.name || '');
+      return `<div class="${cls}" onclick="aiPickMention(${i})"><div style="min-width:0;flex:1;display:flex;flex-direction:column;gap:2px;"><div class="nm">${esc(nm)}</div></div></div>`;
+    }).join('');
+    el.innerHTML = html;
+    const ta = document.getElementById('aiChatInput');
+    try {
+      const w = __gmAiGetChatPanelWidth();
+      const maxH = Math.max(120, __gmAiGetChatPanelHeight() - 16);
+      el.style.width = w + 'px';
+      el.style.minWidth = w + 'px';
+      el.style.maxWidth = w + 'px';
+      el.style.maxHeight = maxH + 'px';
+    } catch (e0) {}
+    const rr = __gmAiGetCaretRect(ta);
+    if (rr) {
+      el.style.left = '0px';
+      el.style.top = '-99999px';
+      el.classList.add('show');
+      const mw = Math.max(260, Math.min(__gmAiGetChatPanelWidth(), el.offsetWidth || 420));
+      const mh = Math.min(__gmAiGetChatPanelHeight() - 16, (el.offsetHeight || 240));
+      let clampL = 8;
+      let clampR = (window.innerWidth || 0) - 8;
+      try {
+        const host = document.querySelector('.ai-composer-wrap') || (ta && ta.parentElement) || null;
+        const hr = host && host.getBoundingClientRect ? host.getBoundingClientRect() : null;
+        if (hr) { clampL = Math.max(clampL, hr.left); clampR = Math.min(clampR, hr.right); }
+      } catch (e0) {}
+      const left = Math.max(clampL, Math.min(clampR - mw, rr.left - 4));
+      const preferBottom = rr.bottom + 4;
+      const top = (preferBottom + mh <= window.innerHeight - 8) ? preferBottom : Math.max(8, rr.top - mh - 4);
+      el.style.left = left + 'px';
+      el.style.top = top + 'px';
+      return;
+    }
+    try {
+      if (ta && ta.getBoundingClientRect) {
+        const r2 = ta.getBoundingClientRect();
+        el.style.left = '0px';
+        el.style.top = '-99999px';
+        el.classList.add('show');
+        const mw = Math.max(260, Math.min(__gmAiGetChatPanelWidth(), el.offsetWidth || 420));
+        const mh = Math.min(__gmAiGetChatPanelHeight() - 16, (el.offsetHeight || 240));
+        let clampL = 8;
+        let clampR = (window.innerWidth || 0) - 8;
+        try {
+          const host = document.querySelector('.ai-composer-wrap') || (ta && ta.parentElement) || null;
+          const hr = host && host.getBoundingClientRect ? host.getBoundingClientRect() : null;
+          if (hr) { clampL = Math.max(clampL, hr.left); clampR = Math.min(clampR, hr.right); }
+        } catch (e0) {}
+        const left = Math.max(clampL, Math.min(clampR - mw, r2.left + 8));
+        const preferBottom = r2.bottom + 4;
+        const top = (preferBottom + mh <= window.innerHeight - 8) ? preferBottom : Math.max(8, r2.top - mh - 4);
+        el.style.left = left + 'px';
+        el.style.top = top + 'px';
+        return;
+      }
+    } catch (e2) {}
+    el.classList.add('show');
+  }
+
+  function __gmAiSyncEditingProfileFromEditor() {
+    try {
+      const pid = String(__gmAiEditingProfileId || '');
+      if (!pid) return;
+      const idx = (__gmAiConfig.profiles || []).findIndex(p => p && String(p.id || '') === pid);
+      if (idx < 0) return;
+      const base = document.getElementById('aiProfBaseUrl');
+      const key = document.getElementById('aiApiKey');
+      const model = document.getElementById('aiModel');
+      const p = __gmAiConfig.profiles[idx];
+      p.base_url = base ? String(base.value || '') : '';
+      p.api_key = key ? String(key.value || '') : '';
+      p.model = model ? String(model.value || '') : '';
+    } catch (e) {}
+  }
+
+  function __gmAiValidateProfile(p) {
+    try {
+      const base = String((p && p.base_url) || '').trim();
+      const key = String((p && p.api_key) || '').trim();
+      const model = String((p && p.model) || '').trim();
+      if (!base || !key || !model) {
+        toast('请填写完整的 Base URL、API Key、Model 后再保存或设为当前', 'err');
+        return false;
+      }
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function __gmAiExtractMentionState(ta) {
+    try {
+      const v = String((ta && ta.value) || '');
+      const pos = (ta && typeof ta.selectionStart === 'number') ? ta.selectionStart : v.length;
+      const before = v.slice(0, pos);
+      const m = before.match(/(^|\s)@([^\s]*)$/);
+      if (!m) return null;
+      const q = String(m[2] || '');
+      const start = pos - q.length - 1;
+      if (start < 0) return null;
+      return { query: q, start, end: pos };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  async function __gmAiUpdateMentionMenu() {
+    try {
+      const ta = document.getElementById('aiChatInput');
+      if (!ta) return;
+      const st = __gmAiExtractMentionState(ta);
+      if (!st) {
+        __gmAiCloseMentionMenu();
+        return;
+      }
+      const q = String(st.query || '').trim();
+      __gmAiMentionActive = true;
+      __gmAiMentionQuery = q;
+      __gmAiMentionAnchor = st;
+
+      const reqId = ++__gmAiMentionReqId;
+      const res = await GET('/api/find_files?name=' + encodeURIComponent(q));
+      if (reqId !== __gmAiMentionReqId) return;
+      const files = (res && res.ok && Array.isArray(res.files)) ? res.files : [];
+      const items = files.slice(0, 12).map(p => {
+        const rel = String(p || '');
+        const bn = rel.split('/').pop() || rel;
+        return { name: bn, path: rel };
+      });
+      __gmAiMentionItems = items;
+      __gmAiMentionIndex = 0;
+      __gmAiRenderMentionMenu();
+    } catch (e) {
+      __gmAiCloseMentionMenu();
+    }
+  }
+
+  function aiPickMention(idx) {
+    try {
+      const i = Number(idx);
+      if (!Number.isFinite(i)) return;
+      const it = (__gmAiMentionItems || [])[i];
+      if (!it) return;
+      const ta = document.getElementById('aiChatInput');
+      if (!ta) return;
+      const st = __gmAiMentionAnchor || __gmAiExtractMentionState(ta);
+      if (!st) return;
+      const v = String(ta.value || '');
+      const insert = '@' + String(it.path || it.name || '');
+      const next = v.slice(0, st.start) + insert + ' ' + v.slice(st.end);
+      ta.value = next;
+      const np = (v.slice(0, st.start) + insert + ' ').length;
+      try { ta.focus(); ta.setSelectionRange(np, np); } catch (e2) {}
+      __gmAiCloseMentionMenu();
+    } catch (e) {}
+  }
+
+  function __gmAiRenderProfileModelName() {
+    try {
+      const pid = String(__gmAiSelectedProfileId || __gmAiConfig.active_profile_id || '');
+      const prof = (__gmAiConfig.profiles || []).find(p => p && String(p.id || '') === pid) || null;
+      const model = String((prof && (prof.model)) || '').trim();
+      const nm = __gmAiPrettyModelName(model);
+      const displayName = nm || '未选择';
+      const el = document.getElementById('aiModelName');
+      if (el) el.textContent = displayName;
+    } catch (e) {}
+  }
+
+  function __gmAiPrettyModelName(s) {
+    const t = String(s || '').trim();
+    if (!t) return '';
+    // remove provider prefix like meta/xxx
+    const parts = t.split('/');
+    const base = parts.length >= 2 ? parts[parts.length - 1] : t;
+    return base.replace(/\s*（默认）\s*/g, '').replace(/\s*\(default\)\s*/ig, '').trim();
+  }
+
+  function __gmAiRenderHistoryChips() {
+    try {
+      const scrollEl = document.getElementById('aiSessionsScroll');
+      if (!scrollEl) return;
+      
+      const sessions = Array.isArray(__gmAiSessions) ? __gmAiSessions : [];
+      const active = String(__gmAiActiveSessionId || '');
+      const chips = [];
+      
+      sessions.forEach((s, idx) => {
+        const sid = String(s.id || '');
+        const title = String(s.title || '会话');
+        const cls = 'ai-session-chip' + (sid && sid === active ? ' active' : '');
+        chips.push(`<div class="${cls}" data-sid="${esc(sid)}" draggable="true" onclick="onAiHistoryChipClick('${esc(sid)}')">
+          <span class="t">${esc(title)}</span>
+          <span class="x" onclick="onAiHistoryChipDelete(event,'${esc(sid)}')">×</span>
+        </div>`);
+      });
+      chips.push('<div class="ai-session-drop-end" aria-hidden="true"></div>');
+      
+      scrollEl.innerHTML = chips.join('');
+      try {
+        if (!scrollEl.__gmAiDndBound) {
+          scrollEl.__gmAiDndBound = true;
+          scrollEl.__gmAiContainerDrop = true;
+          scrollEl.addEventListener('dragover', (e) => {
+            try {
+              if (!__gmAiReorderState || !__gmAiReorderState.dragging) return;
+              try { e.preventDefault(); } catch (e0) {}
+              try { e.dataTransfer.dropEffect = 'move'; } catch (e1) {}
+            } catch (e2) {}
+          });
+          // Use capture so drop always lands here even if target is inner span.
+          scrollEl.addEventListener('drop', (e) => {
+            try {
+              if (!__gmAiReorderState || !__gmAiReorderState.dragging) return;
+              try { e.preventDefault(); } catch (e0) {}
+              const dragId = String(__gmAiReorderState.sid || '');
+              if (!dragId) return;
+              __gmAiSuppressChipClickUntil = Date.now() + 1200;
+
+              const sessions0 = Array.isArray(__gmAiSessions) ? __gmAiSessions.slice() : [];
+              const from = sessions0.findIndex(x => String(x && x.id || '') === dragId);
+              if (from < 0) return;
+
+              const clientX = (e && typeof e.clientX === 'number') ? e.clientX : 0;
+              const chipsEls = Array.from(scrollEl.querySelectorAll('.ai-session-chip'));
+              const others = chipsEls.filter(el => String(el.getAttribute('data-sid') || '') !== dragId);
+
+              let insertAt = 0;
+              for (let i = 0; i < others.length; i++) {
+                const r = others[i].getBoundingClientRect();
+                const mid = (r.left + r.right) / 2;
+                if (clientX < mid) { insertAt = i; break; }
+                insertAt = i + 1;
+              }
+
+              const moved = sessions0.splice(from, 1)[0];
+              if (insertAt >= others.length) {
+                sessions0.push(moved);
+              } else {
+                const targetId = String(others[insertAt].getAttribute('data-sid') || '');
+                let to = targetId ? sessions0.findIndex(x => String(x && x.id || '') === targetId) : sessions0.length;
+                if (to < 0) to = sessions0.length;
+                sessions0.splice(to, 0, moved);
+              }
+              __gmAiSessions = sessions0;
+              __gmAiRenderHistoryChips();
+              __gmAiReorderFinish();
+            } catch (e2) {}
+            finally {
+              try {
+                const de = scrollEl.querySelector('.ai-session-drop-end');
+                if (de) de.style.display = 'none';
+              } catch (e3) {}
+            }
+          }, true);
+        }
+
+        const els = scrollEl.querySelectorAll('.ai-session-chip');
+        for (let i = 0; i < els.length; i++) {
+          const el = els[i];
+          if (!el) continue;
+          if (el.__gmReorderBound) continue;
+          el.__gmReorderBound = true;
+          // Desktop drag reorder: HTML5 DnD (primary)
+          el.addEventListener('dragstart', (e) => {
+            try {
+              const sid = String(el.getAttribute('data-sid') || '');
+              if (!sid) return;
+              __gmAiDragging = true;
+              try {
+                const de = scrollEl.querySelector('.ai-session-drop-end');
+                if (de) de.style.display = 'inline-flex';
+              } catch (e0) {}
+              try { e.dataTransfer.effectAllowed = 'move'; } catch (e1) {}
+              try { e.dataTransfer.setData('text/plain', sid); } catch (e2) {}
+              try { e.dataTransfer.dropEffect = 'move'; } catch (e3) {}
+              __gmAiReorderState = { sid, active: true, dragging: true, sx: 0, sy: 0, over: '' };
+              try { el.classList.add('dragging'); } catch (e3) {}
+            } catch (e4) {}
+          });
+          el.addEventListener('dragend', (e) => {
+            try {
+              __gmAiSuppressChipClickUntil = Date.now() + 1200;
+              __gmAiReorderCleanupVisual();
+              __gmAiReorderState = null;
+              try {
+                const de = scrollEl.querySelector('.ai-session-drop-end');
+                if (de) de.style.display = 'none';
+              } catch (e0) {}
+              setTimeout(() => { try { __gmAiDragging = false; } catch (e0) {} }, 30);
+            } catch (e2) {}
+          });
+          el.addEventListener('dragover', (e) => {
+            try {
+              if (!__gmAiReorderState || !__gmAiReorderState.dragging) return;
+              const overId = String(el.getAttribute('data-sid') || '');
+              if (!overId) return;
+              if (overId === String(__gmAiReorderState.sid || '')) return;
+              try { e.preventDefault(); } catch (e0) {}
+              try { e.dataTransfer.dropEffect = 'move'; } catch (e1) {}
+              __gmAiReorderState.over = overId;
+              try {
+                scrollEl.querySelectorAll('.ai-session-chip.drag-over').forEach(x => x.classList.remove('drag-over'));
+                el.classList.add('drag-over');
+              } catch (e1) {}
+            } catch (e2) {}
+          });
+          el.addEventListener('drop', (e) => {
+            try {
+              if (scrollEl && scrollEl.__gmAiContainerDrop) return;
+              if (!__gmAiReorderState || !__gmAiReorderState.dragging) return;
+              try { e.preventDefault(); } catch (e0) {}
+              const dragId = String(__gmAiReorderState.sid || '');
+              const overId = String(el.getAttribute('data-sid') || '');
+              if (!dragId || !overId || dragId === overId) return;
+              __gmAiReorderState.over = overId;
+              __gmAiSuppressChipClickUntil = Date.now() + 1200;
+
+              const sessions0 = Array.isArray(__gmAiSessions) ? __gmAiSessions.slice() : [];
+              const from = sessions0.findIndex(x => String(x && x.id || '') === dragId);
+              const to = sessions0.findIndex(x => String(x && x.id || '') === overId);
+              if (from < 0 || to < 0) return;
+
+              const moved = sessions0.splice(from, 1)[0];
+              let insertAt = to;
+              try {
+                const r = el.getBoundingClientRect();
+                const mid = (r.left + r.right) / 2;
+                const after = (typeof e.clientX === 'number') ? (e.clientX > mid) : false;
+                insertAt = to + (after ? 1 : 0);
+              } catch (e2b) {}
+              if (from < insertAt) insertAt = Math.max(0, insertAt - 1);
+              if (insertAt > sessions0.length) insertAt = sessions0.length;
+              sessions0.splice(insertAt, 0, moved);
+              __gmAiSessions = sessions0;
+              __gmAiRenderHistoryChips();
+              __gmAiReorderFinish();
+            } catch (e2) {}
+          });
+        }
+      } catch (e) {}
+      __gmAiScrollActiveSessionIntoView();
+    } catch (e) {}
+  }
+
+  let __gmAiReorderState = null;
+  let __gmAiSuppressChipClickUntil = 0;
+  let __gmAiDragging = false;
+
+  function __gmAiReorderCleanupVisual() {
+    try {
+      const scrollEl = document.getElementById('aiSessionsScroll');
+      if (!scrollEl) return;
+      scrollEl.querySelectorAll('.ai-session-chip.dragging').forEach(x => x.classList.remove('dragging'));
+      scrollEl.querySelectorAll('.ai-session-chip.drag-over').forEach(x => x.classList.remove('drag-over'));
+      try { const de = scrollEl.querySelector('.ai-session-drop-end'); if (de) de.classList.remove('drag-over'); } catch (e2) {}
+    } catch (e) {}
+  }
+
+  function __gmAiFindSessionChipEl(scrollEl, sid) {
+    try {
+      if (!scrollEl || !sid) return null;
+      const chips = scrollEl.querySelectorAll('.ai-session-chip');
+      for (let i = 0; i < chips.length; i++) {
+        const el = chips[i];
+        if (!el) continue;
+        if (String(el.getAttribute('data-sid') || '') === String(sid || '')) return el;
+      }
+      return null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  async function __gmAiReorderFinish() {
+    try {
+      if (!__gmAiReorderState) return;
+      const pid = String(__gmAiSelectedProfileId || __gmAiConfig.active_profile_id || '');
+      if (!pid) return;
+      const sessions = Array.isArray(__gmAiSessions) ? __gmAiSessions.slice() : [];
+      const ids = sessions.map(x => String(x && x.id || '')).filter(Boolean);
+      await POST('/api/ai_sessions', { profile_id: pid, action: 'reorder', session_ids: ids });
+    } catch (e) {}
+    finally {
+      __gmAiReorderCleanupVisual();
+      __gmAiReorderState = null;
+    }
+  }
+
+  function __gmAiScrollActiveSessionIntoView() {
+    try {
+      const scrollEl = document.getElementById('aiSessionsScroll');
+      if (!scrollEl) return;
+      const sid = String(__gmAiActiveSessionId || '');
+      if (!sid) return;
+      const chip = __gmAiFindSessionChipEl(scrollEl, sid);
+      if (!chip) return;
+      chip.scrollIntoView({ block: 'nearest', inline: 'center' });
+    } catch (e) {}
+  }
+
+  function __gmAiEnsureSessionsWheelScroll() {
+    try {
+      const el = document.getElementById('aiSessionsScroll');
+      if (!el) return;
+      if (el.__gmWheelBound) return;
+      el.__gmWheelBound = true;
+      el.addEventListener('wheel', (e) => {
+        try {
+          if (!e) return;
+          if (!el.scrollWidth || el.scrollWidth <= el.clientWidth) return;
+          const dy = Number(e.deltaY || 0);
+          const dx = Number(e.deltaX || 0);
+          const delta = Math.abs(dy) > Math.abs(dx) ? dy : dx;
+          if (!delta) return;
+          e.preventDefault();
+          el.scrollLeft += delta;
+        } catch (e2) {}
+      }, { passive: false });
+    } catch (e) {}
+  }
+
+  function __gmAiRenderProfileList() {
+    try {
+      const el = document.getElementById('aiProfileList');
+      if (!el) return;
+      const profiles = Array.isArray(__gmAiConfig.profiles) ? __gmAiConfig.profiles : [];
+      const active = String(__gmAiConfig.active_profile_id || '');
+      const editing = String(__gmAiEditingProfileId || '');
+      el.innerHTML = profiles.map(p => {
+        const id = String(p.id || '');
+        const nm = __gmAiPrettyModelName(String(p.model || '')) || '未命名';
+        const cls = 'ai-li' + (id === active ? ' active' : '') + (id === editing ? ' editing' : '');
+        const tag = (id === active) ? '<div class="tag">当前</div>' : '';
+        return `<div class="${cls}" onclick="editAiProfile('${esc(id)}')"><div class="t">${esc(nm)}</div>${tag}</div>`;
+      }).join('');
+    } catch (e) {}
+  }
+
+  function __gmAiFillEditor(p) {
+    try {
+      const base = document.getElementById('aiProfBaseUrl');
+      const key = document.getElementById('aiApiKey');
+      const model = document.getElementById('aiModel');
+      const del = document.getElementById('aiDeleteProfileBtn');
+      if (base) base.value = String((p && p.base_url) || '');
+      if (key) key.value = String((p && p.api_key) || '');
+      if (model) model.value = String((p && p.model) || '');
+      if (del) del.style.display = (__gmAiEditingProfileId ? 'inline-flex' : 'none');
+    } catch (e) {}
+  }
+
+  function showAiChatPanel() {
+    try {
+      __gmAiCleanupTempProfiles();
+      __gmAiPanel = 'chat';
+      const c = document.getElementById('aiChatView');
+      const p = document.getElementById('aiConfigView');
+      if (c) c.style.display = 'flex';
+      if (p) p.style.display = 'none';
+      const btn = document.getElementById('aiPlusBtn');
+      if (btn) btn.textContent = '+';
+      __gmAiEnsureSessionsWheelScroll();
+      __gmAiBindMentionInput();
+      __gmAiRenderProfileModelName();
+      __gmAiRenderHistoryChips();
+      __gmAiRenderChat();
+    } catch (e) {}
+  }
+
+  function showAiConfigPanel() {
+    try {
+      __gmAiPanel = 'config';
+      const c = document.getElementById('aiChatView');
+      const p = document.getElementById('aiConfigView');
+      if (c) c.style.display = 'none';
+      if (p) p.style.display = 'flex';
+      const btn = document.getElementById('aiPlusBtn');
+      if (btn) btn.textContent = '×';
+      __gmAiRenderProfileList();
+      if (!__gmAiEditingProfileId) {
+        const profiles = Array.isArray(__gmAiConfig.profiles) ? __gmAiConfig.profiles : [];
+        if (profiles.length) {
+          __gmAiEditingProfileId = String(profiles[0].id || '');
+          __gmAiFillEditor(profiles[0]);
+        } else {
+          __gmAiFillEditor(null);
+        }
+      }
+    } catch (e) {}
+  }
+
+  function toggleAiPanel() {
+    if (__gmAiPanel === 'config') showAiChatPanel();
+    else showAiConfigPanel();
+  }
+
+  function newAiSession() {
+    createAiSession();
+  }
+
+  function aiChatInputKeydown(e) {
+    try {
+      if (!e) return;
+      if (__gmAiMentionActive) {
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          __gmAiMentionIndex = Math.min((__gmAiMentionItems || []).length - 1, (__gmAiMentionIndex || 0) + 1);
+          __gmAiRenderMentionMenu();
+          return;
+        }
+        if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          __gmAiMentionIndex = Math.max(0, (__gmAiMentionIndex || 0) - 1);
+          __gmAiRenderMentionMenu();
+          return;
+        }
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          aiPickMention(__gmAiMentionIndex || 0);
+          return;
+        }
+        if (e.key === 'Tab') {
+          e.preventDefault();
+          aiPickMention(__gmAiMentionIndex || 0);
+          return;
+        }
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          __gmAiCloseMentionMenu();
+          return;
+        }
+      }
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendAiChat();
+      }
+    } catch (e2) {}
+  }
+
+  async function sendAiChat() {
+    const ta = document.getElementById('aiChatInput');
+    const text = ta ? String(ta.value || '').trim() : '';
+    if (!text) return;
+    const pid = String(__gmAiSelectedProfileId || __gmAiConfig.active_profile_id || '');
+    if (!pid) {
+      toast('请先选择/配置一个 Profile（Base URL / API Key / Model）后再对话', 'err');
+      try { showAiConfigPanel(); } catch (e) {}
+      return;
+    }
+    if (ta) ta.value = '';
+
+    __gmAiChatMessages.push({ role: 'user', content: text });
+    __gmAiChatMessages.push({ role: 'assistant', content: '', pending: true });
+    __gmAiRenderChat();
+
+    try { await __gmAiSaveHistoryNow(); } catch (e0) {}
+
+    __gmAiLastUndoGroupId = 'ai-' + __gmGenReqId();
+    try { await __gmAiRefreshSendCounter(); } catch (eC0) {}
+
+    try {
+      const sys = await __gmBuildAiSystemContext(text);
+      const msgs = __gmAiBuildMessagesForApi(sys);
+      const res = await POST('/api/ai_chat', { messages: msgs, profile_id: pid });
+      if (res && res.ok) {
+        let content = __gmAiSanitizeAssistantContent(String(res.content || ''));
+        try {
+          const h = await __gmAiTryHandleAgentToolCall(content);
+          if (h && h.handled && typeof h.content === 'string') content = h.content;
+        } catch (e00) {}
+        try { content = __gmAiSanitizeAssistantContent(String(content || '')); } catch (e01) {}
+        try {
+          const last = __gmAiChatMessages[__gmAiChatMessages.length - 1];
+          if (last && String(last.role || '') === 'assistant' && last.pending) {
+            __gmAiChatMessages.pop();
+          }
+        } catch (e0) {}
+        __gmAiChatMessages.push({ role: 'assistant', content });
+        __gmAiRenderChat();
+        try { await __gmAiRefreshSendCounter(); } catch (eC1) {}
+        try {
+          const h = await POST('/api/ai_chat_history', { profile_id: pid, session_id: __gmAiActiveSessionId, messages: __gmAiChatMessages });
+          if (h && h.ok) {
+            if (Array.isArray(h.sessions)) __gmAiSessions = h.sessions;
+            if (h.active_session_id) __gmAiActiveSessionId = String(h.active_session_id || '');
+            __gmAiRenderHistoryChips();
+          } else {
+            toast('保存会话失败：' + String((h && (h.msg || h.error)) || '保存失败'), 'err');
+          }
+        } catch (e2) {
+          toast('保存会话失败', 'err');
+        }
+        return;
+      }
+      const msg = (res && (res.msg || res.error)) ? String(res.msg || res.error) : '对话失败';
+      try {
+        const last = __gmAiChatMessages[__gmAiChatMessages.length - 1];
+        if (last && String(last.role || '') === 'assistant' && last.pending) {
+          __gmAiChatMessages.pop();
+          __gmAiRenderChat();
+        }
+      } catch (e0) {}
+      __gmToastApiError('对话失败', res, msg);
+    } catch (e) {
+      try {
+        const last = __gmAiChatMessages[__gmAiChatMessages.length - 1];
+        if (last && String(last.role || '') === 'assistant' && last.pending) {
+          __gmAiChatMessages.pop();
+          __gmAiRenderChat();
+        }
+      } catch (e0) {}
+      toast('对话失败', 'err');
+    }
+  }
+
+  function __gmAiSetMeta(text) {
+    try {
+      const el = document.getElementById('aiConfigMeta');
+      if (el) el.textContent = String(text || '');
+    } catch (e) {}
+  }
+
+  async function loadAiConfig() {
+    try {
+      const res = await GET('/api/ai_config');
+      const cfg = res && res.config ? res.config : null;
+      if (!cfg) {
+        __gmToastApiError('加载失败', res, (res && res.error) || '加载失败');
+        return;
+      }
+      __gmAiConfig = cfg;
+      if (!__gmAiConfig || typeof __gmAiConfig !== 'object') __gmAiConfig = { active_profile_id: '', profiles: [] };
+      if (!Array.isArray(__gmAiConfig.profiles)) __gmAiConfig.profiles = [];
+      // Normalize active_profile_id to a valid profile id.
+      let pid = String(__gmAiConfig.active_profile_id || '');
+      if (!pid) {
+        const first = (__gmAiConfig.profiles || [])[0];
+        if (first && first.id) {
+          pid = String(first.id || '');
+          __gmAiConfig.active_profile_id = pid;
+        }
+      }
+      __gmAiSelectedProfileId = pid;
+
+      try { await loadAiChatHistory(__gmAiSelectedProfileId); } catch (e0) {}
+
+      __gmAiRenderProfileList();
+
+      const prof = (__gmAiConfig.profiles || []).find(p => p && String(p.id || '') === String(__gmAiSelectedProfileId || '')) || (__gmAiConfig.profiles || [])[0] || null;
+      __gmAiEditingProfileId = prof ? String(prof.id || '') : '';
+      __gmAiFillEditor(prof);
+
+      __gmAiRenderProfileModelName();
+      __gmAiRenderHistoryChips();
+
+      __gmAiSetMeta('已加载本地配置');
+      toast('✓ AI 配置已加载', 'ok');
+    } catch (e) {
+      toast('加载失败', 'err');
+    }
+  }
+
+  async function saveAiProfiles() {
+    try {
+      __gmAiSyncEditingProfileFromEditor();
+      const pid = String(__gmAiEditingProfileId || '');
+      if (pid) {
+        const idx = (__gmAiConfig.profiles || []).findIndex(p => p && String(p.id || '') === pid);
+        if (idx >= 0) {
+          const p = __gmAiConfig.profiles[idx];
+          if (!__gmAiValidateProfile(p)) return;
+        }
+      }
+
+      const res = await POST('/api/ai_config', { config: __gmAiConfig });
+      if (res && res.ok) {
+        __gmAiSetMeta('已保存到本地配置文件');
+        toast('✓ AI 配置已保存', 'ok');
+        await loadAiConfig();
+        return;
+      }
+      __gmToastApiError('保存失败', res, (res && (res.msg || res.error)) || '保存失败');
+    } catch (e) {
+      toast('保存失败', 'err');
+    }
+  }
+
+  function onAiProfileChanged(v) {
+    __gmAiSelectedProfileId = String(v || '');
+    __gmAiRenderProfileModelName();
+    try { loadAiChatHistory(__gmAiSelectedProfileId).then(()=>__gmAiRefreshSendCounter()).catch(()=>{}); } catch (e) {}
+  }
+
+  function onAiHistoryChipClick(sessionId) {
+    try {
+      if (__gmAiDragging) return;
+      if (__gmAiSuppressChipClickUntil && Date.now() < __gmAiSuppressChipClickUntil) return;
+    } catch (e0) {}
+    const pid = String(__gmAiSelectedProfileId || __gmAiConfig.active_profile_id || '');
+    const sid = String(sessionId || '');
+    if (!pid || !sid) return;
+    showAiChatPanel();
+    __gmAiActiveSessionId = sid;
+    __gmAiRenderHistoryChips();
+    POST('/api/ai_sessions', { profile_id: pid, action: 'set_active', session_id: sid }).catch(()=>{});
+    loadAiChatHistory(pid, sid).then(()=>__gmAiRefreshSendCounter()).catch(()=>{});
+  }
+
+  function __gmAiCleanupTempProfiles() {
+    try {
+      const ids = __gmAiTempProfileIds;
+      if (!ids || !ids.size) return;
+      const profiles = Array.isArray(__gmAiConfig.profiles) ? __gmAiConfig.profiles : [];
+      const keep = [];
+      profiles.forEach(p => {
+        const id = String(p && p.id || '');
+        if (!id) return;
+        const isTemp = ids.has(id);
+        const empty = !(String(p.base_url || '').trim() || String(p.api_key || '').trim() || String(p.model || '').trim());
+        if (isTemp && empty) {
+          ids.delete(id);
+          return;
+        }
+        keep.push(p);
+      });
+      __gmAiConfig.profiles = keep;
+      if (__gmAiEditingProfileId && ids.has(String(__gmAiEditingProfileId || ''))) {
+        __gmAiEditingProfileId = keep[0] ? String(keep[0].id || '') : '';
+      }
+      if (__gmAiConfig.active_profile_id && !keep.find(p => String(p && p.id || '') === String(__gmAiConfig.active_profile_id || ''))) {
+        __gmAiConfig.active_profile_id = keep[0] ? String(keep[0].id || '') : '';
+      }
+      __gmAiSelectedProfileId = String(__gmAiConfig.active_profile_id || __gmAiSelectedProfileId || '');
+      __gmAiRenderProfileList();
+      __gmAiRenderProfileModelName();
+    } catch (e) {}
+  }
+
+  function onAiHistoryChipDelete(ev, sessionId) {
+    try { if (ev) ev.stopPropagation(); } catch (e) {}
+    const pid = String(__gmAiSelectedProfileId || __gmAiConfig.active_profile_id || '');
+    const sid = String(sessionId || '');
+    if (!pid || !sid) return;
+    POST('/api/ai_sessions', { profile_id: pid, action: 'delete', session_id: sid }).then(res => {
+      if (res && res.ok) {
+        __gmAiSessions = Array.isArray(res.sessions) ? res.sessions : [];
+        __gmAiActiveSessionId = String(res.active_session_id || '');
+        __gmAiRenderHistoryChips();
+        loadAiChatHistory(pid, __gmAiActiveSessionId).catch(()=>{});
+      }
+    }).catch(()=>{});
+  }
+
+  async function createAiSession() {
+    const pid = String(__gmAiSelectedProfileId || __gmAiConfig.active_profile_id || '');
+    if (!pid) return;
+    const res = await POST('/api/ai_sessions', { profile_id: pid, action: 'create' });
+    if (res && res.ok) {
+      __gmAiSessions = Array.isArray(res.sessions) ? res.sessions : [];
+      __gmAiActiveSessionId = String(res.active_session_id || res.session_id || '');
+      __gmAiRenderHistoryChips();
+      await loadAiChatHistory(pid, __gmAiActiveSessionId);
+      toast('✓ 已新建会话', 'ok');
+      return;
+    }
+    __gmToastApiError('新建会话失败', res, (res && (res.msg || res.error)) || '新建会话失败');
+  }
+
+  async function loadAiChatHistory(profileId, sessionId) {
+    const pid = String(profileId || '');
+    const sid = String(sessionId || '');
+    if (!pid) {
+      __gmAiChatMessages = [];
+      __gmAiRenderChat();
+      try { await __gmAiRefreshSendCounter(); } catch (eC0) {}
+      return;
+    }
+    const url = '/api/ai_chat_history?profile_id=' + encodeURIComponent(pid) + (sid ? ('&session_id=' + encodeURIComponent(sid)) : '');
+    const res = await GET(url);
+    if (res && res.ok) {
+      if (Array.isArray(res.sessions)) __gmAiSessions = res.sessions;
+      if (res.active_session_id) __gmAiActiveSessionId = String(res.active_session_id || '');
+      __gmAiRenderHistoryChips();
+      if (Array.isArray(res.messages)) {
+        __gmAiChatMessages = res.messages;
+        __gmAiRenderChat();
+      }
+    }
+    try { await __gmAiRefreshSendCounter(); } catch (eC1) {}
+  }
+
+  async function __gmBuildAiSystemContext(userText) {
+    try {
+      let path = '';
+      try {
+        if (window.__plainEditorFilename) path = String(window.__plainEditorFilename || '');
+        else if (curFile !== null && files && files[curFile] && files[curFile].path) path = String(files[curFile].path);
+      } catch (e2) {}
+
+      let content = '';
+      try {
+        const ta = document.getElementById('plainEditorTextarea');
+        if (ta && ta.value) content = String(ta.value || '');
+      } catch (e2) {}
+
+      if (!content && path) {
+        try {
+          const res = await GET('/api/file_content?path=' + encodeURIComponent(path));
+          if (res && res.ok && typeof res.content === 'string') content = res.content;
+        } catch (e3) {}
+      }
+
+      const snippet = (content || '').slice(0, 8000);
+      let ws = '';
+      try {
+        const r = await GET('/api/workspace_context');
+        if (r && r.ok && typeof r.context === 'string') ws = String(r.context || '');
+      } catch (e4) {}
+
+      // @file references
+      let refsBlock = '';
+      try {
+        const t = String(userText || '');
+        const m = t.match(/@[^\s]+/g) || [];
+        const toks = Array.from(new Set(m.map(x => String(x || '').trim().slice(1)).filter(Boolean))).slice(0, 5);
+        if (toks.length) {
+          const blocks = [];
+          for (const tok of toks) {
+            const res = await GET('/api/find_files?name=' + encodeURIComponent(tok));
+            const list = (res && res.ok && Array.isArray(res.files)) ? res.files : [];
+            if (!list.length) {
+              blocks.push(`@${tok}: (未找到)`);
+              continue;
+            }
+            let pick = String(list[0] || '');
+            const tokLower = tok.toLowerCase();
+            for (const rel of list) {
+              const bn = String(rel || '').split('/').pop() || '';
+              if (bn.toLowerCase() === tokLower) { pick = String(rel || ''); break; }
+            }
+            let c = '';
+            try {
+              const r2 = await GET('/api/file_content?path=' + encodeURIComponent(pick));
+              if (r2 && r2.ok && typeof r2.content === 'string') c = String(r2.content || '');
+            } catch (e5) {}
+            c = (c || '').slice(0, 6000);
+            if (!c) {
+              blocks.push(`@${tok}: ${pick} (无法读取内容)`);
+            } else {
+              blocks.push(`@${tok}: ${pick}\n\n${c}`);
+            }
+          }
+          refsBlock = blocks.join('\n\n---\n\n');
+        }
+      } catch (e4b) {}
+
+      const capability = `重要：你可以阅读本工具通过上下文提供的工作区信息和“引用文件内容/当前编辑内容”。你可以通过输出 JSON 指令调用工具（一次回复最多 3 条；每条 JSON 独占一段；JSON 放在末尾）。仅当确实需要执行操作时才输出 JSON；普通对话请只回复文本。不要输出聊天模板 token。
+
+多媒体展示能力（必须遵守）：
+- 本系统的聊天框支持 Markdown 图片语法 \`![](...)\`，会直接渲染为图片（用户可点击预览、下载、打开）。
+- 重要：前端不会基于纯文本中的文件名/路径自动插入图片或音视频；是否展示媒体必须由你（AI）在回复中显式输出 Markdown 来控制。
+- 工作区内的图片/音视频文件可以通过 GET \`/api/raw_file?path=相对路径\` 访问。
+- 当用户要求“查看/打开/展示”某个工作区图片或音视频时，你应该主动输出 Markdown 来展示：
+  - 图片：\`![](/api/raw_file?path=123.png)\`
+  - 音频：\`[播放音频](/api/raw_file?path=xxx.mp3)\`（用户点击链接打开）
+  - 视频：\`[播放视频](/api/raw_file?path=xxx.mp4)\`（用户点击链接打开）
+- 重要：不要说“无法渲染/显示图片”。如果文件存在但你不确定相对路径，先用目录树/搜索工具确认后再输出上述 Markdown。
+
+工作流（必须遵守）：
+- Plan：先用 2-5 步列出计划（若无需操作，则直接回答并结束）
+- Act：仅在需要时输出工具 JSON，并解释为什么需要
+- Verify：若改动了后端/Python，优先追加 verify_python
+- Report：汇总改动点、验证结果、下一步建议（不要重复触发已完成的写操作）`;
+
+      const capability2 = `执行能力（常用）：\n1) 搜索代码：{"type":"search_code","query":"关键字/正则","case_sensitive":false,"max_results":50}\n2) 读取文件片段：{"type":"read_file_range","path":"server.py","start":1,"end":120}\n3) 查看目录树：{"type":"list_dir_tree","path":"","depth":3,"max_entries":500}\n4) 修改后验证(Python)：{"type":"verify_python","paths":["server.py"],"timeout":60,"cwd":""}\n5) 执行命令：{"type":"run_cmd","cmd":"python -m py_compile server.py","timeout":60,"cwd":""}`;
+
+      const capability3 = `系统接口索引（摘要）：
+
+[Repo/Workspace]
+- POST /api/open_repo {path}
+- GET  /api/status
+- GET  /api/workspace_context
+
+[Raw File]
+- GET  /api/raw_file?path=相对路径 (二进制/媒体文件，支持 Range)
+
+[Files/Diff]
+- GET  /api/files
+- GET  /api/diff?path&status&ctx
+- GET  /api/file_content?path
+- POST /api/file_content {path}
+- POST /api/file_content_head {path}
+
+[Write Ops (支持 X-Undo-Group + X-Idempotency-Key)]
+- POST /api/save_file {path,content}
+- POST /api/delete_file {path}
+- POST /api/rename_file {old_path,new_path}
+- POST /api/revert_file {path,status}
+
+[Git]
+- POST /api/stage_file {path}
+- POST /api/commit {message,files?}
+- POST /api/pull
+- POST /api/push
+
+[Undo]
+- POST /api/undo
+- GET  /api/undo_stats
+
+[IDE Assistant]
+- GET  /api/search_code?query&case_sensitive&max_results
+- GET  /api/read_file_range?path&start&end
+- GET  /api/list_dir_tree?path&depth&max_entries
+
+[Cmd]
+- POST /api/run_cmd {cmd,timeout,cwd?}`;
+
+      let execSummaryBlock = '';
+      try {
+        if (__gmAiRecentExecSummaries && __gmAiRecentExecSummaries.length) {
+          const lines = __gmAiRecentExecSummaries.slice(0, 6).map(x => `- ${String(x || '')}`);
+          execSummaryBlock = `\n\n最近已执行的操作（已完成，勿重复触发写入）：\n${lines.join('\n')}`;
+        }
+      } catch (eS) {}
+
+      if (!path && !snippet) {
+        if (ws || refsBlock) {
+          return `你是 Hivo，一名内置在 Git 管理工具里的 AI 助手（用户称呼你为 Hivo）。\n\n工作区上下文：\n${ws}`
+            + (refsBlock ? (`\n\n引用文件内容：\n\n${refsBlock}`) : '')
+            + `\n\n${capability}\n\n${capability2}\n\n${capability3}`
+            + execSummaryBlock;
+        }
+        return '';
+      }
+
+      if (!snippet) {
+        return `当前文件：${path}\n\n工作区上下文：\n${ws}`
+          + (refsBlock ? (`\n\n引用文件内容：\n\n${refsBlock}`) : '')
+          + `\n\n${capability}\n\n${capability2}\n\n${capability3}`
+          + execSummaryBlock;
+      }
+
+      return `你是 Hivo，一名内置在 Git 管理工具里的 AI 助手（用户称呼你为 Hivo）。\n\n工作区上下文：\n${ws}`
+        + (refsBlock ? (`\n\n引用文件内容：\n\n${refsBlock}`) : '')
+        + `\n\n${capability}\n\n${capability2}\n\n${capability3}`
+        + execSummaryBlock
+        + `\n\n当前文件：${path || '(未知)'}\n\n当前编辑内容（截断）：\n\n${snippet}`;
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function aiAddContext() {
+    try {
+      const ta = document.getElementById('aiChatInput');
+      if (!ta) return;
+      ta.focus();
+      const v = String(ta.value || '');
+      const next = v && !/\s$/.test(v) ? (v + ' @') : (v + '@');
+      ta.value = next;
+      try { ta.setSelectionRange(ta.value.length, ta.value.length); } catch (e2) {}
+      __gmAiUpdateMentionMenu();
+    } catch (e) {}
+  }
+
+  function __gmAiBindMentionInput() {
+    try {
+      const ta = document.getElementById('aiChatInput');
+      if (!ta) return;
+      if (ta.__gmMentionBound) return;
+      ta.__gmMentionBound = true;
+      ta.addEventListener('input', () => {
+        __gmAiUpdateMentionMenu();
+      });
+      ta.addEventListener('click', () => {
+        __gmAiUpdateMentionMenu();
+      });
+      ta.addEventListener('scroll', () => {
+        __gmAiUpdateMentionMenu();
+      });
+    } catch (e) {}
+  }
+
+  function editAiProfile(id) {
+    __gmAiEditingProfileId = String(id || '');
+    const prof = (__gmAiConfig.profiles || []).find(p => p && String(p.id || '') === __gmAiEditingProfileId) || null;
+    __gmAiFillEditor(prof);
+    __gmAiRenderProfileList();
+  }
+
+  function addAiProfile() {
+    try {
+      const id = (Date.now().toString(16) + Math.random().toString(16).slice(2));
+      const p = { id, name: '', base_url: '', api_key: '', model: '' };
+      if (!Array.isArray(__gmAiConfig.profiles)) __gmAiConfig.profiles = [];
+      __gmAiConfig.profiles.unshift(p);
+      if (!__gmAiConfig.active_profile_id) __gmAiConfig.active_profile_id = id;
+      __gmAiEditingProfileId = id;
+      try { __gmAiTempProfileIds.add(id); } catch (e2) {}
+      __gmAiFillEditor(p);
+      __gmAiRenderProfileList();
+      __gmAiRenderProfileModelName();
+      __gmAiRenderHistoryChips();
+    } catch (e) {}
+  }
+
+  function addAiProfileAndOpen() {
+    addAiProfile();
+    showAiConfigPanel();
+  }
+
+  function deleteAiProfile() {
+    const pid = String(__gmAiEditingProfileId || '');
+    if (!pid) return;
+    showConfirm({
+      title: '确认删除',
+      message: '确认删除该 Profile？',
+      okText: '删除',
+      danger: true,
+    }).then(async (ok) => {
+      if (!ok) return;
+      __gmAiConfig.profiles = (__gmAiConfig.profiles || []).filter(p => String(p && p.id || '') !== pid);
+      if (__gmAiConfig.active_profile_id === pid) {
+        __gmAiConfig.active_profile_id = (__gmAiConfig.profiles[0] && __gmAiConfig.profiles[0].id) ? String(__gmAiConfig.profiles[0].id) : '';
+      }
+      if (!__gmAiConfig.active_profile_id && (__gmAiConfig.profiles || []).length) {
+        __gmAiConfig.active_profile_id = String(__gmAiConfig.profiles[0].id || '');
+      }
+      __gmAiSelectedProfileId = String(__gmAiConfig.active_profile_id || '');
+      __gmAiEditingProfileId = (__gmAiConfig.profiles[0] && __gmAiConfig.profiles[0].id) ? String(__gmAiConfig.profiles[0].id) : '';
+
+      try {
+        const res = await POST('/api/ai_config', { config: __gmAiConfig });
+        if (!(res && res.ok)) {
+          __gmToastApiError('删除失败', res, (res && (res.msg || res.error)) || '删除失败');
+          return;
+        }
+      } catch (e2) {
+        toast('删除失败', 'err');
+        return;
+      }
+
+      try { await loadAiConfig(); } catch (e3) {}
+
+      if (__gmAiEditingProfileId) {
+        const prof = (__gmAiConfig.profiles || []).find(p => p && String(p.id || '') === __gmAiEditingProfileId) || null;
+        __gmAiFillEditor(prof);
+      } else {
+        __gmAiFillEditor(null);
+      }
+      __gmAiRenderProfileList();
+      __gmAiRenderProfileModelName();
+      try { loadAiChatHistory(String(__gmAiSelectedProfileId || __gmAiConfig.active_profile_id || '')); } catch (e4) {}
+      toast('✓ 已删除 Profile', 'ok');
+    });
+  }
+
+  async function setAiProfileActive() {
+    const pid = String(__gmAiEditingProfileId || '');
+    if (!pid) return;
+    __gmAiSyncEditingProfileFromEditor();
+
+    try {
+      const p = (__gmAiConfig.profiles || []).find(x => x && String(x.id || '') === pid) || null;
+      if (!__gmAiValidateProfile(p)) return;
+    } catch (e0) { return; }
+
+    __gmAiConfig.active_profile_id = pid;
+    __gmAiSelectedProfileId = pid;
+    __gmAiRenderProfileList();
+    __gmAiRenderProfileModelName();
+    try {
+      const res = await POST('/api/ai_config', { config: __gmAiConfig });
+      if (res && res.ok) {
+        __gmAiSetMeta('已保存到本地配置文件');
+      }
+    } catch (e) {}
+    try { await loadAiConfig(); } catch (e2) {}
+    __gmAiSelectedProfileId = pid;
+    __gmAiEditingProfileId = pid;
+    __gmAiConfig.active_profile_id = pid;
+    __gmAiRenderProfileList();
+    __gmAiRenderProfileModelName();
+    try { loadAiChatHistory(pid); } catch (e) {}
+    toast('✓ 已设为当前 Profile', 'ok');
+  }
+
   // ---- File list context menu ----------------------------------------------
   let __gmFileCtxMenuEl = null;
   let __gmFileCtxState = null;
@@ -8287,7 +11414,7 @@
     const sep = p.includes('?') ? '&' : '?';
     return api(p + sep + '_ts=' + Date.now());
   };
-  const POST = (p,b)=> api(p, {method:'POST', body: JSON.stringify(b)});
+  const POST = (p,b,opts={})=> api(p, Object.assign({method:'POST', body: JSON.stringify(b)}, (opts || {})));
 
   // ── Open Repo ─────────────────────────────────────────────────────────────────
   async function openRepo() {
@@ -14284,6 +17411,15 @@
         document.getElementById('tabLog').classList.add('show');
     } else {
       document.getElementById(`tab${name.charAt(0).toUpperCase()+name.slice(1)}`).classList.add('show');
+      if (name === 'ai') {
+        try {
+          if (!__gmAiConfigLoadedOnce) {
+            __gmAiConfigLoadedOnce = true;
+            loadAiConfig();
+          }
+          showAiChatPanel();
+        } catch (e) {}
+      }
     }
   }
 
@@ -14803,6 +17939,265 @@
   document.querySelectorAll('.overlay').forEach(o =>
           o.addEventListener('click', e => { if (e.target===o) o.classList.remove('show'); }));
 
+  function __gmAiOpenMediaPreview(src) {
+    try {
+      const modal = document.getElementById('aiMediaPreviewModal');
+      const img = document.getElementById('aiMediaPreviewImg');
+      if (!modal || !img) return;
+      const safeSrc = String(src || '');
+      window.__gmAiMediaPreviewList = Array.isArray(window.__gmAiMediaPreviewList) ? window.__gmAiMediaPreviewList : [];
+      if (!window.__gmAiMediaPreviewList.length) window.__gmAiMediaPreviewList = [safeSrc];
+      let idx = window.__gmAiMediaPreviewList.indexOf(safeSrc);
+      if (idx < 0) {
+        window.__gmAiMediaPreviewList.push(safeSrc);
+        idx = window.__gmAiMediaPreviewList.length - 1;
+      }
+      window.__gmAiMediaPreviewIdx = idx;
+      img.src = safeSrc;
+      modal.classList.add('show');
+      window.__gmAiMediaPreviewOpen = true;
+      try { __gmAiSyncMediaPreviewUi(); } catch (e2) {}
+    } catch (e) {}
+  }
+
+  function __gmAiCloseMediaPreview() {
+    try {
+      const modal = document.getElementById('aiMediaPreviewModal');
+      const img = document.getElementById('aiMediaPreviewImg');
+      if (modal) modal.classList.remove('show');
+      if (img) img.src = '';
+      window.__gmAiMediaPreviewOpen = false;
+      window.__gmAiMediaPreviewList = [];
+      window.__gmAiMediaPreviewIdx = 0;
+    } catch (e) {}
+  }
+
+  function __gmAiSyncMediaPreviewUi() {
+    try {
+      const list = Array.isArray(window.__gmAiMediaPreviewList) ? window.__gmAiMediaPreviewList : [];
+      const idx = Math.max(0, Math.min(Number(window.__gmAiMediaPreviewIdx) || 0, Math.max(0, list.length - 1)));
+      window.__gmAiMediaPreviewIdx = idx;
+      const counter = document.getElementById('aiMediaPreviewCounter');
+      if (counter) counter.textContent = (list.length ? `${idx + 1}/${list.length}` : '1/1');
+      const prev = document.getElementById('aiMediaPreviewPrev');
+      const next = document.getElementById('aiMediaPreviewNext');
+      if (prev) prev.style.visibility = (list.length > 1 ? 'visible' : 'hidden');
+      if (next) next.style.visibility = (list.length > 1 ? 'visible' : 'hidden');
+    } catch (e) {}
+  }
+
+  function __gmAiMediaPreviewGoto(delta) {
+    try {
+      const img = document.getElementById('aiMediaPreviewImg');
+      if (!img) return;
+      const list = Array.isArray(window.__gmAiMediaPreviewList) ? window.__gmAiMediaPreviewList : [];
+      if (!list.length) return;
+      const n = list.length;
+      let idx = Number(window.__gmAiMediaPreviewIdx) || 0;
+      idx = (idx + delta) % n;
+      if (idx < 0) idx += n;
+      window.__gmAiMediaPreviewIdx = idx;
+      img.src = String(list[idx] || '');
+      __gmAiSyncMediaPreviewUi();
+    } catch (e) {}
+  }
+
+  function __gmAiMediaPreviewCurrentSrc() {
+    try {
+      const list = Array.isArray(window.__gmAiMediaPreviewList) ? window.__gmAiMediaPreviewList : [];
+      const idx = Number(window.__gmAiMediaPreviewIdx) || 0;
+      return String(list[idx] || '');
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function __gmAiMediaPreviewRefreshLayout() {
+    try {
+      const modal = document.getElementById('aiMediaPreviewModal');
+      if (!modal) return;
+      const frame = modal.querySelector('.ai-media-frame');
+      if (!frame) return;
+      const img = document.getElementById('aiMediaPreviewImg');
+      if (!img) return;
+      const tools = frame.querySelector('.ai-media-tools');
+      const prev = document.getElementById('aiMediaPreviewPrev');
+      const next = document.getElementById('aiMediaPreviewNext');
+      if (!tools || !prev || !next) return;
+
+      const iw = img.clientWidth || 0;
+      const ih = img.clientHeight || 0;
+      const it = img.offsetTop || 0;
+      const il = img.offsetLeft || 0;
+      if (iw <= 0 || ih <= 0) return;
+
+      const pad = 10;
+      const navSize = 52;
+      const navLeft = Math.max(pad, il + pad);
+      const navRight = Math.max(pad, il + iw - navSize - pad);
+      const navTop = Math.max(pad, it + Math.floor(ih / 2) - Math.floor(navSize / 2));
+      prev.style.left = navLeft + 'px';
+      next.style.left = navRight + 'px';
+      prev.style.top = navTop + 'px';
+      next.style.top = navTop + 'px';
+      prev.style.right = 'auto';
+      next.style.right = 'auto';
+      prev.style.transform = 'none';
+      next.style.transform = 'none';
+
+      tools.style.top = Math.max(pad, it + pad) + 'px';
+      tools.style.left = (il + Math.floor(iw / 2)) + 'px';
+      tools.style.transform = 'translateX(-50%)';
+    } catch (e) {}
+  }
+
+  (function __gmBindAiMediaPreviewButtons(){
+    try {
+      const prev = document.getElementById('aiMediaPreviewPrev');
+      const next = document.getElementById('aiMediaPreviewNext');
+      const close = document.getElementById('aiMediaPreviewCloseBtn');
+      const open = document.getElementById('aiMediaPreviewOpenBtn');
+      const dl = document.getElementById('aiMediaPreviewDownloadBtn');
+      const modal = document.getElementById('aiMediaPreviewModal');
+      const frame = modal ? modal.querySelector('.ai-media-frame') : null;
+      const img = document.getElementById('aiMediaPreviewImg');
+      const tools = frame ? frame.querySelector('.ai-media-tools') : null;
+      let hideTimer = 0;
+      const show = () => {
+        try { if (!frame) return; if (hideTimer) { clearTimeout(hideTimer); hideTimer = 0; } frame.classList.add('__show-controls'); } catch (e2) {}
+      };
+      const hideLater = () => {
+        try {
+          if (!frame) return;
+          if (hideTimer) clearTimeout(hideTimer);
+          hideTimer = setTimeout(() => { try { frame.classList.remove('__show-controls'); } catch (e3) {} }, 120);
+        } catch (e2) {}
+      };
+      if (prev) prev.onclick = (e) => { try { e.preventDefault(); e.stopPropagation(); } catch (e2) {} __gmAiMediaPreviewGoto(-1); };
+      if (next) next.onclick = (e) => { try { e.preventDefault(); e.stopPropagation(); } catch (e2) {} __gmAiMediaPreviewGoto(1); };
+      if (close) close.onclick = (e) => { try { e.preventDefault(); e.stopPropagation(); } catch (e2) {} __gmAiCloseMediaPreview(); };
+      if (open) open.onclick = (e) => {
+        try { e.preventDefault(); e.stopPropagation(); } catch (e2) {}
+        const src = __gmAiMediaPreviewCurrentSrc();
+        if (!src) return;
+        try { window.open(src, '_blank', 'noopener,noreferrer'); } catch (e2) {}
+      };
+      if (dl) dl.onclick = (e) => {
+        try { e.preventDefault(); e.stopPropagation(); } catch (e2) {}
+        const src = __gmAiMediaPreviewCurrentSrc();
+        if (!src) return;
+        try {
+          const a = document.createElement('a');
+          a.href = src;
+          a.download = '';
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+        } catch (e2) {}
+      };
+
+      if (img && frame && !img.__gmAiPreviewHoverBound) {
+        img.__gmAiPreviewHoverBound = true;
+        img.addEventListener('load', () => { try { __gmAiMediaPreviewRefreshLayout(); } catch (e2) {} }, true);
+        img.addEventListener('mouseenter', show, true);
+        img.addEventListener('mouseleave', hideLater, true);
+      }
+
+      if (prev && !prev.__gmAiPreviewHoverBound) {
+        prev.__gmAiPreviewHoverBound = true;
+        prev.addEventListener('mouseenter', show, true);
+        prev.addEventListener('mouseleave', hideLater, true);
+      }
+      if (next && !next.__gmAiPreviewHoverBound) {
+        next.__gmAiPreviewHoverBound = true;
+        next.addEventListener('mouseenter', show, true);
+        next.addEventListener('mouseleave', hideLater, true);
+      }
+      if (tools && !tools.__gmAiPreviewHoverBound) {
+        tools.__gmAiPreviewHoverBound = true;
+        tools.addEventListener('mouseenter', show, true);
+        tools.addEventListener('mouseleave', hideLater, true);
+      }
+
+      if (modal && !modal.__gmAiPreviewResizeBound) {
+        modal.__gmAiPreviewResizeBound = true;
+        window.addEventListener('resize', () => { try { if (window.__gmAiMediaPreviewOpen) __gmAiMediaPreviewRefreshLayout(); } catch (e2) {} }, true);
+      }
+    } catch (e) {}
+  })();
+
+  document.addEventListener('keydown', (e) => {
+    try {
+      if (!window.__gmAiMediaPreviewOpen) return;
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        __gmAiCloseMediaPreview();
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        __gmAiMediaPreviewGoto(-1);
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        __gmAiMediaPreviewGoto(1);
+      }
+    } catch (e2) {}
+  }, true);
+
+  document.addEventListener('click', (e) => {
+    try {
+      const el = e && e.target ? e.target : null;
+      if (!el) return;
+      const tag = el.tagName ? String(el.tagName).toUpperCase() : '';
+
+      if (tag === 'IMG') {
+        const inAiMd = el.closest && el.closest('.ai-md');
+        if (inAiMd) {
+          const modal = document.getElementById('aiMediaPreviewModal');
+          if (modal && modal.contains(el)) return;
+          const src = String(el.getAttribute('src') || '');
+          if (!src) return;
+
+          try {
+            const chatRoot = document.getElementById('aiChatInner') || document.getElementById('aiChatList') || null;
+            const root = chatRoot || (el.closest && el.closest('.ai-chat')) || inAiMd;
+            const imgs = Array.from(root.querySelectorAll('.ai-md img'));
+            const uniq = [];
+            const seen = new Set();
+            for (const x of imgs) {
+              const u = String(x && x.getAttribute ? (x.getAttribute('src') || '') : '');
+              if (!u) continue;
+              if (seen.has(u)) continue;
+              seen.add(u);
+              uniq.push(u);
+            }
+            window.__gmAiMediaPreviewList = uniq;
+          } catch (e3) {
+            window.__gmAiMediaPreviewList = [src];
+          }
+
+          e.preventDefault();
+          __gmAiOpenMediaPreview(src);
+          return;
+        }
+      }
+    } catch (e2) {}
+  }, true);
+
+  document.addEventListener('dblclick', (e) => {
+    try {
+      const el = e && e.target ? e.target : null;
+      if (!el) return;
+      const tag = el.tagName ? String(el.tagName).toUpperCase() : '';
+      if (tag !== 'VIDEO') return;
+      const inAiMd = el.closest && el.closest('.ai-md');
+      if (!inAiMd) return;
+      if (typeof el.requestFullscreen === 'function') {
+        el.requestFullscreen();
+      } else if (typeof el.webkitRequestFullscreen === 'function') {
+        el.webkitRequestFullscreen();
+      }
+    } catch (e2) {}
+  }, true);
+
   function toast(msg, type='info') {
     const el = document.createElement('div');
     el.className = `toast ${type}`;
@@ -14817,6 +18212,188 @@
     return String(s||'')
             .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
             .replace(/"/g,'&quot;');
+  }
+
+  function __gmSafeUrl(url) {
+    try {
+      const u = String(url || '').trim();
+      if (!u) return '';
+      if (/^https?:\/\//i.test(u)) return u;
+      return '';
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function __gmSafeMediaUrl(url) {
+    try {
+      const u = String(url || '').trim();
+      if (!u) return '';
+      if (/^https?:\/\//i.test(u)) return u;
+      if (/^data:image\/(png|jpe?g|gif|webp|bmp|svg\+xml);base64,/i.test(u)) return u;
+      if (/^data:audio\/(mpeg|mp3|wav|ogg|aac|mp4|webm|x-wav|flac);base64,/i.test(u)) return u;
+      if (/^data:video\/(mp4|webm|ogg|quicktime);base64,/i.test(u)) return u;
+      if (u.startsWith('/api/raw_file?path=')) return u;
+      return '';
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function __gmMediaUrlFromMaybePath(input) {
+    try {
+      let s = String(input || '').trim();
+      if (!s) return '';
+      if (s.startsWith('<') && s.endsWith('>')) s = s.slice(1, -1).trim();
+      if (/^https?:\/\//i.test(s)) return s;
+      if (/^data:image\//i.test(s)) return s;
+      if (s.startsWith('/api/raw_file?path=')) return s;
+      if (s.startsWith('file://')) s = s.slice(7);
+      if (s.startsWith('@')) s = s.slice(1);
+      s = s.replace(/\\/g, '/');
+      s = s.replace(/^\.(\/|\\)/, '');
+      s = s.replace(/^\//, '');
+      if (!s) return '';
+      return '/api/raw_file?path=' + encodeURIComponent(s);
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function __gmMdInline(s) {
+    try {
+      const raw = String(s || '');
+      let out = '';
+      let i = 0;
+
+      const pushText = (x) => { out += esc(x); };
+      const emitImg = (alt, url) => {
+        const u0 = __gmMediaUrlFromMaybePath(url);
+        const safe = __gmSafeMediaUrl(u0);
+        if (!safe) { pushText(`![${alt}](${url})`); return; }
+        out += `<img src="${esc(safe)}" alt="${esc(alt)}" loading="lazy" />`;
+      };
+      const emitLink = (text, url) => {
+        const safe = __gmSafeUrl(url);
+        if (!safe) { pushText(text); return; }
+        out += `<a href="${esc(safe)}" target="_blank" rel="noreferrer">${esc(text)}</a>`;
+      };
+
+      const re = /(!\[([^\]]*)\]\(([^\)]+)\))|(\[([^\]]+)\]\(([^\)]+)\))|(`([^`]+)`)/g;
+      let m;
+      while ((m = re.exec(raw))) {
+        const pre = raw.slice(i, m.index);
+        if (pre) pushText(pre);
+
+        if (m[1]) {
+          emitImg(m[2] || '', m[3] || '');
+        } else if (m[4]) {
+          emitLink(m[5] || '', m[6] || '');
+        } else if (m[7]) {
+          out += `<code>${esc(m[8] || '')}</code>`;
+        }
+        i = m.index + m[0].length;
+      }
+      const tail = raw.slice(i);
+      if (tail) pushText(tail);
+
+      out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+      out = out.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+      return out;
+    } catch (e) {
+      return esc(s);
+    }
+  }
+
+  function aiRenderMarkdown(md) {
+    try {
+      const src = String(md || '');
+      if (!src) return '';
+
+      // Split by fenced code blocks
+      const parts = src.split(/```/);
+      let out = '';
+      for (let i = 0; i < parts.length; i++) {
+        const chunk = String(parts[i] || '');
+        if (i % 2 === 1) {
+          // code block
+          const lines = chunk.replace(/\r\n/g, '\n').split('\n');
+          if (lines.length && /^[a-z0-9_+\-#.]+$/i.test(lines[0].trim())) lines.shift();
+          const code = lines.join('\n');
+          out += `<pre><code>${esc(code)}</code></pre>`;
+          continue;
+        }
+
+        const text = chunk.replace(/\r\n/g, '\n');
+        const lines = text.split('\n');
+        let inUl = false;
+        let inOl = false;
+        for (let li = 0; li < lines.length; li++) {
+          const lineRaw = lines[li];
+          const line = String(lineRaw || '');
+          const trimmed = line.trim();
+
+          if (!trimmed) {
+            if (inUl) { out += '</ul>'; inUl = false; }
+            if (inOl) { out += '</ol>'; inOl = false; }
+            continue;
+          }
+
+          if (/^---$/.test(trimmed) || /^\*\*\*$/.test(trimmed)) {
+            if (inUl) { out += '</ul>'; inUl = false; }
+            if (inOl) { out += '</ol>'; inOl = false; }
+            out += '<hr />';
+            continue;
+          }
+
+          // headings
+          const hm = trimmed.match(/^(#{1,3})\s+(.+)$/);
+          if (hm) {
+            if (inUl) { out += '</ul>'; inUl = false; }
+            if (inOl) { out += '</ol>'; inOl = false; }
+            const lvl = hm[1].length;
+            out += `<h${lvl}>${__gmMdInline(hm[2])}</h${lvl}>`;
+            continue;
+          }
+
+          // blockquote
+          const qm = trimmed.match(/^>\s?(.+)$/);
+          if (qm) {
+            if (inUl) { out += '</ul>'; inUl = false; }
+            if (inOl) { out += '</ol>'; inOl = false; }
+            out += `<blockquote>${__gmMdInline(qm[1])}</blockquote>`;
+            continue;
+          }
+
+          // ordered list
+          const om = trimmed.match(/^\d+\.\s+(.+)$/);
+          if (om) {
+            if (inUl) { out += '</ul>'; inUl = false; }
+            if (!inOl) { out += '<ol>'; inOl = true; }
+            out += `<li>${__gmMdInline(om[1])}</li>`;
+            continue;
+          }
+
+          // unordered list
+          const um = trimmed.match(/^[-*]\s+(.+)$/);
+          if (um) {
+            if (inOl) { out += '</ol>'; inOl = false; }
+            if (!inUl) { out += '<ul>'; inUl = true; }
+            out += `<li>${__gmMdInline(um[1])}</li>`;
+            continue;
+          }
+
+          if (inUl) { out += '</ul>'; inUl = false; }
+          if (inOl) { out += '</ol>'; inOl = false; }
+          out += `<p>${__gmMdInline(trimmed)}</p>`;
+        }
+        if (inUl) out += '</ul>';
+        if (inOl) out += '</ol>';
+      }
+      return out;
+    } catch (e) {
+      return esc(md);
+    }
   }
 
   function getTotalLineCount(content, hunks) {
@@ -15531,11 +19108,33 @@
     // 更新文件信息标签，添加关闭按钮
     const totalLines = content.split('\n').length;
     const externalLabel = isExternal ? '<span style="color:var(--warn);font-size:10px;margin-left:6px;">外部文件</span>' : '';
+    let workspaceLabel = '';
+    let repoChangeLabel = '';
+    try {
+      if (!isExternal) {
+        const p0 = String(filename || '');
+        const idx0 = (files || []).findIndex(f => f && String(f.path || '') === p0);
+        if (idx0 < 0) {
+          workspaceLabel = '<span style="color:var(--accent2);font-size:10px;margin-left:6px;">工作区文件</span>';
+        } else {
+          const st = String((files[idx0] && files[idx0].status) || '').trim().toUpperCase();
+          if (st) {
+            let stText = st;
+            if (st === 'M') { stText = '已修改'; }
+            else if (st === 'A') { stText = '已新增'; }
+            else if (st === 'D') { stText = '已删除'; }
+            else if (st === 'U') { stText = '未跟踪'; }
+            else if (st === 'R') { stText = '已重命名'; }
+            repoChangeLabel = `<span class="gm-editor-kind ${esc(st)}">${esc(stText)}</span>`;
+          }
+        }
+      }
+    } catch (e) { workspaceLabel = ''; repoChangeLabel = ''; }
     document.getElementById('diffLabel').innerHTML = 
       `<span class="fn" onclick="showRecentFilesDropdown(); event.stopPropagation();" title="点击查看最近打开的文件">${esc(filename)}</span>
        <span class="line-count">${totalLines}行</span>
        <span style="color:var(--text3);font-size:10px">编辑器模式</span>
-       ${externalLabel}
+       ${externalLabel}${workspaceLabel}${repoChangeLabel}
        <button class="editor-close-btn" id="diffLabelCloseBtn" title="从最近列表移除并切换下一个 (Alt+W)">
          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
            <line x1="18" y1="6" x2="6" y2="18"/>
@@ -15551,10 +19150,10 @@
     // 显示保存按钮
     document.getElementById('saveFileBtn').style.display = 'flex';
 
-    // 记录外部拖拽打开的文件到最近列表
+    // 记录外部文件到最近列表
     try {
       const p = String(filename || '');
-      if (p) {
+      if (p && isExternal) {
         recentFiles = recentFiles.filter(f => String(f.path || '') !== p);
         recentFiles.unshift({
           path: p,
@@ -15564,6 +19163,27 @@
           timestamp: Date.now()
         });
         if (recentFiles.length > MAX_RECENT_FILES) recentFiles = recentFiles.slice(0, MAX_RECENT_FILES);
+      }
+    } catch (e) {}
+
+    try {
+      if (!isExternal) {
+        const p = String(filename || '');
+        const idx = (files || []).findIndex(f => f && String(f.path || '') === p);
+        if (idx >= 0) {
+          addToRecentFiles(idx);
+        } else if (p) {
+          // 工作区文件（不在变更列表）：也进入最近打开（用于编辑器模式切换）
+          recentFiles = recentFiles.filter(f => String(f.path || '') !== p);
+          recentFiles.unshift({
+            path: p,
+            status: 'R',
+            external: false,
+            content: String(content || ''),
+            timestamp: Date.now()
+          });
+          if (recentFiles.length > MAX_RECENT_FILES) recentFiles = recentFiles.slice(0, MAX_RECENT_FILES);
+        }
       }
     } catch (e) {}
     
@@ -16788,6 +20408,31 @@
             __gmPlainIndentApply(1);
           }
           return;
+        }
+
+        if (e.key === 'Backspace' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+          try {
+            const v = String(ta.value || '');
+            let s = Number(ta.selectionStart || 0);
+            let en = Number(ta.selectionEnd || 0);
+            if (s > en) { const tmp = s; s = en; en = tmp; }
+            if (s === en && s > 0) {
+              const ls = __gmLineStartAt(v, s);
+              const le = __gmLineEndAt(v, s);
+              const line = v.slice(ls, le);
+              const before = v.slice(ls, s);
+              const m = line.match(/^[\t ]*/);
+              const indentLen = m ? String(m[0] || '').length : 0;
+              if (/^[\t ]*$/.test(before) && before.length > 0 && before.length <= indentLen) {
+                e.preventDefault();
+                const IND = '    ';
+                const del = __gmIndentBackspaceDelCount(before, IND);
+                const newPos = Math.max(ls, s - del);
+                __gmPlainUndoableReplaceRange(newPos, s, '', newPos, newPos);
+                return;
+              }
+            }
+          } catch (e2) {}
         }
 
         if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (String(e.key || '').toLowerCase() === 'd')) {

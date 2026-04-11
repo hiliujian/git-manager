@@ -4,8 +4,11 @@ Git Manager Backend — 完整修复版 + 完善日志系统 + WebSocket实时�
 python3 server.py  →  http://localhost:7842
 """
 
-import subprocess, os, json, re, sys, logging, threading, hashlib, time, difflib, shutil
+import subprocess, os, json, re, sys, logging, threading, hashlib, time, difflib, shutil, mimetypes
 from pathlib import Path
+import urllib.request
+import urllib.error
+import uuid
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs, unquote
 from datetime import datetime
@@ -77,11 +80,170 @@ REPO_PATH = None
 WS_PORT = 7843  # WebSocket端口号
 ws_clients = set()  # WebSocket客户端集合
 ws_clients_lock = threading.Lock()
+
+ai_config_lock = threading.Lock()
+ai_history_lock = threading.Lock()
+undo_lock = threading.Lock()
+_undo_groups = {}  # group_id -> list[entry]
+_undo_group_order = []  # stack of group_id in commit order
 last_file_state = None  # 上次的文件状态（用于检测变化）
 _changed_files_cache = {
     "ts": 0.0,
     "files": None,
 }
+
+# Idempotency cache for write APIs (prevents repeated tool calls)
+idempotency_lock = threading.Lock()
+_idempotency_cache = {}  # key -> {"ts": float, "code": int, "payload": dict}
+_IDEMPOTENCY_TTL_SEC = 300
+_IDEMPOTENCY_MAX = 500
+
+
+def _idempotency_get(key: str):
+    k = (key or "").strip()
+    if not k:
+        return None
+    now = time.time()
+    with idempotency_lock:
+        ent = _idempotency_cache.get(k)
+        if not ent:
+            return None
+        ts = float(ent.get("ts") or 0.0)
+        if (now - ts) > _IDEMPOTENCY_TTL_SEC:
+            try:
+                del _idempotency_cache[k]
+            except Exception:
+                pass
+            return None
+        return ent
+
+
+def _idempotency_set(key: str, payload: dict, code: int = 200):
+    k = (key or "").strip()
+    if not k:
+        return
+    now = time.time()
+    with idempotency_lock:
+        _idempotency_cache[k] = {"ts": now, "code": int(code), "payload": payload}
+        if len(_idempotency_cache) > _IDEMPOTENCY_MAX:
+            # purge expired first
+            expired = []
+            for kk, vv in list(_idempotency_cache.items()):
+                ts = float((vv or {}).get("ts") or 0.0)
+                if (now - ts) > _IDEMPOTENCY_TTL_SEC:
+                    expired.append(kk)
+            for kk in expired:
+                try:
+                    del _idempotency_cache[kk]
+                except Exception:
+                    pass
+            # still too large: drop oldest
+            if len(_idempotency_cache) > _IDEMPOTENCY_MAX:
+                items = sorted(_idempotency_cache.items(), key=lambda x: float((x[1] or {}).get("ts") or 0.0))
+                for kk, _vv in items[: max(0, len(_idempotency_cache) - _IDEMPOTENCY_MAX)]:
+                    try:
+                        del _idempotency_cache[kk]
+                    except Exception:
+                        pass
+
+
+def _undo_capture_file_snapshot(rel_path: str):
+    rp = (rel_path or "").replace("\\", "/").lstrip("/")
+    if not rp:
+        return None
+    full = _safe_repo_abspath(rp)
+    if not full:
+        return None
+    if os.path.isdir(full):
+        return {"path": rp, "exists": False, "content": ""}
+    if not os.path.exists(full):
+        return {"path": rp, "exists": False, "content": ""}
+    content, _enc = get_file_content(rp, return_encoding=True)
+    if content is None:
+        content = ""
+    return {"path": rp, "exists": True, "content": str(content)}
+
+
+def _undo_apply_file_snapshot(snapshot: dict):
+    if not isinstance(snapshot, dict):
+        return False, "snapshot 非法"
+    rp = (snapshot.get("path") or "").replace("\\", "/").lstrip("/")
+    if not rp:
+        return False, "snapshot 缺少 path"
+    if snapshot.get("exists"):
+        return save_file_content(rp, str(snapshot.get("content") or ""))
+    full = _safe_repo_abspath(rp)
+    if not full:
+        return False, "非法路径"
+    try:
+        if os.path.exists(full) and (not os.path.isdir(full)):
+            os.remove(full)
+        return True, ""
+    except Exception as e:
+        return False, str(e)
+
+
+def _undo_record(group_id: str, entry: dict):
+    gid = str(group_id or "").strip()
+    if not gid:
+        return
+    if not isinstance(entry, dict):
+        return
+    with undo_lock:
+        if gid not in _undo_groups:
+            _undo_groups[gid] = []
+            _undo_group_order.append(gid)
+        _undo_groups[gid].append(entry)
+
+
+def _undo_pop_latest_group():
+    with undo_lock:
+        while _undo_group_order:
+            gid = _undo_group_order.pop()
+            actions = _undo_groups.pop(gid, None)
+            if actions:
+                return gid, actions
+        return "", []
+
+
+def _undo_get_steps():
+    with undo_lock:
+        return len(_undo_group_order)
+
+
+def _undo_apply_actions(actions: list):
+    if not isinstance(actions, list) or not actions:
+        return True, "无可撤销操作"
+    errs = []
+    for a in reversed(actions):
+        try:
+            tp = str(a.get("type") or "")
+            if tp == "file_snapshot":
+                ok, msg = _undo_apply_file_snapshot(a.get("snapshot"))
+                if not ok:
+                    errs.append(msg or "恢复文件失败")
+            elif tp == "rename":
+                oldp = (a.get("old_path") or "").replace("\\", "/").lstrip("/")
+                newp = (a.get("new_path") or "").replace("\\", "/").lstrip("/")
+                if oldp and newp:
+                    rename_file(newp, oldp)
+                for snap in (a.get("snapshots") or []):
+                    _undo_apply_file_snapshot(snap)
+            elif tp == "ai_config":
+                prev = a.get("prev")
+                ok, msg = save_ai_config(prev)
+                if not ok:
+                    errs.append(msg or "恢复 AI 配置失败")
+        except Exception as e:
+            errs.append(str(e))
+    if errs:
+        return False, "\n".join([x for x in errs if x])
+    try:
+        invalidate_changed_files_cache()
+        notify_files_updated()
+    except Exception:
+        pass
+    return True, ""
 
 
 def invalidate_changed_files_cache():
@@ -700,6 +862,184 @@ def get_head_file_content(filepath: str):
         logger.debug(f"读取 HEAD 文件内容失败: {filepath} - {err}")
         return None
     return out
+
+
+def list_dir_tree(rel_path: str = "", max_depth: int = 3, max_entries: int = 500):
+    if not REPO_PATH:
+        return None, "未打开仓库"
+    try:
+        depth = int(max_depth)
+    except Exception:
+        depth = 3
+    if depth < 0:
+        depth = 0
+    if depth > 6:
+        depth = 6
+    try:
+        cap = int(max_entries)
+    except Exception:
+        cap = 500
+    if cap <= 0:
+        cap = 200
+    if cap > 2000:
+        cap = 2000
+
+    rel = (rel_path or "").replace("\\", "/").lstrip("/")
+    root_abs = _safe_repo_abspath(rel) if rel else os.path.abspath(REPO_PATH)
+    if not root_abs or (not os.path.isdir(root_abs)):
+        return None, "目录不存在"
+    repo_root = os.path.abspath(REPO_PATH)
+
+    lines = []
+    count = 0
+    for cur_root, dirs, files in os.walk(root_abs):
+        try:
+            rel_cur = os.path.relpath(cur_root, repo_root).replace("\\", "/")
+        except Exception:
+            rel_cur = rel
+        cur_depth = 0
+        if rel_cur and rel_cur != ".":
+            cur_depth = rel_cur.count("/") + 1
+        base_depth = 0
+        if rel:
+            base_depth = rel.count("/") + 1
+        if (cur_depth - base_depth) >= depth:
+            dirs[:] = []
+
+        dirs[:] = [d for d in sorted(dirs) if d != ".git" and not d.startswith(".")]
+        files = [f for f in sorted(files) if not f.startswith(".")]
+
+        indent_level = max(0, cur_depth - base_depth)
+        if rel_cur == ".":
+            show_dir = "."
+        else:
+            show_dir = rel_cur
+        if show_dir:
+            lines.append("  " * indent_level + show_dir + "/")
+            count += 1
+            if count >= cap:
+                break
+
+        for d in dirs:
+            if count >= cap:
+                break
+            lines.append("  " * (indent_level + 1) + d + "/")
+            count += 1
+        for f in files:
+            if count >= cap:
+                break
+            lines.append("  " * (indent_level + 1) + f)
+            count += 1
+        if count >= cap:
+            break
+
+    if count >= cap:
+        lines.append("…")
+    return "\n".join(lines), ""
+
+
+def read_file_range(rel_path: str, start: int = 1, end: int = 200):
+    if not REPO_PATH:
+        return None, "未打开仓库"
+    p = (rel_path or "").replace("\\", "/").lstrip("/")
+    if not p:
+        return None, "缺少 path"
+    full = _safe_repo_abspath(p)
+    if not full:
+        return None, "非法路径"
+    if not os.path.exists(full) or os.path.isdir(full):
+        return None, "文件不存在"
+
+    try:
+        s = int(start)
+    except Exception:
+        s = 1
+    try:
+        e = int(end)
+    except Exception:
+        e = s + 200
+    if s < 1:
+        s = 1
+    if e < s:
+        e = s
+    if (e - s) > 500:
+        e = s + 500
+
+    try:
+        with open(full, "r", encoding="utf-8", errors="replace") as f:
+            out = []
+            idx = 0
+            for line in f:
+                idx += 1
+                if idx < s:
+                    continue
+                if idx > e:
+                    break
+                out.append(line.rstrip("\n"))
+        return {"path": p, "start": s, "end": e, "lines": out}, ""
+    except Exception as ex:
+        return None, str(ex)
+
+
+def search_code(query: str, case_sensitive: bool = False, max_results: int = 50, max_file_size: int = 512 * 1024):
+    if not REPO_PATH:
+        return None, "未打开仓库"
+    q = str(query or "")
+    if not q.strip():
+        return None, "缺少 query"
+    try:
+        cap = int(max_results)
+    except Exception:
+        cap = 50
+    if cap <= 0:
+        cap = 20
+    if cap > 200:
+        cap = 200
+
+    repo_root = os.path.abspath(REPO_PATH)
+    flags = 0 if case_sensitive else re.IGNORECASE
+    try:
+        pat = re.compile(q, flags)
+    except Exception:
+        pat = None
+
+    out = []
+    for root, dirs, files in os.walk(repo_root):
+        if ".git" in dirs:
+            dirs.remove(".git")
+        dirs[:] = [d for d in dirs if not d.startswith(".")]
+        for fn in files:
+            if fn.startswith("."):
+                continue
+            abs_path = os.path.join(root, fn)
+            try:
+                if os.path.getsize(abs_path) > int(max_file_size):
+                    continue
+            except Exception:
+                continue
+            rel = os.path.relpath(abs_path, repo_root).replace("\\", "/")
+            try:
+                with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
+                    ln = 0
+                    for line in f:
+                        ln += 1
+                        hit = False
+                        if pat is not None:
+                            hit = bool(pat.search(line))
+                        else:
+                            if case_sensitive:
+                                hit = (q in line)
+                            else:
+                                hit = (q.lower() in line.lower())
+                        if not hit:
+                            continue
+                        out.append({"path": rel, "line": ln, "text": line.rstrip("\n")})
+                        if len(out) >= cap:
+                            return out, ""
+            except Exception:
+                continue
+
+    return out, ""
 
 
 def save_file_content(filepath: str, content: str, force_encoding: str = None):
@@ -1715,23 +2055,26 @@ def revert_file(filepath: str, status: str):
     if not filepath:
         return False, "缺少 path"
 
-    st = (status or "").strip().upper() or "M"
     full = _safe_repo_abspath(filepath)
     if not full:
         return False, "非法路径"
 
-    if st == "U":
-        try:
-            if os.path.exists(full) and (not os.path.isdir(full)):
-                os.remove(full)
-            return True, ""
-        except Exception as e:
-            return False, str(e)
+    # Unified undo semantics (A+B+C):
+    # - If file exists in HEAD, restore it from HEAD (works for modified/deleted/staged-deleted).
+    # - Otherwise, treat as untracked: remove it if present.
+    _, _, code_head = run_git(["cat-file", "-e", f"HEAD:{filepath}"], timeout=30)
+    if code_head == 0:
+        _, err, code = run_git(["checkout", "HEAD", "--", filepath], timeout=120)
+        if code != 0:
+            return False, (err or "撤回文件失败")
+        return True, ""
 
-    _, err, code = run_git(["checkout", "--", filepath], timeout=120)
-    if code != 0:
-        return False, (err or "撤回文件失败")
-    return True, ""
+    try:
+        if os.path.exists(full) and (not os.path.isdir(full)):
+            os.remove(full)
+        return True, ""
+    except Exception as e:
+        return False, str(e)
 
 
 def rename_file(old_path: str, new_path: str):
@@ -2091,6 +2434,623 @@ def get_log():
     return commits
 
 
+def _ai_config_path():
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        return Path(appdata) / "git-manager" / "ai_config.json"
+    return Path.home() / ".git-manager" / "ai_config.json"
+
+
+def _ai_history_path():
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        return Path(appdata) / "git-manager" / "ai_chat_history.json"
+    return Path.home() / ".git-manager" / "ai_chat_history.json"
+
+
+_AI_GLOBAL_PROFILE_ID = "__global__"
+
+
+def _ai_clean_messages(messages: list, limit: int):
+    if not isinstance(messages, list):
+        return []
+    cleaned = []
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        role = str(m.get("role") or "").strip()
+        content = str(m.get("content") or "")
+        if role not in ("user", "assistant"):
+            continue
+        if not content:
+            continue
+        cleaned.append({"role": role, "content": content})
+    lim = int(limit) if str(limit).strip() else 80
+    if lim < 10:
+        lim = 10
+    if lim > 500:
+        lim = 500
+    return cleaned[-lim:]
+
+
+def _ai_guess_session_title(messages: list):
+    try:
+        if not isinstance(messages, list):
+            return ""
+        for m in messages:
+            if not isinstance(m, dict):
+                continue
+            if str(m.get("role") or "").strip() != "user":
+                continue
+            txt = str(m.get("content") or "").strip()
+            if not txt:
+                continue
+            txt = " ".join(txt.split())
+            if len(txt) > 26:
+                txt = txt[:26].rstrip() + "…"
+            return txt
+        return ""
+    except Exception:
+        return ""
+
+
+def _ai_load_history_data():
+    p = _ai_history_path()
+    try:
+        if not p.exists():
+            return {}
+        data = json.loads(p.read_text(encoding="utf-8") or "{}")
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _ai_write_history_data(data: dict):
+    p = _ai_history_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _ai_ensure_profile_node(data: dict, profile_id: str):
+    byp = data.get("by_profile")
+    if not isinstance(byp, dict):
+        byp = {}
+        data["by_profile"] = byp
+    node = byp.get(profile_id)
+
+    # Migration: old format stored list directly
+    if isinstance(node, list):
+        sid = uuid.uuid4().hex
+        node = {
+            "active_session_id": sid,
+            "default_session_id": sid,
+            "session_order": [sid],
+            "sessions": [
+                {
+                    "id": sid,
+                    "title": "会话",
+                    "updated_at": time.time(),
+                    "messages": node,
+                }
+            ],
+        }
+        byp[profile_id] = node
+
+    if not isinstance(node, dict):
+        sid = uuid.uuid4().hex
+        node = {
+            "active_session_id": sid,
+            "default_session_id": sid,
+            "session_order": [sid],
+            "sessions": [
+                {
+                    "id": sid,
+                    "title": "会话",
+                    "updated_at": time.time(),
+                    "messages": [],
+                }
+            ],
+        }
+        byp[profile_id] = node
+
+    sess = node.get("sessions")
+    if not isinstance(sess, list):
+        sess = []
+        node["sessions"] = sess
+
+    # Ensure default session id exists
+    default_sid = str(node.get("default_session_id") or "").strip()
+    if not default_sid:
+        default_sid = str(sess[0].get("id") or "").strip() if sess else ""
+        if default_sid:
+            node["default_session_id"] = default_sid
+
+    # Ensure session order list exists
+    order = node.get("session_order")
+    if not isinstance(order, list):
+        order = []
+        node["session_order"] = order
+    # Normalize order: only keep existing ids
+    existing_ids = [str(x.get("id") or "").strip() for x in sess if isinstance(x, dict) and str(x.get("id") or "").strip()]
+    exist_set = set(existing_ids)
+    norm = [str(x).strip() for x in order if str(x).strip() in exist_set]
+    for sid0 in existing_ids:
+        if sid0 not in norm:
+            norm.append(sid0)
+    node["session_order"] = norm
+
+    active = str(node.get("active_session_id") or "").strip()
+    if active and any(isinstance(x, dict) and str(x.get("id") or "").strip() == active for x in sess):
+        return node
+
+    if sess:
+        node["active_session_id"] = str(sess[0].get("id") or "").strip()
+    else:
+        sid = uuid.uuid4().hex
+        node["active_session_id"] = sid
+        node["sessions"] = [{"id": sid, "title": "会话", "updated_at": time.time(), "messages": []}]
+    return node
+
+
+def list_ai_sessions(profile_id: str):
+    pid = _AI_GLOBAL_PROFILE_ID
+    data = _ai_load_history_data()
+    node = _ai_ensure_profile_node(data, pid)
+    sessions = []
+    by_id = {}
+    for s in (node.get("sessions") or []):
+        if not isinstance(s, dict):
+            continue
+        sid = str(s.get("id") or "").strip()
+        if not sid:
+            continue
+        item = {
+            "id": sid,
+            "title": str(s.get("title") or "会话"),
+            "updated_at": float(s.get("updated_at") or 0.0),
+        }
+        by_id[sid] = item
+        sessions.append(item)
+
+    order = node.get("session_order") if isinstance(node.get("session_order"), list) else []
+
+    # Keep by stored order; fallback to updated_at desc.
+    if order:
+        ordered = []
+        for sid in [str(x).strip() for x in order if str(x).strip()]:
+            if sid in by_id:
+                ordered.append(by_id[sid])
+        # Append any missing sessions to the end (do NOT reorder them to the front).
+        ordered_ids = set([y.get("id") for y in ordered])
+        missing = [x for x in sessions if x.get("id") not in ordered_ids]
+        sessions = ordered + missing
+    else:
+        sessions.sort(key=lambda x: x.get("updated_at") or 0.0, reverse=True)
+    return {"active_session_id": str(node.get("active_session_id") or ""), "sessions": sessions}
+
+
+def reorder_ai_sessions(profile_id: str, session_ids: list[str]):
+    pid = _AI_GLOBAL_PROFILE_ID
+    data = _ai_load_history_data()
+    node = _ai_ensure_profile_node(data, pid)
+    sess = node.get("sessions")
+    if not isinstance(sess, list):
+        return False, "会话数据异常"
+    existing = [str(x.get("id") or "").strip() for x in sess if isinstance(x, dict) and str(x.get("id") or "").strip()]
+    exist_set = set(existing)
+    ordered = []
+    for sid in (session_ids or []):
+        s = str(sid or "").strip()
+        if not s or s not in exist_set:
+            continue
+        if s not in ordered:
+            ordered.append(s)
+    final_order = list(ordered)
+    for sid in existing:
+        if sid not in final_order:
+            final_order.append(sid)
+    node["session_order"] = final_order
+    _ai_write_history_data(data)
+    return True, ""
+
+
+def set_ai_active_session(profile_id: str, session_id: str):
+    sid = str(session_id or "").strip()
+    pid = _AI_GLOBAL_PROFILE_ID
+    if not sid:
+        return False, "缺少参数"
+    data = _ai_load_history_data()
+    node = _ai_ensure_profile_node(data, pid)
+    sess = node.get("sessions") or []
+    if not any(isinstance(x, dict) and str(x.get("id") or "").strip() == sid for x in sess):
+        return False, "会话不存在"
+    node["active_session_id"] = sid
+    _ai_write_history_data(data)
+    return True, ""
+
+
+def create_ai_session(profile_id: str, title: str | None = None):
+    pid = _AI_GLOBAL_PROFILE_ID
+    data = _ai_load_history_data()
+    node = _ai_ensure_profile_node(data, pid)
+    sid = uuid.uuid4().hex
+    t = str(title or "会话").strip() or "会话"
+    sess = node.get("sessions")
+    if not isinstance(sess, list):
+        sess = []
+        node["sessions"] = sess
+    sess.append({"id": sid, "title": t, "updated_at": time.time(), "messages": []})
+    node["active_session_id"] = sid
+    # Append new session to order so it appears at the end by default.
+    order = node.get("session_order")
+    if not isinstance(order, list):
+        order = []
+    sid_s = str(sid or "").strip()
+    if sid_s and sid_s not in [str(x).strip() for x in order if str(x).strip()]:
+        order.append(sid_s)
+    node["session_order"] = order
+    _ai_write_history_data(data)
+    return True, "", sid
+
+
+def delete_ai_session(profile_id: str, session_id: str):
+    sid = str(session_id or "").strip()
+    pid = _AI_GLOBAL_PROFILE_ID
+    if not sid:
+        return False, "缺少参数"
+    data = _ai_load_history_data()
+    node = _ai_ensure_profile_node(data, pid)
+    sess = node.get("sessions")
+    if not isinstance(sess, list):
+        return False, "会话不存在"
+    new_sess = [x for x in sess if isinstance(x, dict) and str(x.get("id") or "").strip() != sid]
+    if len(new_sess) == len(sess):
+        return False, "会话不存在"
+    node["sessions"] = new_sess
+    if str(node.get("active_session_id") or "").strip() == sid:
+        node["active_session_id"] = str(new_sess[0].get("id") or "").strip() if new_sess else ""
+    _ai_write_history_data(data)
+    return True, ""
+
+
+def load_ai_chat_history(profile_id: str, limit: int = 40, session_id: str | None = None):
+    pid = _AI_GLOBAL_PROFILE_ID
+    data = _ai_load_history_data()
+    node = _ai_ensure_profile_node(data, pid)
+    sid = str(session_id or "").strip() or str(node.get("active_session_id") or "").strip()
+    if not sid:
+        return []
+    for s in (node.get("sessions") or []):
+        if not isinstance(s, dict):
+            continue
+        if str(s.get("id") or "").strip() != sid:
+            continue
+        arr = s.get("messages")
+        if not isinstance(arr, list):
+            return []
+        out = []
+        for m in arr[-max(1, int(limit)):]:
+            if not isinstance(m, dict):
+                continue
+            role = str(m.get("role") or "").strip()
+            content = str(m.get("content") or "")
+            if role not in ("user", "assistant", "system"):
+                continue
+            if not content:
+                continue
+            out.append({"role": role, "content": content})
+        return out
+    return []
+
+
+def save_ai_chat_history(profile_id: str, messages: list, limit: int = 80, session_id: str | None = None):
+    pid = _AI_GLOBAL_PROFILE_ID
+    cleaned = _ai_clean_messages(messages, limit)
+    data = _ai_load_history_data()
+    node = _ai_ensure_profile_node(data, pid)
+    sid = str(session_id or "").strip() or str(node.get("active_session_id") or "").strip()
+    if not sid:
+        ok, msg, sid = create_ai_session(pid, title="会话")
+        if not ok:
+            return False, msg
+        data = _ai_load_history_data()
+        node = _ai_ensure_profile_node(data, pid)
+
+    sess = node.get("sessions")
+    if not isinstance(sess, list):
+        return False, "会话数据异常"
+
+    # If client-provided session_id is stale (e.g. deleted), fall back to current active session.
+    if session_id:
+        if not any(isinstance(x, dict) and str(x.get("id") or "").strip() == sid for x in sess):
+            sid2 = str(node.get("active_session_id") or "").strip()
+            if sid2 and any(isinstance(x, dict) and str(x.get("id") or "").strip() == sid2 for x in sess):
+                sid = sid2
+            else:
+                ok, msg, new_sid = create_ai_session(pid, title="会话")
+                if not ok:
+                    return False, msg
+                sid = str(new_sid or "").strip()
+                data = _ai_load_history_data()
+                node = _ai_ensure_profile_node(data, pid)
+                sess = node.get("sessions")
+                if not isinstance(sess, list):
+                    return False, "会话数据异常"
+    for s in sess:
+        if not isinstance(s, dict):
+            continue
+        if str(s.get("id") or "").strip() == sid:
+            s["messages"] = cleaned
+            s["updated_at"] = time.time()
+            title = str(s.get("title") or "").strip()
+            auto_titled = bool(s.get("auto_titled"))
+            if (not auto_titled) and title == "会话":
+                t = _ai_guess_session_title(cleaned)
+                if t:
+                    s["title"] = t
+                    s["auto_titled"] = True
+            node["active_session_id"] = sid
+            _ai_write_history_data(data)
+            return True, ""
+    return False, "会话不存在"
+
+
+def load_ai_config():
+    p = _ai_config_path()
+    try:
+        if not p.exists():
+            return {"active_profile_id": "", "profiles": []}
+        data = json.loads(p.read_text(encoding="utf-8") or "{}")
+        if not isinstance(data, dict):
+            return {"active_profile_id": "", "profiles": []}
+        if "profiles" not in data or not isinstance(data.get("profiles"), list):
+            data["profiles"] = []
+        if "active_profile_id" not in data:
+            data["active_profile_id"] = ""
+        # Normalize active_profile_id to a valid profile id when possible.
+        active = str(data.get("active_profile_id") or "").strip()
+        profiles = data.get("profiles") if isinstance(data.get("profiles"), list) else []
+        if active and any(isinstance(x, dict) and str(x.get("id") or "").strip() == active for x in profiles):
+            return data
+        if profiles and isinstance(profiles[0], dict) and str(profiles[0].get("id") or "").strip():
+            data["active_profile_id"] = str(profiles[0].get("id") or "").strip()
+            return data
+        data["active_profile_id"] = ""
+        return data
+    except Exception:
+        return {"active_profile_id": "", "profiles": []}
+
+
+def get_workspace_context(max_entries: int = 80):
+    if not REPO_PATH:
+        return ""
+    try:
+        repo_root = os.path.abspath(REPO_PATH)
+    except Exception:
+        repo_root = str(REPO_PATH)
+
+    branch = ""
+    try:
+        out, _, code = run_git(["rev-parse", "--abbrev-ref", "HEAD"])
+        if code == 0:
+            branch = (out or "").strip()
+    except Exception:
+        branch = ""
+
+    entries = []
+    try:
+        names = sorted(os.listdir(repo_root))
+        for n in names:
+            if n == ".git":
+                continue
+            if n.startswith(".") and n not in (".github", ".gitignore"):
+                continue
+            p = os.path.join(repo_root, n)
+            entries.append(n + ("/" if os.path.isdir(p) else ""))
+            if len(entries) >= int(max_entries):
+                break
+    except Exception:
+        entries = []
+
+    tree = "\n".join(["- " + e for e in entries])
+    if entries and len(entries) >= int(max_entries):
+        tree += "\n- …"
+    return (
+        f"Repo: {repo_root}\n"
+        + (f"Branch: {branch}\n" if branch else "")
+        + "Top-level:\n"
+        + (tree or "- (empty)")
+    )
+
+
+def find_files_by_name(name: str, max_results: int = 20):
+    q = str(name or "").strip()
+    if not q or not REPO_PATH:
+        return []
+    ql = q.lower()
+    repo_root = os.path.abspath(REPO_PATH)
+    out = []
+    try:
+        for root, dirs, files in os.walk(repo_root):
+            if ".git" in dirs:
+                dirs.remove(".git")
+            dirs[:] = [d for d in dirs if not d.startswith(".")]
+            for fn in files:
+                if fn.startswith("."):
+                    continue
+                fcl = fn.lower()
+                if fcl == ql or ql in fcl:
+                    abs_path = os.path.join(root, fn)
+                    rel = os.path.relpath(abs_path, repo_root).replace("\\", "/")
+                    out.append(rel)
+                    if len(out) >= int(max_results):
+                        return out
+    except Exception:
+        return out
+    return out
+
+
+def save_ai_config(cfg: dict):
+    p = _ai_config_path()
+    if not isinstance(cfg, dict):
+        return False, "配置格式非法"
+
+    # Accept both new and legacy formats.
+    profiles_in = cfg.get("profiles")
+    if isinstance(profiles_in, list):
+        profiles = []
+        for p0 in profiles_in:
+            if not isinstance(p0, dict):
+                continue
+            pid = str(p0.get("id") or "").strip()
+            name = str(p0.get("name") or "").strip()
+            base_url = str(p0.get("base_url") or p0.get("endpoint") or "").strip()
+            api_key = str(p0.get("api_key") or "")
+            model = str(p0.get("model") or "").strip()
+            if not pid:
+                pid = uuid.uuid4().hex
+            if not name:
+                name = model or "Profile"
+            profiles.append({
+                "id": pid,
+                "name": name,
+                "base_url": base_url,
+                "api_key": api_key,
+                "model": model,
+            })
+
+        active = str(cfg.get("active_profile_id") or "").strip()
+        if active and any(x.get("id") == active for x in profiles):
+            active_id = active
+        else:
+            active_id = profiles[0]["id"] if profiles else ""
+        data = {"active_profile_id": active_id, "profiles": profiles}
+    else:
+        base_url = str(cfg.get("base_url") or cfg.get("endpoint") or "").strip()
+        api_key = str(cfg.get("api_key") or "")
+        model = str(cfg.get("model") or "").strip()
+        pid = str(cfg.get("id") or "").strip() or uuid.uuid4().hex
+        data = {
+            "active_profile_id": pid,
+            "profiles": [{
+                "id": pid,
+                "name": str(cfg.get("name") or model or "Default"),
+                "base_url": base_url,
+                "api_key": api_key,
+                "model": model,
+            }],
+        }
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        return True, ""
+    except Exception as e:
+        return False, str(e)
+
+
+def _ai_build_chat_url(base_url: str):
+    u = (base_url or "").strip()
+    if not u:
+        return ""
+    u = u.rstrip("/")
+    # If user provides full path, use it.
+    if u.endswith("/chat/completions") or u.endswith("/v1/chat/completions"):
+        return u
+    if u.endswith("/v1"):
+        return u + "/chat/completions"
+    return u + "/v1/chat/completions"
+
+
+def _ai_pick_profile(cfg: dict, profile_id: str | None):
+    if not isinstance(cfg, dict):
+        return None
+    profiles = cfg.get("profiles")
+    if not isinstance(profiles, list):
+        return None
+
+    pid = (profile_id or "").strip()
+    if pid:
+        for p0 in profiles:
+            if isinstance(p0, dict) and str(p0.get("id") or "").strip() == pid:
+                return p0
+
+    active = str(cfg.get("active_profile_id") or "").strip()
+    if active:
+        for p0 in profiles:
+            if isinstance(p0, dict) and str(p0.get("id") or "").strip() == active:
+                return p0
+
+    for p0 in profiles:
+        if isinstance(p0, dict):
+            return p0
+    return None
+
+
+def ai_chat(messages: list, temperature: float | None = None, profile_id: str | None = None):
+    with ai_config_lock:
+        cfg = load_ai_config()
+    prof = _ai_pick_profile(cfg, profile_id)
+    if not prof:
+        return False, "未配置可用模型", None
+
+    base_url = str(prof.get("base_url") or prof.get("endpoint") or "").strip()
+    api_key = str(prof.get("api_key") or "")
+    model = str(prof.get("model") or "").strip()
+
+    if not base_url:
+        return False, "未配置 API Base URL", None
+    if not model:
+        return False, "未配置 Model", None
+    if not isinstance(messages, list) or not messages:
+        return False, "messages 为空", None
+
+    url = _ai_build_chat_url(base_url)
+    if not url:
+        return False, "API Base URL 非法", None
+
+    payload = {
+        "model": model,
+        "messages": messages,
+    }
+    if temperature is not None:
+        try:
+            payload["temperature"] = float(temperature)
+        except Exception:
+            pass
+
+    headers = {
+        "Content-Type": "application/json",
+    }
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+            data = json.loads(raw or "{}")
+    except urllib.error.HTTPError as e:
+        try:
+            body = e.read().decode("utf-8", errors="replace")
+        except Exception:
+            body = ""
+        msg = body.strip()[:400] if body else str(e)
+        return False, f"上游返回错误: {msg}", None
+    except Exception as e:
+        return False, str(e), None
+
+    try:
+        content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        return True, "", {"content": content, "raw": data}
+    except Exception:
+        return False, "解析响应失败", None
+
+
 def get_file_log(filepath: str, limit: int = 50):
     """Get git log for a single file."""
     if not REPO_PATH:
@@ -2391,6 +3351,12 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             return None
 
+    def _require_repo(self):
+        if not REPO_PATH:
+            self.send_json({"error": "未打开仓库"}, 400)
+            return False
+        return True
+
     def send_json(self, data, status=200):
         """发送 JSON 响应"""
         try:
@@ -2496,7 +3462,11 @@ class Handler(BaseHTTPRequestHandler):
             self.send_html()
             return
 
-        if p == "/api/status":
+        elif p == "/api/undo_stats":
+            self.send_json({"ok": True, "undo_steps": _undo_get_steps()})
+            return
+
+        elif p == "/api/status":
             logger.debug("处理 /api/status 请求")
             origin_url = ""
             if REPO_PATH:
@@ -2516,8 +3486,7 @@ class Handler(BaseHTTPRequestHandler):
 
         elif p == "/api/files":
             logger.debug("处理 /api/files 请求")
-            if not REPO_PATH:
-                self.send_json({"error":"未打开仓库"}, 400)
+            if not self._require_repo():
                 return
             try:
                 max_age = float(qget("max_age") or "")
@@ -2531,8 +3500,7 @@ class Handler(BaseHTTPRequestHandler):
 
         elif p == "/api/diff":
             logger.debug("处理 /api/diff 请求")
-            if not REPO_PATH:
-                self.send_json({"error":"未打开仓库"}, 400)
+            if not self._require_repo():
                 return
             fp     = qget("path")
             status = qget("status") or "M"
@@ -2542,8 +3510,7 @@ class Handler(BaseHTTPRequestHandler):
 
         elif p == "/api/file_content":
             logger.debug("处理 /api/file_content GET 请求")
-            if not REPO_PATH:
-                self.send_json({"error":"未打开仓库"}, 400)
+            if not self._require_repo():
                 return
             fp = qget("path")
             content, encoding = get_file_content(fp, return_encoding=True)
@@ -2552,17 +3519,124 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self.send_json({"ok": False, "error": "无法读取文件内容"}, 404)
 
+        elif p == "/api/raw_file":
+            logger.debug("处理 /api/raw_file GET 请求")
+            if not self._require_repo():
+                return
+            fp = qget("path")
+            if not fp:
+                self.send_json({"ok": False, "error": "缺少 path"}, 400)
+                return
+            full = _safe_repo_abspath(fp)
+            if not full or (not os.path.exists(full)) or os.path.isdir(full):
+                self.send_json({"ok": False, "error": "文件不存在"}, 404)
+                return
+            try:
+                file_size = os.path.getsize(full)
+            except Exception:
+                file_size = 0
+
+            # Hard cap for raw media streaming (avoid excessive bandwidth/abuse).
+            MAX_RAW_FILE_BYTES = 256 * 1024 * 1024  # 256MB
+            if file_size > MAX_RAW_FILE_BYTES:
+                self.send_json({"ok": False, "error": f"文件过大（>{MAX_RAW_FILE_BYTES} bytes）"}, 413)
+                return
+
+            ctype, _enc = mimetypes.guess_type(full)
+            if not ctype:
+                ctype = "application/octet-stream"
+
+            range_header = (self.headers.get("Range") or "").strip()
+            start = 0
+            end = max(0, file_size - 1)
+            is_range = False
+            if range_header.lower().startswith("bytes="):
+                try:
+                    spec = range_header.split("=", 1)[1].strip()
+                    # Only support a single range: start-end
+                    if "," in spec:
+                        spec = spec.split(",", 1)[0].strip()
+                    if "-" in spec:
+                        a, b = spec.split("-", 1)
+                        a = a.strip()
+                        b = b.strip()
+                        if a == "":
+                            # suffix range: -N (last N bytes)
+                            n = int(b or "0")
+                            if n <= 0:
+                                raise ValueError("invalid suffix")
+                            start = max(0, file_size - n)
+                            end = max(0, file_size - 1)
+                        else:
+                            start = int(a)
+                            end = int(b) if b != "" else max(0, file_size - 1)
+                        if start < 0:
+                            start = 0
+                        if end < start:
+                            end = start
+                        if file_size > 0:
+                            end = min(end, file_size - 1)
+                        is_range = True
+                except Exception:
+                    # Invalid Range
+                    self.send_response(416)
+                    self.send_header("Content-Range", f"bytes */{file_size}")
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.end_headers()
+                    return
+
+            if file_size <= 0:
+                self.send_response(200)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", "0")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Accept-Ranges", "bytes")
+                self.end_headers()
+                return
+
+            length = max(0, end - start + 1)
+            try:
+                self.send_response(206 if is_range else 200)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Accept-Ranges", "bytes")
+                if is_range:
+                    self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
+                self.send_header("Content-Length", str(length if is_range else file_size))
+                self.end_headers()
+
+                CHUNK = 64 * 1024
+                with open(full, "rb") as f:
+                    if is_range:
+                        f.seek(start)
+                        remain = length
+                        while remain > 0:
+                            buf = f.read(min(CHUNK, remain))
+                            if not buf:
+                                break
+                            self.wfile.write(buf)
+                            remain -= len(buf)
+                    else:
+                        while True:
+                            buf = f.read(CHUNK)
+                            if not buf:
+                                break
+                            self.wfile.write(buf)
+            except Exception as e:
+                logger.error(f"发送 raw_file 失败: {fp} - {e}", exc_info=True)
+            return
+
         elif p == "/api/log":
             logger.debug("处理 /api/log 请求")
-            if not REPO_PATH:
-                self.send_json({"error":"未打开仓库"}, 400)
+            if not self._require_repo():
                 return
             self.send_json({"log": get_log()})
 
         elif p == "/api/file_log":
             logger.debug("处理 /api/file_log 请求")
-            if not REPO_PATH:
-                self.send_json({"error": "未打开仓库"}, 400)
+            if not self._require_repo():
                 return
             fp = qget("path")
             if not fp:
@@ -2576,8 +3650,7 @@ class Handler(BaseHTTPRequestHandler):
 
         elif p == "/api/commit_detail":
             logger.debug("处理 /api/commit_detail 请求")
-            if not REPO_PATH:
-                self.send_json({"error":"未打开仓库"}, 400)
+            if not self._require_repo():
                 return
             commit = qget("hash")
             if not commit:
@@ -2598,8 +3671,7 @@ class Handler(BaseHTTPRequestHandler):
 
         elif p == "/api/commit_file_diff":
             logger.debug("处理 /api/commit_file_diff 请求")
-            if not REPO_PATH:
-                self.send_json({"error":"未打开仓库"}, 400)
+            if not self._require_repo():
                 return
             commit = qget("hash")
             fp     = qget("path")
@@ -2608,20 +3680,112 @@ class Handler(BaseHTTPRequestHandler):
 
         elif p == "/api/branches":
             logger.debug("处理 /api/branches 请求")
-            if not REPO_PATH:
-                self.send_json({"error":"未打开仓库"}, 400)
+            if not self._require_repo():
                 return
             branches, current = get_branches()
             self.send_json({"branches": branches, "current": current})
 
         elif p == "/api/commit_push_status":
             logger.debug("处理 /api/commit_push_status 请求")
-            if not REPO_PATH:
-                self.send_json({"error":"未打开仓库"}, 400)
+            if not self._require_repo():
                 return
             commit = qget("hash")
             pushed, branches, err = is_commit_pushed(commit)
             self.send_json({"pushed": pushed, "branches": branches, "error": err})
+
+        elif p == "/api/ai_config":
+            logger.debug("处理 /api/ai_config 请求")
+            with ai_config_lock:
+                self.send_json({"config": load_ai_config()})
+
+        elif p == "/api/workspace_context":
+            logger.debug("处理 /api/workspace_context 请求")
+            if not self._require_repo():
+                return
+            ctx = get_workspace_context(max_entries=80)
+            self.send_json({"ok": True, "context": ctx})
+
+        elif p == "/api/find_files":
+            logger.debug("处理 /api/find_files 请求")
+            if not self._require_repo():
+                return
+            name = qget("name") or qget("q") or ""
+            items = find_files_by_name(name, max_results=20)
+            self.send_json({"ok": True, "files": items})
+
+        elif p == "/api/list_dir_tree":
+            logger.debug("处理 /api/list_dir_tree 请求")
+            if not self._require_repo():
+                return
+            rel = qget("path") or qget("dir") or ""
+            try:
+                depth = int(qget("depth") or 3)
+            except Exception:
+                depth = 3
+            try:
+                cap = int(qget("max_entries") or 500)
+            except Exception:
+                cap = 500
+            tree, err = list_dir_tree(rel, max_depth=depth, max_entries=cap)
+            if tree is None:
+                self.send_json({"ok": False, "msg": err or "生成失败"}, 400)
+                return
+            self.send_json({"ok": True, "tree": tree})
+
+        elif p == "/api/read_file_range":
+            logger.debug("处理 /api/read_file_range 请求")
+            if not self._require_repo():
+                return
+            fp = qget("path") or ""
+            try:
+                start = int(qget("start") or 1)
+            except Exception:
+                start = 1
+            try:
+                end = int(qget("end") or (start + 200))
+            except Exception:
+                end = start + 200
+            data, err = read_file_range(fp, start=start, end=end)
+            if data is None:
+                self.send_json({"ok": False, "msg": err or "读取失败"}, 400)
+                return
+            self.send_json({"ok": True, "data": data})
+
+        elif p == "/api/search_code":
+            logger.debug("处理 /api/search_code 请求")
+            if not self._require_repo():
+                return
+            q = qget("query") or qget("q") or ""
+            cs = str(qget("case_sensitive") or "").strip().lower() in ("1", "true", "yes", "y")
+            try:
+                cap = int(qget("max_results") or 50)
+            except Exception:
+                cap = 50
+            hits, err = search_code(q, case_sensitive=cs, max_results=cap)
+            if hits is None:
+                self.send_json({"ok": False, "msg": err or "搜索失败"}, 400)
+                return
+            self.send_json({"ok": True, "hits": hits})
+
+        elif p == "/api/ai_chat_history":
+            logger.debug("处理 /api/ai_chat_history 请求")
+            pid = qget("profile_id")
+            sid = qget("session_id")
+            try:
+                limit = int(qget("limit") or "40")
+            except Exception:
+                limit = 40
+            with ai_history_lock:
+                hist = load_ai_chat_history(pid, limit=limit, session_id=sid)
+                info = list_ai_sessions(pid) if pid else {"active_session_id": "", "sessions": []}
+            self.send_json({"ok": True, "messages": hist, "active_session_id": info.get("active_session_id"), "sessions": info.get("sessions")})
+
+        elif p == "/api/ai_sessions":
+            logger.debug("处理 /api/ai_sessions 请求")
+            pid = qget("profile_id")
+            with ai_history_lock:
+                info = list_ai_sessions(pid)
+            self.send_json({"ok": True, "active_session_id": info.get("active_session_id"), "sessions": info.get("sessions")})
 
         else:
             logger.warning(f"未知的 GET 请求路径: {p}")
@@ -2637,11 +3801,10 @@ class Handler(BaseHTTPRequestHandler):
         else:
             logger.info(f"收到 POST 请求: {self.path}")
         p  = urlparse(self.path).path
-        ln = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(ln) if ln else b"{}"
-        
         try:
-            data = json.loads(body.decode("utf-8"))
+            length = int(self.headers.get('Content-Length', '0'))
+            body = self.rfile.read(length).decode('utf-8')
+            data = json.loads(body) if body else {}
             logger.debug(f"POST 请求数据: {json.dumps(data, ensure_ascii=False)[:200]}...")
         except Exception as e:
             logger.error(f"解析 JSON 失败: {e}")
@@ -2682,8 +3845,7 @@ class Handler(BaseHTTPRequestHandler):
 
             elif p == "/api/revert_hunk":
                 logger.info("处理 /api/revert_hunk 请求")
-                if not REPO_PATH:
-                    self.send_json({"error":"未打开仓库"}, 400)
+                if not self._require_repo():
                     return
                 fp  = data.get("path", "")
                 idx = data.get("hunk_index", -1)
@@ -2696,8 +3858,7 @@ class Handler(BaseHTTPRequestHandler):
 
             elif p == "/api/revert_line":
                 logger.info("处理 /api/revert_line 请求")
-                if not REPO_PATH:
-                    self.send_json({"error":"未打开仓库"}, 400)
+                if not self._require_repo():
                     return
                 fp  = data.get("path", "")
                 h_idx = data.get("hunk_index", -1)
@@ -2713,8 +3874,7 @@ class Handler(BaseHTTPRequestHandler):
             
             elif p == "/api/revert_multi_lines":
                 logger.info("处理 /api/revert_multi_lines 请求")
-                if not REPO_PATH:
-                    self.send_json({"error":"未打开仓库"}, 400)
+                if not self._require_repo():
                     return
                 fp  = data.get("path", "")
                 h_idx = data.get("hunk_index", -1)
@@ -2730,8 +3890,7 @@ class Handler(BaseHTTPRequestHandler):
             
             elif p == "/api/file_content":
                 logger.info("处理 /api/file_content 请求")
-                if not REPO_PATH:
-                    self.send_json({"error":"未打开仓库"}, 400)
+                if not self._require_repo():
                     return
                 fp = data.get("path", "")
                 content, encoding = get_file_content(fp, return_encoding=True)
@@ -2742,8 +3901,7 @@ class Handler(BaseHTTPRequestHandler):
 
             elif p == "/api/file_content_head":
                 logger.info("处理 /api/file_content_head 请求")
-                if not REPO_PATH:
-                    self.send_json({"error":"未打开仓库"}, 400)
+                if not self._require_repo():
                     return
                 fp = data.get("path", "")
                 content = get_head_file_content(fp)
@@ -2754,68 +3912,179 @@ class Handler(BaseHTTPRequestHandler):
 
             elif p == "/api/save_file":
                 logger.info("处理 /api/save_file 请求")
-                if not REPO_PATH:
-                    self.send_json({"error":"未打开仓库"}, 400)
+                if not self._require_repo():
                     return
+                idem_key = (self.headers.get("X-Idempotency-Key") or "").strip()
+                if idem_key:
+                    ent = _idempotency_get(idem_key)
+                    if ent and isinstance(ent.get("payload"), dict):
+                        self.send_json(ent.get("payload"), int(ent.get("code") or 200))
+                        return
                 fp = data.get("path", "")
                 content = data.get("content", "")
+                undo_gid = (self.headers.get("X-Undo-Group") or "").strip()
+                if undo_gid:
+                    snap = _undo_capture_file_snapshot(fp)
+                    if snap is not None:
+                        _undo_record(undo_gid, {"type": "file_snapshot", "snapshot": snap})
                 ok, msg = save_file_content(fp, content)
                 if ok:
                     invalidate_changed_files_cache()
                     notify_files_updated()
-                self.send_json({"ok": ok, "msg": msg})
+                payload = {"ok": ok, "msg": msg}
+                if idem_key:
+                    _idempotency_set(idem_key, payload, 200)
+                self.send_json(payload)
 
             elif p == "/api/delete_file":
                 logger.info("处理 /api/delete_file 请求")
-                if not REPO_PATH:
-                    self.send_json({"error":"未打开仓库"}, 400)
+                if not self._require_repo():
                     return
+                idem_key = (self.headers.get("X-Idempotency-Key") or "").strip()
+                if idem_key:
+                    ent = _idempotency_get(idem_key)
+                    if ent and isinstance(ent.get("payload"), dict):
+                        self.send_json(ent.get("payload"), int(ent.get("code") or 200))
+                        return
                 fp = (data.get("path") or "").strip()
+                undo_gid = (self.headers.get("X-Undo-Group") or "").strip()
+                if undo_gid:
+                    snap = _undo_capture_file_snapshot(fp)
+                    if snap is not None:
+                        _undo_record(undo_gid, {"type": "file_snapshot", "snapshot": snap})
                 full = _safe_repo_abspath(fp)
                 if not full:
-                    self.send_json({"ok": False, "msg": "非法路径"}, 400)
+                    payload = {"ok": False, "msg": "非法路径"}
+                    if idem_key:
+                        _idempotency_set(idem_key, payload, 400)
+                    self.send_json(payload, 400)
                     return
                 try:
                     if os.path.isdir(full):
-                        self.send_json({"ok": False, "msg": "目标是目录"}, 400)
+                        payload = {"ok": False, "msg": "目标是目录"}
+                        if idem_key:
+                            _idempotency_set(idem_key, payload, 400)
+                        self.send_json(payload, 400)
                         return
                     if os.path.exists(full):
                         os.remove(full)
                     invalidate_changed_files_cache()
                     notify_files_updated()
-                    self.send_json({"ok": True, "msg": "删除成功"})
+                    payload = {"ok": True, "msg": "删除成功"}
+                    if idem_key:
+                        _idempotency_set(idem_key, payload, 200)
+                    self.send_json(payload)
                 except Exception as e:
                     logger.error(f"删除文件失败: {fp} - {e}", exc_info=True)
-                    self.send_json({"ok": False, "msg": str(e)}, 500)
+                    payload = {"ok": False, "msg": str(e)}
+                    if idem_key:
+                        _idempotency_set(idem_key, payload, 500)
+                    self.send_json(payload, 500)
+
+            elif p == "/api/run_cmd":
+                logger.info("处理 /api/run_cmd 请求")
+                if not self._require_repo():
+                    return
+                cmd = (data.get("cmd") or "").strip()
+                if not cmd:
+                    self.send_json({"ok": False, "msg": "缺少 cmd"}, 400)
+                    return
+                try:
+                    timeout = int(data.get("timeout") or 30)
+                except Exception:
+                    timeout = 30
+                if timeout <= 0:
+                    timeout = 30
+                if timeout > 600:
+                    timeout = 600
+
+                cwd_raw = data.get("cwd")
+                cwd = REPO_PATH
+                if cwd_raw is not None:
+                    rel = str(cwd_raw).strip()
+                    if rel:
+                        full = _safe_repo_abspath(rel)
+                        if not full or (not os.path.isdir(full)):
+                            self.send_json({"ok": False, "msg": "非法 cwd"}, 400)
+                            return
+                        cwd = full
+
+                try:
+                    r = subprocess.run(
+                        ["cmd.exe", "/c", cmd],
+                        cwd=cwd,
+                        capture_output=True,
+                        text=True,
+                        timeout=timeout,
+                    )
+                    self.send_json({
+                        "ok": (r.returncode == 0),
+                        "exit_code": int(r.returncode),
+                        "stdout": r.stdout or "",
+                        "stderr": r.stderr or "",
+                    })
+                except subprocess.TimeoutExpired:
+                    self.send_json({"ok": False, "msg": f"命令超时(超过{timeout}秒)", "exit_code": 124, "stdout": "", "stderr": ""}, 500)
+                except Exception as e:
+                    logger.error(f"执行命令失败: {cmd} - {e}", exc_info=True)
+                    self.send_json({"ok": False, "msg": str(e), "exit_code": 1, "stdout": "", "stderr": ""}, 500)
 
             elif p == "/api/rename_file":
                 logger.info("处理 /api/rename_file 请求")
-                if not REPO_PATH:
-                    self.send_json({"error": "未打开仓库"}, 400)
+                if not self._require_repo():
                     return
+                idem_key = (self.headers.get("X-Idempotency-Key") or "").strip()
+                if idem_key:
+                    ent = _idempotency_get(idem_key)
+                    if ent and isinstance(ent.get("payload"), dict):
+                        self.send_json(ent.get("payload"), int(ent.get("code") or 200))
+                        return
                 oldp = (data.get("old_path") or data.get("path") or "").strip()
                 newp = (data.get("new_path") or "").strip()
+                undo_gid = (self.headers.get("X-Undo-Group") or "").strip()
+                if undo_gid:
+                    s_old = _undo_capture_file_snapshot(oldp)
+                    s_new = _undo_capture_file_snapshot(newp)
+                    snaps = [x for x in (s_old, s_new) if x is not None]
+                    _undo_record(undo_gid, {"type": "rename", "old_path": oldp, "new_path": newp, "snapshots": snaps})
                 ok, msg = rename_file(oldp, newp)
                 if ok:
                     invalidate_changed_files_cache()
                     notify_files_updated()
-                self.send_json({"ok": ok, "msg": msg})
+                payload = {"ok": ok, "msg": msg}
+                if idem_key:
+                    _idempotency_set(idem_key, payload, 200)
+                self.send_json(payload)
 
             elif p == "/api/revert_file":
                 logger.info("处理 /api/revert_file 请求")
-                if not REPO_PATH:
-                    self.send_json({"error":"未打开仓库"}, 400)
+                if not self._require_repo():
                     return
-                ok, msg = revert_file(data.get("path",""), data.get("status","M"))
+                idem_key = (self.headers.get("X-Idempotency-Key") or "").strip()
+                if idem_key:
+                    ent = _idempotency_get(idem_key)
+                    if ent and isinstance(ent.get("payload"), dict):
+                        self.send_json(ent.get("payload"), int(ent.get("code") or 200))
+                        return
+                fp = (data.get("path") or "").strip()
+                st = (data.get("status") or "M")
+                undo_gid = (self.headers.get("X-Undo-Group") or "").strip()
+                if undo_gid:
+                    snap = _undo_capture_file_snapshot(fp)
+                    if snap is not None:
+                        _undo_record(undo_gid, {"type": "file_snapshot", "snapshot": snap})
+                ok, msg = revert_file(fp, st)
                 if ok:
                     invalidate_changed_files_cache()
                     notify_files_updated()
-                self.send_json({"ok": ok, "msg": msg})
+                payload = {"ok": ok, "msg": msg}
+                if idem_key:
+                    _idempotency_set(idem_key, payload, 200)
+                self.send_json(payload)
 
             elif p == "/api/pull_file":
                 logger.info("处理 /api/pull_file 请求")
-                if not REPO_PATH:
-                    self.send_json({"error": "未打开仓库"}, 400)
+                if not self._require_repo():
                     return
                 fp = (data.get("path") or "").strip()
                 full = _safe_repo_abspath(fp)
@@ -2844,10 +4113,90 @@ class Handler(BaseHTTPRequestHandler):
                 notify_files_updated()
                 self.send_json({"ok": True, "msg": "更新成功"})
 
+            elif p == "/api/ai_config":
+                logger.info("处理 /api/ai_config 请求")
+                cfg = data.get("config") if isinstance(data, dict) else None
+                if cfg is None and isinstance(data, dict):
+                    cfg = data
+                undo_gid = (self.headers.get("X-Undo-Group") or "").strip()
+                with ai_config_lock:
+                    if undo_gid:
+                        prev_cfg = load_ai_config()
+                        _undo_record(undo_gid, {"type": "ai_config", "prev": prev_cfg})
+                    ok, msg = save_ai_config(cfg)
+                self.send_json({"ok": ok, "msg": msg})
+
+            elif p == "/api/undo":
+                logger.info("处理 /api/undo 请求")
+                gid, actions = _undo_pop_latest_group()
+                if not actions:
+                    self.send_json({"ok": False, "msg": "无可撤销操作"}, 400)
+                    return
+                ok, msg = _undo_apply_actions(actions)
+                if not ok:
+                    self.send_json({"ok": False, "msg": msg or "撤销失败", "group_id": gid}, 500)
+                    return
+                self.send_json({"ok": True, "group_id": gid})
+
+            elif p == "/api/ai_chat":
+                logger.info("处理 /api/ai_chat 请求")
+                msgs = data.get("messages") if isinstance(data, dict) else None
+                temp = data.get("temperature") if isinstance(data, dict) else None
+                pid = data.get("profile_id") if isinstance(data, dict) else None
+                ok, msg, result = ai_chat(msgs, temperature=temp, profile_id=pid)
+                if ok:
+                    self.send_json({"ok": True, "content": result.get("content", ""), "raw": result.get("raw")})
+                else:
+                    self.send_json({"ok": False, "msg": msg}, 400)
+
+            elif p == "/api/ai_chat_history":
+                logger.info("处理 /api/ai_chat_history 请求")
+                pid = data.get("profile_id") if isinstance(data, dict) else None
+                msgs = data.get("messages") if isinstance(data, dict) else None
+                sid = data.get("session_id") if isinstance(data, dict) else None
+                with ai_history_lock:
+                    ok, msg = save_ai_chat_history(pid, msgs, session_id=sid)
+                    info = list_ai_sessions(pid) if pid else {"active_session_id": "", "sessions": []}
+                self.send_json({"ok": ok, "msg": msg, "active_session_id": info.get("active_session_id"), "sessions": info.get("sessions")})
+
+            elif p == "/api/ai_sessions":
+                logger.info("处理 /api/ai_sessions 请求")
+                pid = data.get("profile_id") if isinstance(data, dict) else None
+                action = str(data.get("action") or "") if isinstance(data, dict) else ""
+                title = data.get("title") if isinstance(data, dict) else None
+                sid = data.get("session_id") if isinstance(data, dict) else None
+                order = data.get("session_ids") if isinstance(data, dict) else None
+
+                with ai_history_lock:
+                    if action == "create":
+                        ok, msg, new_id = create_ai_session(pid, title=title)
+                        info = list_ai_sessions(pid) if pid else {"active_session_id": "", "sessions": []}
+                        self.send_json({"ok": ok, "msg": msg, "session_id": new_id, "active_session_id": info.get("active_session_id"), "sessions": info.get("sessions")})
+                        return
+                    if action == "reorder":
+                        ids = []
+                        if isinstance(order, list):
+                            ids = [str(x) for x in order if x is not None and str(x).strip()]
+                        ok, msg = reorder_ai_sessions(pid, ids)
+                        info = list_ai_sessions(pid) if pid else {"active_session_id": "", "sessions": []}
+                        self.send_json({"ok": ok, "msg": msg, "active_session_id": info.get("active_session_id"), "sessions": info.get("sessions")})
+                        return
+                    if action == "delete":
+                        ok, msg = delete_ai_session(pid, sid)
+                        info = list_ai_sessions(pid) if pid else {"active_session_id": "", "sessions": []}
+                        self.send_json({"ok": ok, "msg": msg, "active_session_id": info.get("active_session_id"), "sessions": info.get("sessions")})
+                        return
+                    if action == "set_active":
+                        ok, msg = set_ai_active_session(pid, sid)
+                        info = list_ai_sessions(pid) if pid else {"active_session_id": "", "sessions": []}
+                        self.send_json({"ok": ok, "msg": msg, "active_session_id": info.get("active_session_id"), "sessions": info.get("sessions")})
+                        return
+                    info = list_ai_sessions(pid) if pid else {"active_session_id": "", "sessions": []}
+                self.send_json({"ok": True, "active_session_id": info.get("active_session_id"), "sessions": info.get("sessions")})
+
             elif p == "/api/revert_all":
                 logger.info("处理 /api/revert_all 请求")
-                if not REPO_PATH:
-                    self.send_json({"error":"未打开仓库"}, 400)
+                if not self._require_repo():
                     return
                 errors = []
                 raw_paths = data.get("paths")
@@ -2899,8 +4248,7 @@ class Handler(BaseHTTPRequestHandler):
 
             elif p == "/api/restore_file":
                 logger.info("处理 /api/restore_file 请求")
-                if not REPO_PATH:
-                    self.send_json({"error":"未打开仓库"}, 400)
+                if not self._require_repo():
                     return
                 commit = (data.get("hash") or "").strip()
                 fp = (data.get("path") or "").strip()
@@ -2909,8 +4257,7 @@ class Handler(BaseHTTPRequestHandler):
 
             elif p == "/api/restore_workspace":
                 logger.info("处理 /api/restore_workspace 请求")
-                if not REPO_PATH:
-                    self.send_json({"error":"未打开仓库"}, 400)
+                if not self._require_repo():
                     return
                 commit = (data.get("hash") or "").strip()
                 if not commit:
@@ -2921,8 +4268,7 @@ class Handler(BaseHTTPRequestHandler):
 
             elif p == "/api/revert_commit":
                 logger.info("处理 /api/revert_commit 请求")
-                if not REPO_PATH:
-                    self.send_json({"error":"未打开仓库"}, 400)
+                if not self._require_repo():
                     return
                 commit = (data.get("hash") or "").strip()
                 if not commit:
@@ -2938,8 +4284,7 @@ class Handler(BaseHTTPRequestHandler):
 
             elif p == "/api/soft_reset_commit":
                 logger.info("处理 /api/soft_reset_commit 请求")
-                if not REPO_PATH:
-                    self.send_json({"error":"未打开仓库"}, 400)
+                if not self._require_repo():
                     return
                 commit = (data.get("hash") or "").strip()
                 if not commit:
@@ -2986,8 +4331,7 @@ class Handler(BaseHTTPRequestHandler):
 
             elif p == "/api/stage_file":
                 logger.info("处理 /api/stage_file 请求")
-                if not REPO_PATH:
-                    self.send_json({"error":"未打开仓库"}, 400)
+                if not self._require_repo():
                     return
                 filepath = (data.get("path") or "").strip()
                 if not filepath:
@@ -3008,8 +4352,7 @@ class Handler(BaseHTTPRequestHandler):
 
             elif p == "/api/commit":
                 logger.info("处理 /api/commit 请求")
-                if not REPO_PATH:
-                    self.send_json({"error":"未打开仓库"}, 400)
+                if not self._require_repo():
                     return
                 msg   = data.get("message", "").strip()
                 paths = data.get("files", [])
@@ -3036,8 +4379,7 @@ class Handler(BaseHTTPRequestHandler):
 
             elif p == "/api/commit_hunks":
                 logger.info("处理 /api/commit_hunks 请求")
-                if not REPO_PATH:
-                    self.send_json({"error":"未打开仓库"}, 400)
+                if not self._require_repo():
                     return
 
                 msg = (data.get("message") or "").strip()
@@ -3108,8 +4450,7 @@ class Handler(BaseHTTPRequestHandler):
 
             elif p == "/api/commit_lines":
                 logger.info("处理 /api/commit_lines 请求")
-                if not REPO_PATH:
-                    self.send_json({"error":"未打开仓库"}, 400)
+                if not self._require_repo():
                     return
 
                 msg = (data.get("message") or "").strip()
@@ -3188,8 +4529,7 @@ class Handler(BaseHTTPRequestHandler):
 
             elif p == "/api/push":
                 logger.info("处理 /api/push 请求")
-                if not REPO_PATH:
-                    self.send_json({"error":"未打开仓库"}, 400)
+                if not self._require_repo():
                     return
                 _, err, code = run_git(["push"], timeout=300)
                 if code == 0:
@@ -3202,8 +4542,7 @@ class Handler(BaseHTTPRequestHandler):
 
             elif p == "/api/pull":
                 logger.info("处理 /api/pull 请求")
-                if not REPO_PATH:
-                    self.send_json({"error":"未打开仓库"}, 400)
+                if not self._require_repo():
                     return
 
                 out, err, code = run_git(["pull", "--no-edit"], timeout=300)
@@ -3253,8 +4592,7 @@ class Handler(BaseHTTPRequestHandler):
 
             elif p == "/api/stash_and_pull":
                 logger.info("处理 /api/stash_and_pull 请求 (暂存修改并更新)")
-                if not REPO_PATH:
-                    self.send_json({"error":"未打开仓库"}, 400)
+                if not self._require_repo():
                     return
 
                 # 1. git stash
@@ -3306,8 +4644,7 @@ class Handler(BaseHTTPRequestHandler):
 
             elif p == "/api/commit_and_pull":
                 logger.info("处理 /api/commit_and_pull 请求 (提交并更新)")
-                if not REPO_PATH:
-                    self.send_json({"error":"未打开仓库"}, 400)
+                if not self._require_repo():
                     return
 
                 commit_msg = (data.get("message") or "").strip()
@@ -3350,8 +4687,7 @@ class Handler(BaseHTTPRequestHandler):
 
             elif p == "/api/switch_branch":
                 logger.info("处理 /api/switch_branch 请求")
-                if not REPO_PATH:
-                    self.send_json({"error":"未打开仓库"}, 400)
+                if not self._require_repo():
                     return
 
                 target_branch = (data.get("branch") or "").strip()
@@ -3498,8 +4834,7 @@ class Handler(BaseHTTPRequestHandler):
 
             elif p == "/api/stash_and_switch":
                 logger.info("处理 /api/stash_and_switch 请求 (暂存修改并切换分支)")
-                if not REPO_PATH:
-                    self.send_json({"error":"未打开仓库"}, 400)
+                if not self._require_repo():
                     return
 
                 target_branch = (data.get("branch") or "").strip()
@@ -3552,8 +4887,7 @@ class Handler(BaseHTTPRequestHandler):
 
             elif p == "/api/commit_and_switch":
                 logger.info("处理 /api/commit_and_switch 请求 (提交并切换分支)")
-                if not REPO_PATH:
-                    self.send_json({"error":"未打开仓库"}, 400)
+                if not self._require_repo():
                     return
 
                 target_branch = (data.get("branch") or "").strip()
@@ -3603,8 +4937,7 @@ class Handler(BaseHTTPRequestHandler):
 
             elif p == "/api/stash_pop":
                 logger.info("处理 /api/stash_pop 请求 (恢复暂存的修改)")
-                if not REPO_PATH:
-                    self.send_json({"error":"未打开仓库"}, 400)
+                if not self._require_repo():
                     return
 
                 # git stash pop
