@@ -2634,22 +2634,15 @@ flex-shrink:0;cursor:pointer;
     } catch (e) {}
   }
 
-  let __gmAiSendDebounceTimer = 0;
   function sendAiChat() {
     try {
-      if (__gmAiSendDebounceTimer) {
-        clearTimeout(__gmAiSendDebounceTimer);
-        __gmAiSendDebounceTimer = 0;
+      if (__gmAiIsResponding) {
+        __gmAiStopResponding();
+        return;
       }
-      __gmAiSendDebounceTimer = setTimeout(() => {
-        __gmAiSendDebounceTimer = 0;
-        try { __gmAiSendAiChatNow(); } catch (e2) {}
-      }, 300);
-    } catch (e) {
-      try { __gmAiSendAiChatNow(); } catch (e2) {}
-    }
+      __gmAiSendAiChatNow();
+    } catch (e) {}
   }
-
   function __gmIndentBackspaceDelCount(beforeText, indentUnit) {
     try {
       const IND = (indentUnit !== null && indentUnit !== undefined) ? String(indentUnit) : '    ';
@@ -8564,9 +8557,54 @@ flex-shrink:0;cursor:pointer;
   let __gmAiConfig = { active_profile_id: '', profiles: [] };
   let __gmAiSelectedProfileId = '';
   let __gmAiEditingProfileId = '';
-  let __gmAiLastUndoGroupId = '';
+  let __gmAiActiveTurnUndoGroupId = '';
+  let __gmAiCapabilitiesText = '';
   let __gmAiSessions = [];
   let __gmAiActiveSessionId = '';
+  let __gmAiIsResponding = false;
+  let __gmAiChatAbortController = null;
+  let __gmAiLastUndoSteps = 0;
+
+  function __gmAiSetSendButtonState(isResponding) {
+    try {
+      const btn = document.querySelector('.ai-send-btn');
+      if (!btn) return;
+      if (isResponding) {
+        btn.classList.add('is-stop');
+        btn.title = '暂停';
+        btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
+      } else {
+        btn.classList.remove('is-stop');
+        btn.title = '发送';
+        btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>';
+      }
+    } catch (e) {}
+  }
+
+  function __gmAiStopResponding() {
+    try {
+      if (!__gmAiIsResponding) return;
+      __gmAiIsResponding = false;
+      try { __gmAiSetSendButtonState(false); } catch (e0) {}
+      try {
+        if (__gmAiChatAbortController) {
+          __gmAiChatAbortController.abort();
+        }
+      } catch (e1) {}
+      __gmAiChatAbortController = null;
+      try { toast('已中断', 'ok'); } catch (e2) {}
+    } catch (e) {}
+  }
+
+  async function __gmAiLoadCapabilitiesOnce(force=false) {
+    try {
+      if (!force && __gmAiCapabilitiesText) return;
+      const r = await GET('/api/capabilities');
+      if (r && r.ok && typeof r.text === 'string' && String(r.text || '').trim()) {
+        __gmAiCapabilitiesText = String(r.text || '').trim();
+      }
+    } catch (e) {}
+  }
 
   let __gmAiTempProfileIds = new Set();
 
@@ -8774,7 +8812,7 @@ flex-shrink:0;cursor:pointer;
     }
   }
 
-  async function __gmAiRefreshSendCounter() {
+  function __gmAiRefreshSendCounter() {
     try {
       const el = document.getElementById('aiSendCounter');
       if (!el) return;
@@ -8786,15 +8824,29 @@ flex-shrink:0;cursor:pointer;
         }
       } catch (e0) { turns = 0; }
 
-      let steps = 0;
-      try {
-        const res = await GET('/api/undo_stats');
-        steps = Number(res && (res.undo_steps !== undefined ? res.undo_steps : (res.data && res.data.undo_steps))) || 0;
-      } catch (e1) { steps = 0; }
-
-      el.textContent = `${steps}/${turns}`;
+      const steps0 = Number(__gmAiLastUndoSteps) || 0;
+      el.textContent = `${steps0}/${turns}`;
       el.title = 'UndoSteps/Turns';
       el.style.display = 'inline-flex';
+
+      try {
+        GET('/api/undo_stats').then((res) => {
+          try {
+            const steps = Number(res && (res.undo_steps !== undefined ? res.undo_steps : (res.data && res.data.undo_steps))) || 0;
+            __gmAiLastUndoSteps = steps;
+            const el2 = document.getElementById('aiSendCounter');
+            if (!el2) return;
+            let turns2 = 0;
+            try {
+              const base = Array.isArray(__gmAiChatMessages) ? __gmAiChatMessages : [];
+              for (const m of base) {
+                if (m && String(m.role || '') === 'user') turns2++;
+              }
+            } catch (e2) { turns2 = turns; }
+            el2.textContent = `${steps}/${turns2}`;
+          } catch (e3) {}
+        }).catch(()=>{});
+      } catch (e1) {}
     } catch (e) {}
   }
 
@@ -8821,13 +8873,17 @@ flex-shrink:0;cursor:pointer;
       }
       if (lastUser < 0) return;
 
+      const undoGidForTurn = String((msgs[lastUser] && msgs[lastUser].undo_gid) || '').trim();
+
       let undoOk = false;
       try {
-        const u = await POST('/api/undo', {});
-        undoOk = Boolean(u && u.ok);
-        if (!undoOk) {
-          const m = String((u && (u.msg || u.error)) || '无可撤销操作');
-          if (m && m.indexOf('无可撤销') < 0) toast('撤销失败：' + m, 'err');
+        if (undoGidForTurn) {
+          const u = await POST('/api/undo', { group_id: undoGidForTurn });
+          undoOk = Boolean(u && u.ok);
+          if (!undoOk) {
+            const m = String((u && (u.msg || u.error)) || '无可撤销操作');
+            if (m && m.indexOf('无可撤销') < 0) toast('撤销失败：' + m, 'err');
+          }
         }
       } catch (eU) {}
 
@@ -8853,6 +8909,9 @@ flex-shrink:0;cursor:pointer;
       if (undoOk) {
         try { toast('✓ 已撤销上一轮数据操作', 'ok'); } catch (eT) {}
       }
+      try {
+        if (undoGidForTurn && String(__gmAiActiveTurnUndoGroupId || '') === undoGidForTurn) __gmAiActiveTurnUndoGroupId = '';
+      } catch (eG0) {}
       try { await __gmAiRefreshSendCounter(); } catch (eC) {}
     } catch (e) {}
   }
@@ -9125,7 +9184,7 @@ flex-shrink:0;cursor:pointer;
       const preface = s.slice(0, hits[0].start).trim();
       const results = [];
 
-      const undoGid = String(__gmAiLastUndoGroupId || '').trim();
+      const undoGid = String(__gmAiActiveTurnUndoGroupId || '').trim();
       const postWithUndo = async (path, body, extraHeaders) => {
         const h = Object.assign({}, (extraHeaders || {}));
         if (undoGid) h['X-Undo-Group'] = undoGid;
@@ -10552,19 +10611,45 @@ flex-shrink:0;cursor:pointer;
     }
     if (ta) ta.value = '';
 
-    __gmAiChatMessages.push({ role: 'user', content: text });
+    const turnUndoGid = 'ai-' + __gmGenReqId();
+    __gmAiActiveTurnUndoGroupId = turnUndoGid;
+    __gmAiChatMessages.push({ role: 'user', content: text, undo_gid: turnUndoGid });
     __gmAiChatMessages.push({ role: 'assistant', content: '', pending: true });
     __gmAiRenderChat();
 
+    try { __gmAiRefreshSendCounter(); } catch (eC0) {}
+
     try { await __gmAiSaveHistoryNow(); } catch (e0) {}
 
-    __gmAiLastUndoGroupId = 'ai-' + __gmGenReqId();
-    try { await __gmAiRefreshSendCounter(); } catch (eC0) {}
+    __gmAiIsResponding = true;
+    try { __gmAiSetSendButtonState(true); } catch (eB0) {}
+    try { __gmAiChatAbortController = new AbortController(); } catch (eAC0) { __gmAiChatAbortController = null; }
+    try { __gmAiRefreshSendCounter(); } catch (eC0b) {}
 
     try {
       const sys = await __gmBuildAiSystemContext(text);
       const msgs = __gmAiBuildMessagesForApi(sys);
-      const res = await POST('/api/ai_chat', { messages: msgs, profile_id: pid, session_id: __gmAiActiveSessionId });
+      const res = await api('/api/ai_chat', {
+        method: 'POST',
+        body: JSON.stringify({ messages: msgs, profile_id: pid, session_id: __gmAiActiveSessionId }),
+        signal: __gmAiChatAbortController ? __gmAiChatAbortController.signal : undefined,
+      });
+
+      if (res && res.aborted) {
+        try {
+          const last = __gmAiChatMessages[__gmAiChatMessages.length - 1];
+          if (last && String(last.role || '') === 'assistant' && last.pending) {
+            __gmAiChatMessages.pop();
+            __gmAiRenderChat();
+          }
+        } catch (e0) {}
+        __gmAiIsResponding = false;
+        try { __gmAiSetSendButtonState(false); } catch (eB0x) {}
+        __gmAiChatAbortController = null;
+        __gmAiActiveTurnUndoGroupId = '';
+        return;
+      }
+
       if (res && res.ok) {
         let content = __gmAiSanitizeAssistantContent(String(res.content || ''));
         try {
@@ -10593,6 +10678,10 @@ flex-shrink:0;cursor:pointer;
         } catch (e2) {
           toast('保存会话失败', 'err');
         }
+        __gmAiIsResponding = false;
+        try { __gmAiSetSendButtonState(false); } catch (eB1) {}
+        __gmAiChatAbortController = null;
+        __gmAiActiveTurnUndoGroupId = '';
         return;
       }
       const msg = (res && (res.msg || res.error)) ? String(res.msg || res.error) : '对话失败';
@@ -10604,6 +10693,10 @@ flex-shrink:0;cursor:pointer;
         }
       } catch (e0) {}
       __gmToastApiError('对话失败', res, msg);
+      __gmAiIsResponding = false;
+      try { __gmAiSetSendButtonState(false); } catch (eB2) {}
+      __gmAiChatAbortController = null;
+      __gmAiActiveTurnUndoGroupId = '';
     } catch (e) {
       try {
         const last = __gmAiChatMessages[__gmAiChatMessages.length - 1];
@@ -10612,7 +10705,13 @@ flex-shrink:0;cursor:pointer;
           __gmAiRenderChat();
         }
       } catch (e0) {}
-      toast('对话失败', 'err');
+      try {
+        if (!__gmIsAbortError(e)) toast('对话失败', 'err');
+      } catch (eT0) {}
+      __gmAiIsResponding = false;
+      try { __gmAiSetSendButtonState(false); } catch (eB3) {}
+      __gmAiChatAbortController = null;
+      __gmAiActiveTurnUndoGroupId = '';
     }
   }
 
@@ -10932,6 +11031,12 @@ flex-shrink:0;cursor:pointer;
 - 约束：优先使用 /api/* 完成业务 CRUD；只有在接口确实无法覆盖时才使用 run_cmd；输出必须是单行命令，不允许换行/管道/重定向/复合命令
 `;
 
+      let capability3Dyn = '';
+      try {
+        await __gmAiLoadCapabilitiesOnce(false);
+        if (__gmAiCapabilitiesText) capability3Dyn = __gmAiCapabilitiesText;
+      } catch (eCap) { capability3Dyn = ''; }
+
       let execSummaryBlock = '';
       try {
         if (__gmAiRecentExecSummaries && __gmAiRecentExecSummaries.length) {
@@ -10944,7 +11049,7 @@ flex-shrink:0;cursor:pointer;
         if (ws || refsBlock) {
           return `你是 Hivo，一名内置在 Git 管理工具里的 AI 助手（用户称呼你为 Hivo）。\n\n工作区上下文：\n${ws}`
             + (refsBlock ? (`\n\n引用文件内容：\n\n${refsBlock}`) : '')
-            + `\n\n${capability}\n\n${capability2}\n\n${capability3}`
+            + `\n\n${capability}\n\n${capability2}\n\n${capability3Dyn || capability3}`
             + execSummaryBlock;
         }
         return '';
@@ -10953,13 +11058,13 @@ flex-shrink:0;cursor:pointer;
       if (!snippet) {
         return `当前文件：${path}\n\n工作区上下文：\n${ws}`
           + (refsBlock ? (`\n\n引用文件内容：\n\n${refsBlock}`) : '')
-          + `\n\n${capability}\n\n${capability2}\n\n${capability3}`
+          + `\n\n${capability}\n\n${capability2}\n\n${capability3Dyn || capability3}`
           + execSummaryBlock;
       }
 
       return `你是 Hivo，一名内置在 Git 管理工具里的 AI 助手（用户称呼你为 Hivo）。\n\n工作区上下文：\n${ws}`
         + (refsBlock ? (`\n\n引用文件内容：\n\n${refsBlock}`) : '')
-        + `\n\n${capability}\n\n${capability2}\n\n${capability3}`
+        + `\n\n${capability}\n\n${capability2}\n\n${capability3Dyn || capability3}`
         + execSummaryBlock
         + `\n\n当前文件：${path || '(未知)'}\n\n当前编辑内容（截断）：\n\n${snippet}`;
     } catch (e) {
@@ -11409,10 +11514,23 @@ flex-shrink:0;cursor:pointer;
     }
   };
 
+  const __gmIsAbortError = (e) => {
+    try {
+      if (!e) return false;
+      if (e.name && String(e.name) === 'AbortError') return true;
+      if (e instanceof DOMException && String(e.name || '') === 'AbortError') return true;
+      const m = String(e.message || '').toLowerCase();
+      if (m.indexOf('abort') >= 0) return true;
+      return false;
+    } catch (e2) {
+      return false;
+    }
+  };
+
   async function api(path, opts={}){
+    const reqId = __gmGenReqId();
     try{
       const url = path.startsWith('http') ? path : (location.origin + path);
-      const reqId = __gmGenReqId();
 
       const headers = Object.assign(
         {'Content-Type':'application/json','X-Req-Id': reqId},
@@ -11453,7 +11571,10 @@ flex-shrink:0;cursor:pointer;
       return { ok: false, data: null, error: snippet ? (`响应不是JSON: ${snippet}`) : '响应不是JSON', req_id: reqId || null };
     }catch(e){
       console.error(e);
-      return {ok:false, data:null, error:'连接失败，请确认 server.py 正在运行', req_id:null};
+      if (__gmIsAbortError(e)) {
+        return { ok: false, aborted: true, data: null, error: 'aborted', req_id: reqId || null };
+      }
+      return { ok: false, data: null, error: '连接失败，请确认 server.py 正在运行', req_id: reqId || null };
     }
   }
 
@@ -17479,6 +17600,7 @@ flex-shrink:0;cursor:pointer;
             __gmAiConfigLoadedOnce = true;
             loadAiConfig();
           }
+          try { __gmAiLoadCapabilitiesOnce(false).catch(()=>{}); } catch (e0cap) {}
           showAiChatPanel();
         } catch (e) {}
       }
@@ -18001,6 +18123,30 @@ flex-shrink:0;cursor:pointer;
   document.querySelectorAll('.overlay').forEach(o =>
           o.addEventListener('click', e => { if (e.target===o) o.classList.remove('show'); }));
 
+  function __gmAiCollectMediaPreviewList() {
+    try {
+      const chatRoot = document.getElementById('aiChatInner') || document.getElementById('aiChatList') || null;
+      const root = chatRoot || document.body;
+      const imgs = Array.from(root.querySelectorAll('.ai-md img'));
+      const uniq = [];
+      const seen = new Set();
+      for (const x of imgs) {
+        let u = '';
+        try {
+          u = String((x && x.getAttribute) ? (x.getAttribute('src') || '') : '');
+          if (!u && x && x.currentSrc) u = String(x.currentSrc || '');
+        } catch (e0u) { u = ''; }
+        if (!u) continue;
+        if (seen.has(u)) continue;
+        seen.add(u);
+        uniq.push(u);
+      }
+      return uniq;
+    } catch (e) {
+      return [];
+    }
+  }
+
   function __gmAiOpenMediaPreview(src) {
     try {
       const modal = document.getElementById('aiMediaPreviewModal');
@@ -18008,35 +18154,12 @@ flex-shrink:0;cursor:pointer;
       if (!modal || !img) return;
       const safeSrc = String(src || '');
       const frame = modal.querySelector('.ai-media-frame');
-      try {
-        const chatRoot = document.getElementById('aiChatInner') || document.getElementById('aiChatList') || null;
-        const root = chatRoot || document.body;
-        const imgs = Array.from(root.querySelectorAll('.ai-md img'));
-        const uniq = [];
-        const seen = new Set();
-        for (const x of imgs) {
-          let u = '';
-          try {
-            u = String((x && x.getAttribute) ? (x.getAttribute('src') || '') : '');
-            if (!u && x && x.currentSrc) u = String(x.currentSrc || '');
-          } catch (e0u) { u = ''; }
-          if (!u) continue;
-          if (seen.has(u)) continue;
-          seen.add(u);
-          uniq.push(u);
-        }
-        window.__gmAiMediaPreviewList = uniq;
-      } catch (e0) {
-        window.__gmAiMediaPreviewList = [];
-      }
+      window.__gmAiMediaPreviewList = __gmAiCollectMediaPreviewList();
       window.__gmAiMediaPreviewList = Array.isArray(window.__gmAiMediaPreviewList) ? window.__gmAiMediaPreviewList : [];
       if (safeSrc && window.__gmAiMediaPreviewList.indexOf(safeSrc) < 0) window.__gmAiMediaPreviewList.push(safeSrc);
       if (!window.__gmAiMediaPreviewList.length) window.__gmAiMediaPreviewList = [safeSrc];
       let idx = window.__gmAiMediaPreviewList.indexOf(safeSrc);
-      if (idx < 0) {
-        window.__gmAiMediaPreviewList.push(safeSrc);
-        idx = window.__gmAiMediaPreviewList.length - 1;
-      }
+      if (idx < 0) idx = 0;
       window.__gmAiMediaPreviewIdx = idx;
       img.src = safeSrc;
       modal.classList.add('show');
@@ -20820,6 +20943,7 @@ flex-shrink:0;cursor:pointer;
     if (typeof window.setEditStatus === 'function') {
       window.setEditStatus('');
     }
+
   }
 
   // 初始化拖拽功能

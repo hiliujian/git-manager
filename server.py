@@ -14,6 +14,7 @@ import urllib.request
 import urllib.error
 import uuid
 import py_compile
+import ssl
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs, unquote
 from datetime import datetime
@@ -198,6 +199,11 @@ def _undo_record(group_id: str, entry: dict):
         if gid not in _undo_groups:
             _undo_groups[gid] = []
             _undo_group_order.append(gid)
+            try:
+                tp = str(entry.get("type") or "")
+                logger.warning(f"undo_steps+1 (group_id={gid}, first_type={tp}, undo_steps={len(_undo_group_order)})")
+            except Exception:
+                pass
         _undo_groups[gid].append(entry)
 
 
@@ -209,6 +215,21 @@ def _undo_pop_latest_group():
             if actions:
                 return gid, actions
         return "", []
+
+
+def _undo_pop_group_by_id(group_id: str):
+    gid = str(group_id or "").strip()
+    if not gid:
+        return "", []
+    with undo_lock:
+        actions = _undo_groups.pop(gid, None)
+        if not actions:
+            return "", []
+        try:
+            _undo_group_order[:] = [x for x in _undo_group_order if str(x) != gid]
+        except Exception:
+            pass
+        return gid, actions
 
 
 def _undo_get_steps():
@@ -2476,7 +2497,12 @@ def _ai_clean_messages(messages: list, limit: int):
             continue
         if not content:
             continue
-        cleaned.append({"role": role, "content": content})
+        item = {"role": role, "content": content}
+        if role == "user":
+            ug = str(m.get("undo_gid") or "").strip()
+            if ug:
+                item["undo_gid"] = ug
+        cleaned.append(item)
     lim = int(limit) if str(limit).strip() else 80
     if lim < 10:
         lim = 10
@@ -2973,6 +2999,101 @@ def _ai_build_chat_url(base_url: str):
     return u + "/v1/chat/completions"
 
 
+def get_capabilities_spec():
+    endpoints = [
+        # Repo/Workspace
+        {"method": "GET", "path": "/api/status"},
+        {"method": "POST", "path": "/api/open_repo", "body": {"path": "<abs path>"}},
+        {"method": "GET", "path": "/api/files", "query": {"max_age": "0-10"}},
+        {"method": "GET", "path": "/api/diff", "query": {"path": "<rel>", "status": "M/A/D/R/U", "ctx": "0-200"}},
+        {"method": "GET", "path": "/api/file_content", "query": {"path": "<rel>"}},
+        {"method": "GET", "path": "/api/raw_file", "query": {"path": "<rel>"}},
+        {"method": "GET", "path": "/api/read_file_range", "query": {"path": "<rel>", "start": "1+", "end": "1+"}},
+        {"method": "GET", "path": "/api/list_dir_tree", "query": {"path": "<rel>", "depth": "1-10", "max_entries": "1-2000"}},
+        {"method": "GET", "path": "/api/search_code", "query": {"query": "<text>", "case_sensitive": "0/1", "max_results": "1-200"}},
+        {"method": "GET", "path": "/api/find_files", "query": {"name": "<filename>"}},
+        {"method": "GET", "path": "/api/workspace_context"},
+
+        # Write / File ops
+        {"method": "POST", "path": "/api/save_file", "body": {"path": "<rel>", "content": "<text>"}},
+        {"method": "POST", "path": "/api/delete_file", "body": {"path": "<rel>"}},
+        {"method": "POST", "path": "/api/rename_file", "body": {"old_path": "<rel>", "new_path": "<rel>"}},
+        {"method": "POST", "path": "/api/revert_file", "body": {"path": "<rel>", "status": "M/A/D/R/U"}},
+        {"method": "POST", "path": "/api/revert_hunk", "body": {"path": "<rel>", "hunk_index": 0, "status": "M/A/D/R/U"}},
+        {"method": "POST", "path": "/api/revert_line", "body": {"path": "<rel>", "hunk_index": 0, "line_index": 0, "status": "M/A/D/R/U"}},
+        {"method": "POST", "path": "/api/revert_multi_lines", "body": {"path": "<rel>", "hunk_index": 0, "start_line_index": 0, "end_line_index": 0, "status": "M/A/D/R/U"}},
+        {"method": "POST", "path": "/api/revert_all", "body": {"paths": ["<rel>"]}},
+
+        # Git
+        {"method": "GET", "path": "/api/commits"},
+        {"method": "GET", "path": "/api/commit_detail", "query": {"hash": "<sha>"}},
+        {"method": "GET", "path": "/api/commit_file_diff", "query": {"hash": "<sha>", "path": "<rel>"}},
+        {"method": "GET", "path": "/api/branches"},
+        {"method": "GET", "path": "/api/commit_push_status", "query": {"hash": "<sha>"}},
+        {"method": "POST", "path": "/api/stage_file", "body": {"path": "<rel>"}},
+        {"method": "POST", "path": "/api/commit", "body": {"message": "<text>", "files": ["<rel>"]}},
+        {"method": "POST", "path": "/api/pull", "body": {}},
+        {"method": "POST", "path": "/api/push", "body": {}},
+        {"method": "POST", "path": "/api/stash_and_pull", "body": {}},
+        {"method": "POST", "path": "/api/commit_and_pull", "body": {"message": "<text>", "files": ["<rel>"]}},
+        {"method": "POST", "path": "/api/switch_branch", "body": {"branch": "<name>"}},
+        {"method": "POST", "path": "/api/stash_and_switch", "body": {"branch": "<name>"}},
+        {"method": "POST", "path": "/api/commit_and_switch", "body": {"branch": "<name>", "message": "<text>", "files": ["<rel>"]}},
+        {"method": "POST", "path": "/api/stash_pop", "body": {}},
+
+        # AI
+        {"method": "GET", "path": "/api/ai_config"},
+        {"method": "POST", "path": "/api/ai_config", "body": {"config": {"active_profile_id": "", "profiles": []}}},
+        {"method": "POST", "path": "/api/ai_chat", "body": {"messages": [], "profile_id": "<id>", "session_id": "<id>"}},
+        {"method": "GET", "path": "/api/ai_chat_history", "query": {"profile_id": "<id>", "session_id": "<id>", "limit": "1-200"}},
+        {"method": "POST", "path": "/api/ai_chat_history", "body": {"profile_id": "<id>", "session_id": "<id>", "messages": []}},
+        {"method": "GET", "path": "/api/ai_sessions", "query": {"profile_id": "<id>"}},
+        {"method": "POST", "path": "/api/ai_sessions", "body": {"profile_id": "<id>", "action": "create/delete/set_active/reorder", "session_id": "<id>"}},
+        {"method": "POST", "path": "/api/ai_cache_clear", "body": {}},
+
+        # System
+        {"method": "POST", "path": "/api/open_file", "body": {"name": "<name or rel path>", "view": "editor/split"}},
+        {"method": "POST", "path": "/api/verify_python", "body": {"paths": ["<rel>"]}},
+        {"method": "POST", "path": "/api/run_cmd", "body": {"cmd": "<single line>", "timeout": 30, "cwd": "<rel?>"}},
+        {"method": "POST", "path": "/api/undo", "body": {}},
+        {"method": "GET", "path": "/api/undo_stats"},
+        {"method": "GET", "path": "/api/capabilities"},
+    ]
+
+    lines = []
+    lines.append("系统接口索引（后端单一真源，自动生成）：")
+    lines.append("")
+    lines.append("重要约束：")
+    lines.append("- 优先使用 /api/* 完成业务 CRUD；只有接口确实无法覆盖时才使用 /api/run_cmd")
+    lines.append("- run_cmd 必须是单行命令，不允许换行/管道/重定向/复合命令")
+    lines.append("")
+    for e in endpoints:
+        method = str(e.get("method") or "").upper()
+        path = str(e.get("path") or "")
+        if not method or not path:
+            continue
+        lines.append(f"- {method} {path}")
+    text = "\n".join(lines)
+
+    return {
+        "version": "1",
+        "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "endpoints": endpoints,
+        "text": text,
+    }
+
+
+_AI_SSL_CONTEXT = None
+try:
+    _AI_SSL_CONTEXT = ssl.create_default_context()
+    try:
+        _AI_SSL_CONTEXT.minimum_version = ssl.TLSVersion.TLSv1_2
+    except Exception:
+        pass
+except Exception:
+    _AI_SSL_CONTEXT = None
+
+
 def _ai_pick_profile(cfg: dict, profile_id: str | None):
     if not isinstance(cfg, dict):
         return None
@@ -3043,7 +3164,7 @@ def ai_chat(messages: list, temperature: float | None = None, profile_id: str | 
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        with urllib.request.urlopen(req, timeout=60, context=_AI_SSL_CONTEXT) as resp:
             raw = resp.read().decode("utf-8", errors="replace")
             data = json.loads(raw or "{}")
     except urllib.error.HTTPError as e:
@@ -3688,6 +3809,17 @@ class Handler(BaseHTTPRequestHandler):
                               os.path.isdir(os.path.join(REPO_PATH, ".git"))),
                 "ws_port": WS_PORT if WEBSOCKET_AVAILABLE else None,
                 "origin_url": origin_url
+            })
+
+        elif p == "/api/capabilities":
+            logger.debug("处理 /api/capabilities 请求")
+            spec = get_capabilities_spec()
+            self.send_json({
+                "ok": True,
+                "version": spec.get("version"),
+                "generated_at": spec.get("generated_at"),
+                "text": spec.get("text"),
+                "endpoints": spec.get("endpoints"),
             })
 
         elif p == "/api/files":
@@ -4503,7 +4635,13 @@ class Handler(BaseHTTPRequestHandler):
 
             elif p == "/api/undo":
                 logger.info("处理 /api/undo 请求")
-                gid, actions = _undo_pop_latest_group()
+                req_gid = ""
+                try:
+                    if isinstance(data, dict):
+                        req_gid = str(data.get("group_id") or "").strip()
+                except Exception:
+                    req_gid = ""
+                gid, actions = _undo_pop_group_by_id(req_gid) if req_gid else _undo_pop_latest_group()
                 if not actions:
                     self.send_json({"ok": False, "msg": "无可撤销操作"}, 400)
                     return
