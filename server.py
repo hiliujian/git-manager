@@ -3153,6 +3153,7 @@ def ai_chat(messages: list, temperature: float | None = None, profile_id: str | 
 
     headers = {
         "Content-Type": "application/json",
+        "Connection": "close",
     }
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
@@ -3164,7 +3165,9 @@ def ai_chat(messages: list, temperature: float | None = None, profile_id: str | 
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=60, context=_AI_SSL_CONTEXT) as resp:
+        https_handler = urllib.request.HTTPSHandler(context=_AI_SSL_CONTEXT) if _AI_SSL_CONTEXT else urllib.request.HTTPSHandler()
+        opener = urllib.request.build_opener(https_handler)
+        with opener.open(req, timeout=60) as resp:
             raw = resp.read().decode("utf-8", errors="replace")
             data = json.loads(raw or "{}")
     except urllib.error.HTTPError as e:
