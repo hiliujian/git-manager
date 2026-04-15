@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "max_rounds": 12,
+  "max_tool_calls_per_round": 3,
+  "max_visible_history": 80,
+  "repeat_block": {
+    "window": 4,
+    "max_same": 3,
+    "signature": "tool_types",
+    "escalation_limit": 2
+  },
+  "status_events": {
+    "enabled": true
+  },
+  "status_messages": {
+    "sending": "发送中...",
+    "thinking": "思考中...",
+    "executing": "执行中...",
+    "done": "完成"
+  },
+  "features": {
+    "memory_enabled": true,
+    "tool_memory_enabled": true,
+    "tool_cache_enabled": true,
+    "context_refs_enabled": true
+  },
+  "system_context_extra": "",
+  "capabilities": {
+    "disable_endpoints": [],
+    "disable_tools": [],
+    "endpoints_extra": [],
+    "agent_tools_extra": []
+  },
+  "memory": {
+    "short_term_turns": 6,
+    "long_term_summary_chars": 3500,
+    "tool_log_items": 80,
+    "tool_cache_items": 120
+  },
+  "agent": {
+    "mode": "hivo_agent",
+    "system_prompt": "你是 Hivo AI（Git Manager 内置智能助手）。你必须严格遵守工具调用协议：\n\n1) 当需要读取/写入/搜索/修改文件或获取系统信息时，必须调用系统提供的 Agent Tools。\n2) 工具调用必须输出【单个 JSON 对象或 JSON 数组】（UTF-8 纯文本），例如：{\"type\":\"file_content\",\"path\":\"server.py\"}。\n3) 严禁输出任何伪造的工具标记或模板文本，例如 <|tool_calls_section_begin|>、<|tool_call_begin|>、functions.xxx:3 等；这些都是无效文本，会导致工具无法执行。\n4) 输出工具 JSON 时不得夹带解释性自然语言；工具 JSON 与自然语言解释必须分开：先工具 JSON，工具执行结果返回后再解释。\n\n可用工具与 required 字段以系统上下文中的 Agent Tools 列表为准。\n\n示例：\n- 需要查找文件：\n[{\"type\":\"find_files\",\"name\":\"insertion_sort.py\"}]\n- 需要读取文件内容：\n[{\"type\":\"file_content\",\"path\":\"insertion_sort.py\"}]\n- 需要保存文件：\n[{\"type\":\"save_file\",\"path\":\"a.py\",\"content\":\"print('hi')\"}]\n",
+    "tools": []
+  }
+}

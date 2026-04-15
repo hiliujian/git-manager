@@ -25,6 +25,7 @@
       --text3:     #4e5472;
       --hunk-bg:   #181b28;
       --on-accent: #000000;
+      --gm-ai-pulse-dur: 1.9s;
     }
 
     /* Light Theme */
@@ -1450,11 +1451,11 @@
       white-space:nowrap;
       transition:background .14s,border-color .14s,color .14s,transform .12s,box-shadow .12s,opacity .12s;}
     [data-theme="light"] .ai-session-chip{background:rgba(0,0,0,0.03);border-color:rgba(0,0,0,0.06);}
-    .ai-session-chip:hover{background:rgba(255,255,255,0.05);border-color:rgba(255,255,255,0.11);color:var(--text);}
-    [data-theme="light"] .ai-session-chip:hover{background:rgba(0,0,0,0.05);border-color:rgba(0,0,0,0.10);}
-    .ai-session-chip.active{background:rgba(110,180,247,0.14);border-color:rgba(110,180,247,0.25);color:var(--text);}
+    .ai-session-chip:hover{background:var(--bg4);border-color:rgba(255,255,255,0.11);color:var(--text);}
+    .ai-session-chip.active{background:rgba(110,168,254,0.12);border-color:rgba(110,168,254,0.28);color:var(--text);box-shadow:none;}
+    [data-theme="light"] .ai-session-chip.active{background:rgba(76,166,255,0.10);border-color:rgba(76,166,255,0.20);box-shadow:none;}
     .ai-session-chip.dragging{opacity:0.55;transform:scale(.98);box-shadow:0 10px 22px rgba(0,0,0,.28);}
-    .ai-session-chip.drag-over{border-color:rgba(110,180,247,0.55);background:rgba(110,180,247,0.10);transform:translateY(-1px);}
+    .ai-session-chip.drag-over{border-color:rgba(110,168,254,0.55);background:rgba(110,168,254,0.10);transform:translateY(-1px);}
     .ai-session-chip{font-size:11px;font-weight:500;}
     .ai-session-drop-end{display:none;align-items:center;justify-content:center;flex-shrink:0;
       min-width:56px;height:22px;padding:0 10px;box-sizing:border-box;border-radius:999px;
@@ -1497,6 +1498,14 @@ flex-shrink:0;cursor:pointer;
     .ai-send-btn svg{display:block;}
     .ai-send-btn:hover{opacity:0.9;transform:translateY(-1px);}
     .ai-send-btn:active{transform:translateY(0);}
+
+    .ai-continue-btn{display:none;align-items:center;justify-content:center;gap:6px;
+      padding:6px 10px;border-radius:6px;font-size:12px;font-weight:600;
+      white-space:nowrap;background:transparent;color:var(--text);border:1px solid var(--line);
+      cursor:pointer;transition:all 0.15s ease;}
+    .ai-continue-btn:hover{background:rgba(127,127,127,0.08);transform:translateY(-1px);}
+    .ai-continue-btn:active{transform:translateY(0);}
+    .ai-continue-btn.is-show{display:inline-flex;}
 
     .ai-composer-counter{position:absolute;right:6px;top:6px;min-width:0;height:14px;
       padding:0;border-radius:999px;background:transparent;color:var(--text2);
@@ -1558,7 +1567,7 @@ flex-shrink:0;cursor:pointer;
     .ai-model-mi.active:hover{background:var(--bg4);border-color:var(--border);}
     [data-theme="light"] .ai-model-mi.active{background:rgba(76,166,255,0.10);border-color:rgba(76,166,255,0.20);}
     [data-theme="light"] .ai-model-mi.active:hover{background:var(--bg4);border-color:var(--border);}
-    .ai-model-mi .nm{font-weight:800;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+    .ai-model-mi .nm{font-weight:500;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
     .ai-model-mi .sub{display:none;}
     .ai-model-sep{height:1px;background:rgba(255,255,255,0.08);margin:6px 6px;}
     [data-theme="light"] .ai-model-sep{background:rgba(0,0,0,0.08);}
@@ -1654,16 +1663,14 @@ flex-shrink:0;cursor:pointer;
       45%{box-shadow:0 0 14px rgba(110,180,247,0.35), 0 0 26px rgba(177,151,252,0.18);}
       100%{box-shadow:0 0 0 rgba(110,180,247,0.0), 0 0 0 rgba(177,151,252,0.0);}
     }
-    .ai-bubble.user-loading{animation:__gmAiUserGlow 1.25s ease-in-out infinite;}
+    .ai-bubble.user-loading{animation:__gmAiUserGlow var(--gm-ai-pulse-dur) ease-in-out infinite;}
 
     .ai-bubble.pending .ai-msg-actions{display:none;}
-    .ai-bubble.pending .ai-md{min-height:18px;}
-    .ai-bubble.pending .ai-md::before{content:'···';display:inline-block;color:var(--text3);
-      letter-spacing:2px;animation:__gmAiDots 1.1s ease-in-out infinite;}
+    .ai-bubble.pending .ai-md{min-height:18px;animation:__gmAiDots var(--gm-ai-pulse-dur) ease-in-out infinite;}
     @keyframes __gmAiDots{
-      0%{opacity:.25;transform:translateY(0);}
-      50%{opacity:1;transform:translateY(-1px);}
-      100%{opacity:.25;transform:translateY(0);}
+      0%{opacity:.60;}
+      50%{opacity:1;}
+      100%{opacity:.60;}
     }
 
     .ai-inputbar{padding:6px 10px;border-top:1px solid var(--border);display:flex;align-items:flex-end;margin:0;}
@@ -1691,9 +1698,8 @@ flex-shrink:0;cursor:pointer;
     .ai-item:hover{background:rgba(255,255,255,0.04);border-color:rgba(255,255,255,0.08);}
     .ai-li{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:12px;cursor:pointer;
       border:1px solid transparent;background:transparent;transition:background .14s,border-color .14s,transform .12s;}
-    .ai-li:hover{background:rgba(255,255,255,0.04);border-color:rgba(255,255,255,0.08);transform:translateY(-1px);}
-    [data-theme="light"] .ai-li:hover{background:rgba(0,0,0,0.03);border-color:rgba(0,0,0,0.10);}
-    .ai-li.editing{background:rgba(110,180,247,0.12);border-color:rgba(110,180,247,0.25);box-shadow:none;transform:none;}
+    .ai-li:hover{background:var(--bg4);border-color:rgba(255,255,255,0.08);transform:translateY(-1px);}
+    .ai-li.editing{background:rgba(110,168,254,0.12);border-color:rgba(110,168,254,0.28);box-shadow:none;transform:none;}
     [data-theme="light"] .ai-li.editing{background:rgba(76,166,255,0.10);border-color:rgba(76,166,255,0.20);}
     .ai-li.active{}
     .ai-li .t{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
@@ -1710,6 +1716,18 @@ flex-shrink:0;cursor:pointer;
     .ai-form label{font-size:12px;color:var(--text2);}
     .ai-form input{width:100%;}
     .ai-row{display:flex;gap:8px;align-items:center;}
+
+    .ai-model-suggest{position:fixed;z-index:2305;display:none;max-height:240px;overflow:auto;
+      background:var(--bg3);border:1px solid var(--border);border-radius:10px;
+      box-shadow:0 18px 45px rgba(0,0,0,.38), 0 0 0 1px rgba(255,255,255,.03) inset;
+      backdrop-filter: blur(10px);
+    }
+    [data-theme="light"] .ai-model-suggest{box-shadow:0 18px 45px rgba(0,0,0,.14), 0 0 0 1px rgba(0,0,0,.04) inset;}
+    .ai-model-suggest .it{padding:8px 10px;font-size:12px;color:var(--text);cursor:pointer;
+      white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .ai-model-suggest .it:hover{background:var(--bg4);}
+    .ai-model-suggest .it.active{background:rgba(110,168,254,0.12);}
+    [data-theme="light"] .ai-model-suggest .it.active{background:rgba(76,166,255,0.10);}
 
     #fileCount{ cursor:pointer; transition:all .12s; }
     #fileCount:hover{ background:var(--bg5); color:var(--text); }
@@ -2147,6 +2165,14 @@ flex-shrink:0;cursor:pointer;
   </div>
   <span class="repo-label" id="repoLabel"></span>
   <div class="row ml">
+    <button class="btn" id="stagedBtn" style="display:none" onclick="showStagedPanel()">
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <path d="M7 7h10"/>
+        <path d="M7 12h10"/>
+        <path d="M7 17h10"/>
+      </svg>
+      <span id="stagedBtnText">暂存</span>
+    </button>
     <button class="btn" id="pullBtn" style="display:none" onclick="pullUpdate()">
       <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
         <path d="M12 3v10"/>
@@ -2372,6 +2398,7 @@ flex-shrink:0;cursor:pointer;
               <div class="ai-composer">
                 <span class="ai-composer-counter" id="aiSendCounter" title="UndoSteps/Turns">0/0</span>
                 <textarea id="aiChatInput" class="ai-input" placeholder="Ask Hivo anything..." onkeydown="aiChatInputKeydown(event)"></textarea>
+                <button class="ai-continue-btn" id="aiContinueBtn" onclick="aiContinue()" title="继续执行">Continue</button>
                 <button class="ai-send-btn" onclick="sendAiChat()">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <line x1="22" y1="2" x2="11" y2="13"></line>
@@ -2421,27 +2448,29 @@ flex-shrink:0;cursor:pointer;
                   <div style="margin-left:auto"></div>
                   <button class="btn red" id="aiDeleteProfileBtn" style="padding:2px 10px;display:none" onclick="deleteAiProfile()">删除</button>
                 </div>
-                <div class="ai-form">
+                <form class="ai-form" onsubmit="return false;">
+                  <input type="text" name="username" autocomplete="username" style="display:none">
                   <div>
                     <label>API Base URL</label>
                     <input id="aiProfBaseUrl" type="text" placeholder="https://api.openai.com" />
                   </div>
-                  <div>
-                    <label>API Key</label>
-                    <div class="ai-row">
-                      <input id="aiApiKey" type="password" placeholder="sk-..." style="flex:1;min-width:0;" />
+                  <div class="ai-config-row">
+                    <div class="ai-config-label">API Key</div>
+                    <div style="display:flex;gap:8px;align-items:center;flex:1;min-width:0;">
+                      <input id="aiApiKey" type="password" placeholder="sk-..." autocomplete="current-password" style="flex:1;min-width:0;">
                     </div>
                   </div>
                   <div>
                     <label>Model</label>
                     <input id="aiModel" type="text" placeholder="gpt-4.1-mini / qwen2.5 ..." />
                   </div>
+                  <div id="aiModelSuggest" class="ai-model-suggest"></div>
                   <div class="ai-row">
                     <button class="btn" style="flex:1;justify-content:center" onclick="setAiProfileActive()">设为当前</button>
                     <button class="btn green" style="flex:1;justify-content:center" onclick="saveAiProfiles()">保存</button>
                   </div>
                   <div id="aiConfigMeta" style="font-size:11px;color:var(--text3);"></div>
-                </div>
+                </form>
               </div>
             </div>
           </div>
@@ -2491,6 +2520,20 @@ flex-shrink:0;cursor:pointer;
     <h3 id="customTitle">提示</h3>
     <p id="customMessage"></p>
     <div class="modal-btns" id="customButtons"></div>
+  </div>
+</div>
+
+<div class="overlay" id="stagedModal">
+  <div class="modal" style="max-width:720px">
+    <h3 id="stagedTitle">暂存区</h3>
+    <div id="stagedDesc" style="font-size:12px;color:var(--text3);margin-top:-6px;margin-bottom:10px;"></div>
+    <div id="stagedList" style="max-height:420px;overflow:auto;border:1px solid var(--border);border-radius:8px;background:var(--bg2);"></div>
+    <div class="modal-btns" style="margin-top:12px;flex-wrap:wrap">
+      <button class="btn" id="stagedUnstageAllBtn" onclick="unstageAllStagedFromPanel()">全部恢复</button>
+      <button class="btn red" id="stagedDiscardAllBtn" onclick="discardAllStagedFromPanel()">全部丢弃</button>
+      <div style="flex:1"></div>
+      <button class="btn" onclick="closeModal('stagedModal')">关闭</button>
+    </div>
   </div>
 </div>
 
@@ -2548,6 +2591,161 @@ flex-shrink:0;cursor:pointer;
   
   const BASE = 'http://localhost:7842';
   let WS_URL = 'ws://localhost:7843';
+
+  // ── Staged Panel ─────────────────────────────────────────────────────────────
+  let __gmStagedPanelFiles = [];
+
+  async function showStagedPanel() {
+    showModal('stagedModal');
+    await loadStagedPanelFiles();
+  }
+
+  function __gmRenderStagedList() {
+    const box = document.getElementById('stagedList');
+    if (!box) return;
+    const files0 = Array.isArray(__gmStagedPanelFiles) ? __gmStagedPanelFiles : [];
+    if (!files0.length) {
+      box.innerHTML = '<div style="padding:12px;color:var(--text3);">暂无暂存区文件</div>';
+      return;
+    }
+
+    const esc = (s) => {
+      const t = (s === null || s === undefined) ? '' : String(s);
+      return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+    };
+
+    const rows = files0.map((f, idx) => {
+      const p = esc(f && f.path ? f.path : '');
+      const st = esc(f && f.status ? f.status : '');
+      const stTxt = st ? `(${st})` : '';
+      return `
+<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--border);">
+  <div style="flex:1;min-width:0;">
+    <div style="font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${p} <span style="color:var(--text3)">${stTxt}</span></div>
+  </div>
+  <button class="btn" style="padding:2px 10px" onclick="unstageOneStagedFromPanel(${idx})">恢复</button>
+  <button class="btn red" style="padding:2px 10px" onclick="discardOneStagedFromPanel(${idx})">丢弃</button>
+</div>`;
+    }).join('');
+
+    box.innerHTML = rows;
+  }
+
+  async function loadStagedPanelFiles() {
+    const desc = document.getElementById('stagedDesc');
+    if (desc) desc.textContent = '加载中...';
+    try {
+      const res = await GET('/api/staged_files');
+      if (!res || res.ok === false) {
+        const msg = String((res && (res.error || res.msg)) || '读取失败');
+        if (desc) desc.textContent = msg;
+        __gmStagedPanelFiles = [];
+        __gmRenderStagedList();
+        return;
+      }
+      __gmStagedPanelFiles = Array.isArray(res.files) ? res.files : [];
+      if (desc) desc.textContent = __gmStagedPanelFiles.length ? `共 ${__gmStagedPanelFiles.length} 个暂存区文件` : '暂无暂存区文件';
+      __gmRenderStagedList();
+    } catch (e) {
+      if (desc) desc.textContent = '加载失败';
+      __gmStagedPanelFiles = [];
+      __gmRenderStagedList();
+    }
+  }
+
+  async function unstageOneStagedFromPanel(idx) {
+    const f = (__gmStagedPanelFiles || [])[idx];
+    const p = f && f.path ? String(f.path) : '';
+    if (!p) return;
+    try {
+      const res = await POST('/api/unstage_file', { path: p });
+      if (res && res.ok) {
+        toast('✓ 已恢复到工作区', 'ok');
+        await refresh();
+        await loadStagedPanelFiles();
+        return;
+      }
+      toast(String((res && (res.error || res.msg)) || '操作失败'), 'err');
+    } catch (e) {
+      toast('操作失败', 'err');
+    }
+  }
+
+  async function discardOneStagedFromPanel(idx) {
+    const f = (__gmStagedPanelFiles || [])[idx];
+    const p = f && f.path ? String(f.path) : '';
+    if (!p) return;
+    try { closeModal('stagedModal'); } catch (e) {}
+    const ok = await showConfirm({
+      title: '丢弃暂存区内容',
+      message: `将丢弃该文件在暂存区的内容，并同步丢弃工作区改动，恢复到 HEAD：\n\n${p}`,
+      okText: '确认丢弃',
+      cancelText: '取消',
+      danger: true,
+    });
+    if (!ok) { try { showModal('stagedModal'); } catch (e) {} return; }
+    try {
+      const res = await POST('/api/discard_staged_file', { path: p });
+      if (res && res.ok) {
+        toast('✓ 已丢弃', 'ok');
+        await refresh();
+        try { showModal('stagedModal'); } catch (e) {}
+        await loadStagedPanelFiles();
+        return;
+      }
+      toast(String((res && (res.error || res.msg)) || '操作失败'), 'err');
+    } catch (e) {
+      toast('操作失败', 'err');
+    }
+    try { showModal('stagedModal'); } catch (e) {}
+  }
+
+  async function unstageAllStagedFromPanel() {
+    try { closeModal('stagedModal'); } catch (e) {}
+    const ok = await showConfirm({
+      title: '全部恢复到工作区',
+      message: '将取消全部暂存（保留工作区改动）。确认继续？',
+      okText: '全部恢复',
+      cancelText: '取消',
+    });
+    if (!ok) { try { showModal('stagedModal'); } catch (e) {} return; }
+    try {
+      const res = await POST('/api/unstage_all_staged', {});
+      if (res && res.ok) {
+        toast('✓ 已全部恢复', 'ok');
+        await refresh();
+        return;
+      }
+      toast(String((res && (res.error || res.msg)) || '操作失败'), 'err');
+    } catch (e) {
+      toast('操作失败', 'err');
+    }
+    try { showModal('stagedModal'); } catch (e) {}
+  }
+
+  async function discardAllStagedFromPanel() {
+    try { closeModal('stagedModal'); } catch (e) {}
+    const ok = await showConfirm({
+      title: '全部丢弃暂存区内容',
+      message: '将丢弃全部暂存区内容，并同步丢弃相关工作区改动，恢复到 HEAD。此操作不可撤销！\n\n确认继续？',
+      okText: '全部丢弃',
+      cancelText: '取消',
+      danger: true,
+    });
+    if (!ok) { try { showModal('stagedModal'); } catch (e) {} return; }
+    try {
+      const res = await POST('/api/discard_all_staged', {});
+      if (res && res.ok) {
+        toast('✓ 已全部丢弃', 'ok');
+        await refresh();
+        return;
+      }
+      toast(String((res && (res.error || res.msg)) || '操作失败'), 'err');
+    } catch (e) {
+      toast('操作失败', 'err');
+    }
+    try { showModal('stagedModal'); } catch (e) {}
+  }
 
   function __nn(v, d){
     return (v !== null && v !== undefined) ? v : d;
@@ -2640,8 +2838,103 @@ flex-shrink:0;cursor:pointer;
         __gmAiStopResponding();
         return;
       }
-      __gmAiSendAiChatNow();
+      __gmAiSendAgentNow();
     } catch (e) {}
+  }
+
+  function __gmAiNormalizePendingStatusText(text) {
+    try {
+      let s = String(text || '').trim();
+      if (!s) return '';
+      // normalize ellipsis/dots for consistent style
+      s = s.replace(/[·⋯…]/g, '.');
+      s = s.replace(/\.{4,}/g, '...');
+      s = s.replace(/\.{2}/g, '...');
+      s = s.replace(/\s{2,}/g, ' ');
+      return s;
+    } catch (e) {
+      return String(text || '').trim();
+    }
+  }
+
+  async function __gmAiSendAgentNow() {
+    const ta = document.getElementById('aiChatInput');
+    const text = ta ? String(ta.value || '').trim() : '';
+    if (!text) return;
+    const pid = String(__gmAiSelectedProfileId || __gmAiConfig.active_profile_id || '');
+    if (!pid) {
+      toast('请先选择/配置一个 Profile（Base URL / API Key / Model）后再对话', 'err');
+      try { showAiConfigPanel(); } catch (e) {}
+      return;
+    }
+
+    const isContinueSend = Boolean(__gmAiNextSendIsContinue);
+    __gmAiNextSendIsContinue = false;
+    if (!isContinueSend) {
+      try { __gmAiSetContinueState(false, ''); } catch (eCs0) {}
+    }
+
+    const okSess = await __gmAiEnsurePersistentSessionBeforeSend(pid);
+    if (!okSess) return;
+
+    // ensure websocket connected for streaming status
+    try { connectWebSocket(); } catch (eWs0) {}
+
+    if (ta) ta.value = '';
+    const sid0 = String(__gmAiActiveSessionId || '').trim();
+    const rid0 = __gmGenReqId();
+    const turnUndoGid = sid0 ? ('ai-' + sid0 + '-' + rid0) : ('ai-' + rid0);
+    __gmAiActiveTurnUndoGroupId = turnUndoGid;
+
+    __gmAiChatMessages.push({ role: 'user', content: text, undo_gid: turnUndoGid });
+    // one bubble: pending assistant content will be updated via websocket
+    const pending = { role: 'assistant', content: '发送中...', pending: true, stage: 'sending' };
+    __gmAiChatMessages.push(pending);
+    __gmAiRenderChat();
+    try { __gmAiRefreshSendCounter(); } catch (eC0) {}
+
+    __gmAiIsResponding = true;
+    try { __gmAiSetSendButtonState(true); } catch (eB0) {}
+    try { await __gmAiSaveHistoryNow(); } catch (e0) {}
+
+    const ctxPkg = await __gmBuildAiSystemContext(text);
+    const dynCtx = (ctxPkg && typeof ctxPkg.dyn_context === 'string') ? String(ctxPkg.dyn_context || '') : '';
+    const ctxRefs = (ctxPkg && Array.isArray(ctxPkg.context_refs)) ? ctxPkg.context_refs : [];
+
+    const res = await api('/api/hivo_agent', {
+      method: 'POST',
+      body: JSON.stringify({
+        profile_id: pid,
+        session_id: __gmAiActiveSessionId,
+        user_text: text,
+        messages: __gmAiChatMessages,
+        dyn_context: dynCtx,
+        context_refs: ctxRefs,
+        undo_gid: turnUndoGid,
+        env_observation: '',
+      }),
+    });
+
+    if (!res || !res.ok || !res.run_id) {
+      const msg = (res && (res.msg || res.error)) ? String(res.msg || res.error) : '对话失败';
+      pending.pending = false;
+      pending.stage = 'error';
+      pending.content = msg;
+      __gmAiRenderChat();
+      __gmAiIsResponding = false;
+      try { __gmAiSetSendButtonState(false); } catch (eB2) {}
+      __gmAiActiveTurnUndoGroupId = '';
+      __gmToastApiError('对话失败', res, msg);
+      return;
+    }
+
+    // tag pending bubble with run_id so websocket can update it
+    pending.run_id = String(res.run_id || '');
+    pending.content = '思考中...';
+    pending.stage = 'thinking';
+    __gmAiRenderChat();
+    try { __gmAiRefreshSendCounter(); } catch (eC1) {}
+    try { await __gmAiSaveHistoryNow(); } catch (e1) {}
   }
   function __gmIndentBackspaceDelCount(beforeText, indentUnit) {
     try {
@@ -2778,7 +3071,6 @@ flex-shrink:0;cursor:pointer;
           if (Number.isFinite(Number(ln)) && Number(ln) > 0) lastLineByPath.set(String(window.__plainEditorFilename), Number(ln));
           return;
         }
-
       }
 
       if (curFile !== null && files && files[curFile] && files[curFile].path) {
@@ -3044,16 +3336,23 @@ flex-shrink:0;cursor:pointer;
   async function removeRecentFileByPath(path) {
     try {
       const p = String(path || '');
+      const norm = (s) => String(s || '').replace(/\\/g, '/').toLowerCase();
+      const pk = norm(p);
       const oldList = Array.isArray(recentFiles) ? recentFiles.slice() : [];
-      const oldIdx = oldList.findIndex(f => String((f && f.path) || '') === p);
+      const oldIdx = oldList.findIndex(f => norm((f && f.path) || '') === pk);
       const wasActiveExternal = (() => {
-        try { return !!(window.__plainEditorFilename && String(window.__plainEditorFilename) === p); } catch (e) { return false; }
+        try { return !!(window.__plainEditorFilename && norm(String(window.__plainEditorFilename)) === pk); } catch (e) { return false; }
       })();
       const wasActiveRepo = (() => {
-        try { return !!(curFile !== null && files && files[curFile] && String(files[curFile].path || '') === p); } catch (e) { return false; }
+        try {
+          if (curFile === null) return false;
+          // If file list refreshed and current index is invalid, still treat as active so close can work.
+          if (!files || !files[curFile]) return true;
+          return norm(String(files[curFile].path || '')) === pk;
+        } catch (e) { return false; }
       })();
 
-      recentFiles = oldList.filter(f => String((f && f.path) || '') !== p);
+      recentFiles = oldList.filter(f => norm((f && f.path) || '') !== pk);
       updateRecentFilesDropdown();
 
       const needSwitch = wasActiveExternal || wasActiveRepo;
@@ -8376,6 +8675,24 @@ flex-shrink:0;cursor:pointer;
         console.log('WebSocket 连接关闭');
         wsConnected = false;
         wsConnecting = false;
+        try {
+          if (__gmAiIsResponding) {
+            const msgs = Array.isArray(__gmAiChatMessages) ? __gmAiChatMessages : [];
+            const last = msgs.length ? msgs[msgs.length - 1] : null;
+            if (last && String(last.role || '') === 'assistant' && last.pending) {
+              last.pending = false;
+              last.stage = 'error';
+              if (!String(last.content || '').trim()) {
+                last.content = '连接中断（未完成）。可点击 Continue 继续。';
+              }
+              __gmAiIsResponding = false;
+              try { __gmAiSetSendButtonState(false); } catch (eB3) {}
+              try { __gmAiSetContinueState(true, 'ws_closed'); } catch (eC0) {}
+              try { __gmAiRenderChat(); } catch (eR0) {}
+              try { __gmAiSaveHistoryNow(); } catch (eH0) {}
+            }
+          }
+        } catch (e0) {}
         // 5秒后尝试重连
         __gmWsScheduleReconnect();
       };
@@ -8403,6 +8720,93 @@ flex-shrink:0;cursor:pointer;
 
       case 'pong':
         // 心跳响应
+        break;
+
+      case 'ai_agent_status':
+        try {
+          const runId = String(data.run_id || '');
+          if (!runId) break;
+          for (let i = __gmAiChatMessages.length - 1; i >= 0; i--) {
+            const m = __gmAiChatMessages[i];
+            if (m && m.role === 'assistant' && m.pending && String(m.run_id || '') === runId) {
+              const stage = String(data.stage || '');
+              m.stage = stage;
+              const msg = String(data.message || '');
+              if (msg) m.content = __gmAiNormalizePendingStatusText(msg);
+              __gmAiRenderChat();
+              try { __gmAiRefreshSendCounter(); } catch (eC2) {}
+              break;
+            }
+          }
+        } catch (eS) {}
+        break;
+
+      case 'ai_agent_final':
+        try {
+          const runId = String(data.run_id || '');
+          if (!runId) break;
+          for (let i = __gmAiChatMessages.length - 1; i >= 0; i--) {
+            const m = __gmAiChatMessages[i];
+            if (m && m.role === 'assistant' && m.pending && String(m.run_id || '') === runId) {
+              m.pending = false;
+              m.stage = (data.ok === false) ? 'error' : 'done';
+              m.content = String(data.content || '');
+              __gmAiRenderChat();
+              try { __gmAiRefreshSendCounter(); } catch (eC3) {}
+              __gmAiIsResponding = false;
+              try { __gmAiSetSendButtonState(false); } catch (eB3) {}
+              __gmAiActiveTurnUndoGroupId = '';
+              try { __gmAiSaveHistoryNow(); } catch (eH2) {}
+              try {
+                if (data && (data.can_continue === true || data.continue === true)) {
+                  const rr = String(data.continue_reason || data.reason || '');
+                  __gmAiSetContinueState(true, rr || 'server');
+                }
+              } catch (eCt) {}
+              break;
+            }
+          }
+        } catch (eF) {}
+        break;
+
+      case 'open_file':
+        try {
+          const f = (data && typeof data === 'object') ? data.file : null;
+          const path = String(f && (f.path || '') || '');
+          const view = String(f && (f.view || '') || 'editor').toLowerCase();
+          const content = String(f && (f.content || '') || '');
+
+          if (!path) break;
+
+          // If the file is present in changed files list, we can drive diff view.
+          let idxInFiles = -1;
+          try {
+            idxInFiles = (files || []).findIndex(ff => String((ff && ff.path) || '') === path);
+          } catch (e2) { idxInFiles = -1; }
+
+          if (view === 'split' || view === 'change' || view === 'unified') {
+            if (idxInFiles >= 0) {
+              try {
+                if (view === 'split') {
+                  diffMode = 'split';
+                  const t1 = document.getElementById('dtSplit');
+                  if (t1) setDiffMode('split', t1);
+                  else { diffMode = 'split'; if (curFile !== null) loadDiff(curFile); }
+                } else {
+                  diffMode = 'unified';
+                  const t2 = document.getElementById('dtUnified');
+                  if (t2) setDiffMode('unified', t2);
+                  else { diffMode = 'unified'; if (curFile !== null) loadDiff(curFile); }
+                }
+              } catch (e3) {}
+              try { selectFile(idxInFiles); } catch (e4) {}
+              break;
+            }
+            // Not a changed file -> cannot render diff reliably; fallback to editor view.
+          }
+
+          try { openFileInEditor(path, content, false, null); } catch (e5) {}
+        } catch (eOF) {}
         break;
 
       default:
@@ -8559,11 +8963,144 @@ flex-shrink:0;cursor:pointer;
   let __gmAiEditingProfileId = '';
   let __gmAiActiveTurnUndoGroupId = '';
   let __gmAiCapabilitiesText = '';
+  let __gmAiCapabilitiesSpec = null;
   let __gmAiSessions = [];
   let __gmAiActiveSessionId = '';
+  let __gmAiEphemeralSessionPrefix = '__local__';
+  let __gmAiModels = [];
+  let __gmAiModelsMeta = { base_url: '', api_key: '' };
+  let __gmAiModelRefreshTimer = 0;
+  let __gmAiModelSuggestVisible = false;
+  let __gmAiModelSuggestIndex = -1;
+  let __gmAiModelSuggestCloseTimer = 0;
   let __gmAiIsResponding = false;
-  let __gmAiChatAbortController = null;
   let __gmAiLastUndoSteps = 0;
+  let __gmAiContinueState = { on: false, reason: '' };
+  let __gmAiNextSendIsContinue = false;
+  let __gmAiDraftPersistTimer = 0;
+
+  function __gmAiDraftStorageKey(profileId, sessionId) {
+    try {
+      const pid = String(profileId || '').trim();
+      const sid = String(sessionId || '').trim();
+      if (!pid || !sid) return '';
+      return `gm_ai_input_draft:${pid}:${sid}`;
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function __gmAiPersistDraftForActiveSession() {
+    try {
+      const ta = document.getElementById('aiChatInput');
+      if (!ta) return;
+      const pid = String(__gmAiSelectedProfileId || __gmAiConfig.active_profile_id || '').trim();
+      const sid = String(__gmAiActiveSessionId || '').trim();
+      const k = __gmAiDraftStorageKey(pid, sid);
+      if (!k) return;
+      // Draft should NOT be persisted. Clean legacy persisted value if any.
+      try { localStorage.removeItem(k); } catch (e2) {}
+    } catch (e) {}
+  }
+
+  function __gmAiRestoreDraftForActiveSession() {
+    try {
+      const ta = document.getElementById('aiChatInput');
+      if (!ta) return;
+      // Draft should NOT be restored across reloads/sessions.
+      ta.value = '';
+    } catch (e) {}
+  }
+
+  function __gmAiSchedulePersistDraft() {
+    try {
+      if (__gmAiDraftPersistTimer) clearTimeout(__gmAiDraftPersistTimer);
+      // Draft should NOT be persisted. Keep as no-op (still clears pending timers).
+      __gmAiDraftPersistTimer = 0;
+    } catch (e) {}
+  }
+
+  function __gmAiContinueStorageKey(profileId, sessionId) {
+    try {
+      const pid = String(profileId || '').trim();
+      const sid = String(sessionId || '').trim();
+      if (!pid || !sid) return '';
+      return `gm_ai_continue_state:${pid}:${sid}`;
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function __gmAiPersistContinueState() {
+    try {
+      const pid = String(__gmAiSelectedProfileId || __gmAiConfig.active_profile_id || '').trim();
+      const sid = String(__gmAiActiveSessionId || '').trim();
+      const k = __gmAiContinueStorageKey(pid, sid);
+      if (!k) return;
+      const payload = {
+        on: Boolean(__gmAiContinueState && __gmAiContinueState.on),
+        reason: String((__gmAiContinueState && __gmAiContinueState.reason) || ''),
+      };
+      localStorage.setItem(k, JSON.stringify(payload));
+    } catch (e) {}
+  }
+
+  function __gmAiClearPersistedContinueState(profileId, sessionId) {
+    try {
+      const pid = String(profileId || __gmAiSelectedProfileId || __gmAiConfig.active_profile_id || '').trim();
+      const sid = String(sessionId || __gmAiActiveSessionId || '').trim();
+      const k = __gmAiContinueStorageKey(pid, sid);
+      if (!k) return;
+      localStorage.removeItem(k);
+    } catch (e) {}
+  }
+
+  function __gmAiRestoreContinueStateForActiveSession() {
+    try {
+      const pid = String(__gmAiSelectedProfileId || __gmAiConfig.active_profile_id || '').trim();
+      const sid = String(__gmAiActiveSessionId || '').trim();
+      const k = __gmAiContinueStorageKey(pid, sid);
+      if (!k) return;
+      const raw = localStorage.getItem(k);
+      if (!raw) return;
+      const obj = JSON.parse(raw || '{}') || {};
+      const on = Boolean(obj.on);
+      const reason = String(obj.reason || '');
+      if (!on) return;
+      const msgs = Array.isArray(__gmAiChatMessages) ? __gmAiChatMessages : [];
+      if (!msgs.length) return;
+      __gmAiSetContinueState(true, reason);
+    } catch (e) {}
+  }
+
+  function __gmAiSetContinueState(on, reason) {
+    try {
+      __gmAiContinueState = { on: Boolean(on), reason: String(reason || '') };
+      const btn = document.getElementById('aiContinueBtn');
+      if (!btn) return;
+      if (__gmAiContinueState.on) btn.classList.add('is-show');
+      else btn.classList.remove('is-show');
+      try {
+        if (__gmAiContinueState.on) __gmAiPersistContinueState();
+        else __gmAiClearPersistedContinueState();
+      } catch (e2) {}
+    } catch (e) {}
+  }
+
+  function aiContinue() {
+    try {
+      if (__gmAiIsResponding) return;
+      try { __gmAiSetContinueState(false, ''); } catch (e0) {}
+      __gmAiNextSendIsContinue = true;
+      const ta = document.getElementById('aiChatInput');
+      if (ta) {
+        ta.value = '继续上次未完成的步骤：请基于当前会话上下文与工具回执，从失败点继续执行剩余任务。';
+        try { __gmAiSchedulePersistDraft(); } catch (e0s) {}
+        try { ta.focus(); } catch (e0) {}
+      }
+      sendAiChat();
+    } catch (e) {}
+  }
 
   function __gmAiSetSendButtonState(isResponding) {
     try {
@@ -8587,21 +9124,34 @@ flex-shrink:0;cursor:pointer;
       __gmAiIsResponding = false;
       try { __gmAiSetSendButtonState(false); } catch (e0) {}
       try {
-        if (__gmAiChatAbortController) {
-          __gmAiChatAbortController.abort();
+        const msgs = Array.isArray(__gmAiChatMessages) ? __gmAiChatMessages : [];
+        const last = msgs.length ? msgs[msgs.length - 1] : null;
+        if (last && String(last.role || '') === 'assistant' && last.pending) {
+          last.pending = false;
+          last.stage = 'error';
+          last.content = '已中断（后台任务仍可能继续执行；可等待完成或重新发起）';
+          __gmAiRenderChat();
         }
       } catch (e1) {}
-      __gmAiChatAbortController = null;
-      try { toast('已中断', 'ok'); } catch (e2) {}
+      try { __gmAiSetContinueState(true, 'aborted'); } catch (eC0) {}
+      try { toast('已中断（仅停止前端等待）', 'ok'); } catch (e2) {}
     } catch (e) {}
   }
 
   async function __gmAiLoadCapabilitiesOnce(force=false) {
     try {
-      if (!force && __gmAiCapabilitiesText) return;
+      if (!force && (__gmAiCapabilitiesText || __gmAiCapabilitiesSpec)) return;
       const r = await GET('/api/capabilities');
       if (r && r.ok && typeof r.text === 'string' && String(r.text || '').trim()) {
         __gmAiCapabilitiesText = String(r.text || '').trim();
+      }
+      if (r && r.ok && r.endpoints && r.agent_tools) {
+        __gmAiCapabilitiesSpec = {
+          version: String(r.version || ''),
+          generated_at: String(r.generated_at || ''),
+          endpoints: Array.isArray(r.endpoints) ? r.endpoints : [],
+          agent_tools: Array.isArray(r.agent_tools) ? r.agent_tools : [],
+        };
       }
     } catch (e) {}
   }
@@ -8635,21 +9185,22 @@ flex-shrink:0;cursor:pointer;
   }
 
   function __gmAiRenderModelMenu() {
-    const el = __gmAiEnsureModelMenu();
-    const profiles = Array.isArray(__gmAiConfig.profiles) ? __gmAiConfig.profiles : [];
-    const active = String(__gmAiSelectedProfileId || __gmAiConfig.active_profile_id || '');
-    const items = [];
-    profiles.forEach(p => {
-      const id = String(p && p.id || '');
-      if (!id) return;
-      const model = String((p.model || p.name || 'Model') || '');
-      const nm = __gmAiPrettyModelName(model) || model;
-      const cls = 'ai-model-mi' + (id === active ? ' active' : '');
-      items.push(`<div class="${cls}" onclick="selectAiProfile('${esc(id)}')"><div class="nm">${esc(nm)}</div><div class="sub"></div></div>`);
-    });
-    items.push('<div class="ai-model-sep"></div>');
-    items.push('<div class="ai-model-mi" onclick="showAiConfigPanel()"><div class="nm">打开模型配置</div><div class="sub">管理</div></div>');
-    el.innerHTML = items.join('');
+    try {
+      const el = __gmAiEnsureModelMenu();
+      const profiles = Array.isArray(__gmAiConfig.profiles) ? __gmAiConfig.profiles : [];
+      const act = String(__gmAiConfig.active_profile_id || '');
+      const items = [];
+      profiles.forEach(p => {
+        const id = String(p && p.id || '');
+        if (!id) return;
+        const nm = String(p && p.name || id);
+        const cls = 'ai-model-mi' + (id === act ? ' selected' : '');
+        items.push(`<div class="${cls}" onclick="selectAiProfile('${esc(id)}')"><div class="nm">${esc(nm)}</div><div class="sub"></div></div>`);
+      });
+      items.push('<div class="ai-model-sep"></div>');
+      items.push('<div class="ai-model-mi" onclick="closeAiModelMenu();showAiConfigPanel()"><div class="nm">打开模型配置</div><div class="sub">管理</div></div>');
+      el.innerHTML = items.join('');
+    } catch (e) {}
   }
 
   function __gmAiGetChatPanelWidth() {
@@ -8723,7 +9274,6 @@ flex-shrink:0;cursor:pointer;
     __gmAiConfig.active_profile_id = pid;
     __gmAiRenderProfileModelName();
     try { await POST('/api/ai_config', { config: __gmAiConfig }); } catch (e) {}
-    try { await loadAiChatHistory(pid); } catch (e) {}
   }
 
   function __gmAiRenderChat() {
@@ -8767,14 +9317,23 @@ flex-shrink:0;cursor:pointer;
         const m = __gmAiChatMessages[idx];
         const role = String(m && m.role ? m.role : '');
         const content = String(m && m.content ? m.content : '');
+        const isHidden = Boolean(m && m.hidden);
         const isUser = role === 'user';
         const isPending = Boolean(m && m.pending);
         const userLoading = Boolean(isUser && lastIsPendingAssistant && idx === lastUserIdx);
-        const sig = `${role}|${isPending ? 1 : 0}|${userLoading ? 1 : 0}|${content}`;
+        const sig = `${role}|${isPending ? 1 : 0}|${userLoading ? 1 : 0}|${isHidden ? 1 : 0}|${content}`;
         nextCache.push(sig);
 
         const prevSig = prevCache[idx];
         const node = ensureNode(idx);
+        try { node.style.display = isHidden ? 'none' : ''; } catch (e0d) {}
+        if (isHidden) {
+          if (prevSig !== sig) {
+            node.className = 'ai-msg ' + (isUser ? 'user' : 'assistant');
+            node.innerHTML = '';
+          }
+          continue;
+        }
         if (prevSig === sig) {
           if (node.className !== ('ai-msg ' + (isUser ? 'user' : 'assistant'))) {
             node.className = 'ai-msg ' + (isUser ? 'user' : 'assistant');
@@ -8783,7 +9342,7 @@ flex-shrink:0;cursor:pointer;
         }
 
         node.className = 'ai-msg ' + (isUser ? 'user' : 'assistant');
-        node.innerHTML = `<div class="ai-meta">${esc(isUser ? '你' : 'AI')}</div><div class="ai-bubble${userLoading ? ' user-loading' : ''}${isPending ? ' pending' : ''}"><div class="ai-msg-actions"><button title="删除" onclick="aiDeleteMsg(${idx})">×</button></div><div class="ai-md">${isPending ? '' : aiRenderMarkdown(content)}</div></div>`;
+        node.innerHTML = `<div class="ai-meta">${esc(isUser ? '你' : 'AI')}</div><div class="ai-bubble${userLoading ? ' user-loading' : ''}${isPending ? ' pending' : ''}"><div class="ai-msg-actions"><button title="删除" onclick="aiDeleteMsg(${idx})">×</button></div><div class="ai-md">${isPending ? esc(content) : aiRenderMarkdown(content)}</div></div>`;
       }
 
       for (let i = children.length - 1; i >= len; i--) {
@@ -8799,7 +9358,15 @@ flex-shrink:0;cursor:pointer;
     try {
       const pid = String(__gmAiSelectedProfileId || __gmAiConfig.active_profile_id || '');
       if (!pid) return;
-      const h = await POST('/api/ai_chat_history', { profile_id: pid, session_id: __gmAiActiveSessionId, messages: __gmAiChatMessages });
+      const msgsToSave = (() => {
+        try {
+          const base = Array.isArray(__gmAiChatMessages) ? __gmAiChatMessages : [];
+          return base.filter(m => !(m && m.hidden));
+        } catch (e) {
+          return __gmAiChatMessages;
+        }
+      })();
+      const h = await POST('/api/ai_chat_history', { profile_id: pid, session_id: __gmAiActiveSessionId, messages: msgsToSave });
       if (h && h.ok) {
         if (Array.isArray(h.sessions)) __gmAiSessions = h.sessions;
         if (h.active_session_id) __gmAiActiveSessionId = String(h.active_session_id || '');
@@ -8812,38 +9379,51 @@ flex-shrink:0;cursor:pointer;
     }
   }
 
+  function __gmAiCountTurnsFromMessages() {
+    try {
+      const base = Array.isArray(__gmAiChatMessages) ? __gmAiChatMessages : [];
+      let userCount = 0;
+      const set = new Set();
+      let hasAnyGid = false;
+      for (const m of base) {
+        if (!m || String(m.role || '') !== 'user') continue;
+        userCount++;
+        const gid = String(m.undo_gid || '').trim();
+        if (!gid) continue;
+        hasAnyGid = true;
+        set.add(gid);
+      }
+      if (!hasAnyGid) return userCount;
+      const gidCount = set.size;
+      return Math.max(userCount, gidCount);
+    } catch (e) {
+      return 0;
+    }
+  }
+
   function __gmAiRefreshSendCounter() {
     try {
       const el = document.getElementById('aiSendCounter');
       if (!el) return;
-      let turns = 0;
-      try {
-        const base = Array.isArray(__gmAiChatMessages) ? __gmAiChatMessages : [];
-        for (const m of base) {
-          if (m && String(m.role || '') === 'user') turns++;
-        }
-      } catch (e0) { turns = 0; }
-
       const steps0 = Number(__gmAiLastUndoSteps) || 0;
-      el.textContent = `${steps0}/${turns}`;
+      const turns0 = __gmAiCountTurnsFromMessages();
+      const turnsShown0 = Math.max(turns0, steps0);
+      el.textContent = `${steps0}/${turnsShown0}`;
       el.title = 'UndoSteps/Turns';
       el.style.display = 'inline-flex';
 
       try {
-        GET('/api/undo_stats').then((res) => {
+        const sid = String(__gmAiActiveSessionId || '').trim();
+        const url = '/api/undo_stats' + (sid ? ('?session_id=' + encodeURIComponent(sid)) : '');
+        GET(url).then((res) => {
           try {
-            const steps = Number(res && (res.undo_steps !== undefined ? res.undo_steps : (res.data && res.data.undo_steps))) || 0;
+            const steps = Number(res && (res.session_undo_steps !== undefined ? res.session_undo_steps : 0)) || 0;
             __gmAiLastUndoSteps = steps;
             const el2 = document.getElementById('aiSendCounter');
             if (!el2) return;
-            let turns2 = 0;
-            try {
-              const base = Array.isArray(__gmAiChatMessages) ? __gmAiChatMessages : [];
-              for (const m of base) {
-                if (m && String(m.role || '') === 'user') turns2++;
-              }
-            } catch (e2) { turns2 = turns; }
-            el2.textContent = `${steps}/${turns2}`;
+            const turns2 = __gmAiCountTurnsFromMessages();
+            const turnsShown2 = Math.max(turns2, steps);
+            el2.textContent = `${steps}/${turnsShown2}`;
           } catch (e3) {}
         }).catch(()=>{});
       } catch (e1) {}
@@ -8864,6 +9444,13 @@ flex-shrink:0;cursor:pointer;
 
   async function aiUndoLastTurn() {
     try {
+      // If currently waiting for a response, stop waiting first; then undo that active turn.
+      try {
+        if (__gmAiIsResponding) {
+          __gmAiStopResponding();
+        }
+      } catch (eS0) {}
+
       if (!Array.isArray(__gmAiChatMessages) || !__gmAiChatMessages.length) return;
       const msgs = __gmAiChatMessages;
       let lastUser = -1;
@@ -8873,46 +9460,65 @@ flex-shrink:0;cursor:pointer;
       }
       if (lastUser < 0) return;
 
-      const undoGidForTurn = String((msgs[lastUser] && msgs[lastUser].undo_gid) || '').trim();
+      let undoGidForTurn = '';
+      try {
+        undoGidForTurn = String(__gmAiActiveTurnUndoGroupId || '').trim();
+      } catch (eG0) { undoGidForTurn = ''; }
+      if (!undoGidForTurn) {
+        undoGidForTurn = String((msgs[lastUser] && msgs[lastUser].undo_gid) || '').trim();
+      }
 
       let undoOk = false;
+      let undoNoop = false;
       try {
         if (undoGidForTurn) {
           const u = await POST('/api/undo', { group_id: undoGidForTurn });
+          const m = String((u && (u.msg || u.error)) || '');
           undoOk = Boolean(u && u.ok);
-          if (!undoOk) {
-            const m = String((u && (u.msg || u.error)) || '无可撤销操作');
-            if (m && m.indexOf('无可撤销') < 0) toast('撤销失败：' + m, 'err');
+          undoNoop = (!undoOk) && (m.indexOf('无可撤销') >= 0);
+          if (!undoOk && !undoNoop) {
+            toast('撤销失败：' + (m || '撤销失败'), 'err');
           }
         }
       } catch (eU) {}
 
-      try {
-        const next = msgs[lastUser + 1] || null;
-        if (next && String(next.role || '') === 'assistant' && next.pending) {
-          msgs.splice(lastUser + 1, 1);
-        }
-      } catch (e0) {}
-      const lastUserText = String(msgs[lastUser] && msgs[lastUser].content || '');
-      msgs.splice(lastUser);
-      __gmAiRenderChat();
-      __gmAiSaveHistoryNow();
-      try {
-        const ta = document.getElementById('aiChatInput');
-        if (ta) {
-          ta.value = lastUserText;
-          ta.focus();
-          try { ta.setSelectionRange(ta.value.length, ta.value.length); } catch (e2) {}
-          try { __gmAiUpdateMentionMenu(); } catch (e3) {}
-        }
-      } catch (e4) {}
-      if (undoOk) {
-        try { toast('✓ 已撤销上一轮数据操作', 'ok'); } catch (eT) {}
+      // Even if there is no data undo available, still allow reverting the chat turn.
+      if (!undoGidForTurn) {
+        undoOk = true;
       }
-      try {
-        if (undoGidForTurn && String(__gmAiActiveTurnUndoGroupId || '') === undoGidForTurn) __gmAiActiveTurnUndoGroupId = '';
-      } catch (eG0) {}
-      try { await __gmAiRefreshSendCounter(); } catch (eC) {}
+      if (undoOk || undoNoop) {
+        try {
+          const next = msgs[lastUser + 1] || null;
+          if (next && String(next.role || '') === 'assistant' && next.pending) {
+            msgs.splice(lastUser + 1, 1);
+          }
+        } catch (e0) {}
+        const lastUserText = String(msgs[lastUser] && msgs[lastUser].content || '');
+        msgs.splice(lastUser);
+        __gmAiRenderChat();
+        __gmAiSaveHistoryNow();
+        try {
+          if (!__gmAiChatMessages.length) __gmAiLastUndoSteps = 0;
+          __gmAiRefreshSendCounter();
+        } catch (eCs) {}
+        try {
+          const ta = document.getElementById('aiChatInput');
+          if (ta) {
+            ta.value = lastUserText;
+            ta.focus();
+            try { ta.setSelectionRange(ta.value.length, ta.value.length); } catch (e2) {}
+            try { __gmAiUpdateMentionMenu(); } catch (e3) {}
+          }
+        } catch (e3) {}
+        try {
+          if (undoGidForTurn && !undoNoop) toast('✓ 已撤销上一轮数据操作', 'ok');
+        } catch (eT) {}
+        try {
+          if (undoGidForTurn && String(__gmAiActiveTurnUndoGroupId || '') === undoGidForTurn) __gmAiActiveTurnUndoGroupId = '';
+        } catch (eG0) {}
+      }
+
+      try { __gmAiRefreshSendCounter(); } catch (eC) {}
     } catch (e) {}
   }
 
@@ -8951,710 +9557,10 @@ flex-shrink:0;cursor:pointer;
           }
         }
       }
-    } catch (e) {}
+    } catch (e) {
+      return null;
+    }
     return null;
-  }
-
-  let __gmAiLastToolRaw = '';
-  let __gmAiLastToolAt = 0;
-
-  const __gmAiIdempotencyCache = new Map();
-  const __gmAiRecentExecSummaries = [];
-
-  function __gmAiStableHash(str) {
-    try {
-      const s = String(str || '');
-      let h = 2166136261;
-      for (let i = 0; i < s.length; i++) {
-        h ^= s.charCodeAt(i);
-        h = Math.imul(h, 16777619);
-      }
-      return (h >>> 0).toString(16);
-    } catch (e) {
-      return String(Date.now());
-    }
-  }
-
-  function __gmAiBuildIdempotencyKey(type, obj) {
-    try {
-      const t = String(type || '').trim();
-      const sid = String((window.__gmAiActiveSessionId !== undefined ? window.__gmAiActiveSessionId : (__gmAiActiveSessionId || '')) || '').trim();
-      const p0 = (obj && (obj.path || obj.name)) ? String(obj.path || obj.name || '') : '';
-      const p = String(p0 || '').replace(/^@/, '').trim();
-      const c = (obj && (obj.content !== undefined && obj.content !== null)) ? String(obj.content) : '';
-      const core = `${sid}|${t}|${p}|${__gmAiStableHash(c)}`;
-      return 'ai:' + __gmAiStableHash(core) + ':' + __gmAiStableHash(core + '2');
-    } catch (e) {
-      return 'ai:' + String(Date.now());
-    }
-  }
-
-  function __gmAiPushExecSummary(text) {
-    try {
-      const s = String(text || '').trim();
-      if (!s) return;
-      __gmAiRecentExecSummaries.unshift(s);
-      if (__gmAiRecentExecSummaries.length > 6) __gmAiRecentExecSummaries.length = 6;
-    } catch (e) {}
-  }
-
-  function __gmAiExtractFirstToolJson(text) {
-    try {
-      const s = String(text || '');
-      if (!s) return null;
-      const allow = new Set([
-        'save_file', 'update_file', 'delete_file', 'api_request', 'open_file', 'revert_file',
-        'stage_file', 'commit', 'pull', 'push', 'stash_and_pull', 'commit_and_pull',
-        'switch_branch', 'stash_and_switch', 'commit_and_switch', 'stash_pop',
-        'run_cmd', 'verify_python', 'search_code', 'read_file_range', 'list_dir_tree'
-      ]);
-
-      const normalizeJsonText = (raw) => {
-        try {
-          const s0 = String(raw || '');
-          if (!s0) return s0;
-          let out = '';
-          let inStr = false;
-          let esc = false;
-          for (let i = 0; i < s0.length; i++) {
-            const ch = s0[i];
-            if (inStr) {
-              if (esc) { out += ch; esc = false; continue; }
-              if (ch === '\\') { out += ch; esc = true; continue; }
-              if (ch === '"') { out += ch; inStr = false; continue; }
-              if (ch === '\r') { out += '\\n'; continue; }
-              if (ch === '\n') { out += '\\n'; continue; }
-              out += ch;
-              continue;
-            }
-            if (ch === '"') { out += ch; inStr = true; continue; }
-            if (ch === '\r') continue;
-            out += ch;
-          }
-          return out;
-        } catch (e) {
-          return String(raw || '');
-        }
-      };
-
-      const tryParseToolJson = (raw) => {
-        try {
-          const obj = JSON.parse(normalizeJsonText(raw));
-          return obj;
-        } catch (e0) {}
-        try {
-          const t = String(raw || '');
-          if (t.indexOf("'type'") < 0 && t.indexOf('"type"') < 0) return null;
-          let p = normalizeJsonText(t);
-          p = p.replace(/\,\s*([}\]])/g, '$1');
-          p = p.replace(/\s+/g, (m) => m);
-          p = p.replace(/'([^'\\]*(?:\\.[^'\\]*)*)'/g, (m, g1) => {
-            try {
-              const inner = String(g1 || '').replace(/\\"/g, '"');
-              const esc = inner.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-              return '"' + esc + '"';
-            } catch (e2) {
-              return m;
-            }
-          });
-          p = p.replace(/\"([^\"]+)\"\s*:\s*/g, (m) => m);
-          p = p.replace(/\b([A-Za-z_][A-Za-z0-9_]*)\s*:/g, (m, k1) => {
-            if (!k1) return m;
-            if (k1 === 'true' || k1 === 'false' || k1 === 'null') return m;
-            return '"' + k1 + '":';
-          });
-          const obj2 = JSON.parse(normalizeJsonText(p));
-          return obj2;
-        } catch (e1) {
-          return null;
-        }
-      };
-
-      for (let pos = 0; pos < s.length; pos++) {
-        const start = s.indexOf('{', pos);
-        if (start < 0) break;
-        let depth = 0;
-        let inStr = false;
-        let inStrSingle = false;
-        let esc0 = false;
-        for (let i = start; i < s.length; i++) {
-          const ch = s[i];
-          if (inStr || inStrSingle) {
-            if (esc0) { esc0 = false; continue; }
-            if (ch === '\\') { esc0 = true; continue; }
-            if (inStr && ch === '"') { inStr = false; continue; }
-            if (inStrSingle && ch === "'") { inStrSingle = false; continue; }
-            continue;
-          }
-          if (ch === '"') { inStr = true; continue; }
-          if (ch === "'") { inStrSingle = true; continue; }
-          if (ch === '{') depth++;
-          else if (ch === '}') {
-            depth--;
-            if (depth === 0) {
-              const raw = s.slice(start, i + 1);
-              try {
-                const obj = tryParseToolJson(raw);
-                if (!obj) { pos = i; break; }
-                const tp = String(obj && obj.type || '').trim();
-                if (tp && allow.has(tp)) {
-                  return { obj, raw, start, end: i + 1 };
-                }
-              } catch (e2) {}
-              pos = i;
-              break;
-            }
-          }
-        }
-        pos = start;
-      }
-    } catch (e) {}
-    return null;
-  }
-
-  function __gmAiExtractToolJsonList(text, maxCount) {
-    try {
-      const s = String(text || '');
-      if (!s) return [];
-      const out = [];
-      const maxN = Math.max(1, Math.min(20, Number(maxCount || 3) || 3));
-      let pos = 0;
-      while (pos < s.length && out.length < maxN) {
-        const hit = __gmAiExtractFirstToolJson(s.slice(pos));
-        if (!hit || !hit.obj) break;
-        const abs = {
-          obj: hit.obj,
-          raw: hit.raw,
-          start: pos + (hit.start || 0),
-          end: pos + (hit.end || 0),
-        };
-        out.push(abs);
-        pos = abs.end;
-      }
-      return out;
-    } catch (e) {
-      return [];
-    }
-  }
-
-  function __gmAiFormatApiRequestResult(method, path, body, res) {
-    try {
-      const ok = !!(res && res.ok);
-      const msg = String((res && (res.msg || res.error)) || (ok ? '操作成功' : '操作失败'));
-      const bodyObj = (body && typeof body === 'object') ? body : {};
-      const p0 = String(bodyObj.path || bodyObj.old_path || bodyObj.new_path || '').trim();
-
-      if (path === '/api/delete_file' && method === 'POST') {
-        return ok ? (`已完成：删除文件\n- ${p0 || '（未指定）'}`) : (`删除失败\n- 文件：${p0 || '（未指定）'}\n- 原因：${msg}`);
-      }
-      if (path === '/api/save_file' && method === 'POST') {
-        return ok ? (`已完成：保存文件\n- ${p0 || '（未指定）'}`) : (`保存失败\n- 文件：${p0 || '（未指定）'}\n- 原因：${msg}`);
-      }
-      if (path === '/api/rename_file' && method === 'POST') {
-        const op = String(bodyObj.old_path || '').trim();
-        const np = String(bodyObj.new_path || '').trim();
-        const label = (op && np) ? `${op} → ${np}` : (p0 || '（未指定）');
-        return ok ? (`已完成：重命名\n- ${label}`) : (`重命名失败\n- 操作：${label}\n- 原因：${msg}`);
-      }
-      if (path === '/api/revert_file' && method === 'POST') {
-        return ok ? (`已完成：撤回修改\n- ${p0 || '（未指定）'}`) : (`撤回失败\n- 文件：${p0 || '（未指定）'}\n- 原因：${msg}`);
-      }
-
-      return ok ? (`已完成：${msg}`) : (`操作失败\n- 原因：${msg}`);
-    } catch (e) {
-      return '操作失败\n- 原因：结果解析失败';
-    }
-  }
-
-  async function __gmAiTryHandleAgentToolCall(content) {
-    try {
-      const s = String(content || '');
-      if (!s) return { handled: false, content: s };
-
-      const hits = __gmAiExtractToolJsonList(s, 10);
-      if (!hits || !hits.length) {
-        const maybeTool = (s.indexOf('"type"') >= 0 || s.indexOf('{"type"') >= 0 || s.indexOf("{'type'") >= 0 || s.indexOf("\"type\"") >= 0)
-          && (s.indexOf('save_file') >= 0 || s.indexOf('update_file') >= 0 || s.indexOf('open_file') >= 0 || s.indexOf('api_request') >= 0
-            || s.indexOf('delete_file') >= 0 || s.indexOf('revert_file') >= 0 || s.indexOf('stage_file') >= 0 || s.indexOf('stash_pop') >= 0 || s.indexOf('switch_branch') >= 0
-            || s.indexOf('run_cmd') >= 0 || s.indexOf('verify_python') >= 0 || s.indexOf('search_code') >= 0 || s.indexOf('read_file_range') >= 0 || s.indexOf('list_dir_tree') >= 0);
-        if (maybeTool) return { handled: true, content: '操作失败\n- 原因：未能解析工具指令（请输出合法 JSON；一次回复最多 10 条指令；每个 JSON 独占一段）' };
-        return { handled: false, content: s };
-      }
-
-      const preface = s.slice(0, hits[0].start).trim();
-      const results = [];
-
-      const undoGid = String(__gmAiActiveTurnUndoGroupId || '').trim();
-      const postWithUndo = async (path, body, extraHeaders) => {
-        const h = Object.assign({}, (extraHeaders || {}));
-        if (undoGid) h['X-Undo-Group'] = undoGid;
-        const opts = Object.keys(h).length ? { headers: h } : {};
-        return POST(path, body, opts);
-      };
-
-      const execOne = async (hit) => {
-        if (!hit || !hit.obj) return '操作失败\n- 原因：工具指令为空';
-        if (hit.raw && __gmAiLastToolRaw && String(hit.raw) === String(__gmAiLastToolRaw)) {
-          const now = Date.now();
-          if (__gmAiLastToolAt && (now - __gmAiLastToolAt) < 500) {
-            return '操作已执行（重复指令已忽略）';
-          }
-        }
-        __gmAiLastToolRaw = String(hit.raw || '');
-        __gmAiLastToolAt = Date.now();
-
-        const toolType = String(hit.obj.type || '').trim();
-
-        const tracePrefix = (() => {
-          try {
-            const t = String(toolType || '').trim() || 'unknown';
-            const p = String((hit.obj && (hit.obj.path || hit.obj.name || hit.obj.old_path || hit.obj.new_path)) || '').trim();
-            return p ? (`[${t}] ${p}`) : (`[${t}]`);
-          } catch (e) {
-            return '[tool]';
-          }
-        })();
-
-        const isWriteTool = (toolType === 'save_file' || toolType === 'update_file' || toolType === 'delete_file' || toolType === 'rename_file' || toolType === 'revert_file');
-        const idemKey = isWriteTool ? __gmAiBuildIdempotencyKey(toolType, hit.obj) : '';
-        if (isWriteTool && idemKey) {
-          const prev = __gmAiIdempotencyCache.get(idemKey);
-          if (prev && typeof prev === 'string') {
-            return prev;
-          }
-        }
-
-        if (toolType === 'open_file') {
-          let nm = String(hit.obj.name || hit.obj.path || '').trim();
-          if (!nm) return 'open_file 失败：缺少 name';
-          if (nm.startsWith('@')) nm = nm.slice(1);
-          nm = nm.trim();
-          try {
-            const forceExternal = Boolean(hit.obj.external);
-            let view = String(hit.obj.view || 'editor').trim().toLowerCase();
-            try {
-              const v0 = view;
-              const v = v0.replace(/\s+/g, '');
-              const vDash = v0.replace(/\s+/g, '-');
-              if (v.indexOf('并排') >= 0 || v.indexOf('对比') >= 0 || v.indexOf('split') >= 0 || v.indexOf('side-by-side') >= 0
-                || v.indexOf('sidebyside') >= 0 || v.indexOf('side_by_side') >= 0 || vDash.indexOf('side-by-side') >= 0) {
-                view = 'split';
-              } else if (v.indexOf('单栏') >= 0 || v.indexOf('统一') >= 0 || v.indexOf('unified') >= 0) {
-                view = 'unified';
-              } else if (v.indexOf('变更') >= 0 || v.indexOf('diff') >= 0 || v.indexOf('change') >= 0) {
-                view = 'change';
-              } else if (v.indexOf('编辑') >= 0 || v.indexOf('editor') >= 0) {
-                view = 'editor';
-              }
-            } catch (eV) {}
-
-            const looksAbsolutePath = (() => {
-              try {
-                const p = String(nm || '').trim();
-                if (!p) return false;
-                if (/^[a-zA-Z]:[\\/]/.test(p)) return true;
-                if (p.startsWith('\\\\')) return true;
-                return false;
-              } catch (e) {
-                return false;
-              }
-            })();
-
-            const wantExternal = forceExternal || looksAbsolutePath;
-
-            if (wantExternal) {
-              return `打开失败：${nm}\n当前仅支持通过接口打开仓库内文件（方案1：统一走接口调度）；外部文件请先拖拽打开`;
-            }
-
-            const res = await POST('/api/open_file', { name: nm, view });
-            if (!(res && res.ok)) {
-              const em = String((res && (res.msg || res.error)) || '未找到文件');
-              return `打开失败：${nm}\n${em}`;
-            }
-            const pick = String(res.path || nm);
-            const view2 = String(res.view || view || 'editor');
-            const c = (res && typeof res.content === 'string') ? String(res.content || '') : '';
-
-            let idxInFiles = -1;
-            try {
-              idxInFiles = (files || []).findIndex(f0 => f0 && String(f0.path || '') === String(pick || ''));
-            } catch (eIdx) { idxInFiles = -1; }
-
-            if (idxInFiles >= 0 && (view2 === 'change' || view2 === 'split' || view2 === 'unified')) {
-              try {
-                if (view2 === 'unified') {
-                  const elU = document.getElementById('dtUnified');
-                  if (elU) setDiffMode('unified', elU);
-                  else diffMode = 'unified';
-                }
-                if (view2 === 'split') {
-                  const elS = document.getElementById('dtSplit');
-                  if (elS) setDiffMode('split', elS);
-                  else diffMode = 'split';
-                }
-              } catch (eDm) {}
-              try { await selectFile(idxInFiles); } catch (eSel) { return `打开失败：${pick}`; }
-              if (view2 === 'split') return `已打开并排对比视图：${pick}`;
-              if (view2 === 'unified') return `已打开单栏视图：${pick}`;
-              return `已打开变更视图：${pick}`;
-            }
-
-            try {
-              if (typeof openFileInEditor === 'function') {
-                openFileInEditor(String(pick || nm), c, false, null);
-                return `已打开并切换：${pick}`;
-              }
-            } catch (e1) {}
-
-            let c2 = c;
-            if (c2.length > 8000) c2 = c2.slice(0, 8000);
-            return `已打开：${pick}\n\n${c2}`;
-          } catch (e) {
-            return `open_file 执行失败：${nm}`;
-          }
-        }
-
-        if (toolType === 'api_request') {
-          const method = String(hit.obj.method || 'GET').toUpperCase();
-          const path = String(hit.obj.path || hit.obj.url || '').trim();
-          const body = (hit.obj.body && typeof hit.obj.body === 'object') ? hit.obj.body : (hit.obj.body || null);
-          if (!path) return 'api_request 失败：缺少 path';
-          if (method === 'POST') {
-            const res = await postWithUndo(path, body || {});
-            return __gmAiFormatApiResult(path, method, body || {}, res);
-          }
-          const res = await GET(path);
-          return __gmAiFormatApiResult(path, method, body || {}, res);
-        }
-
-        if (toolType === 'run_cmd') {
-          const cmd = String(hit.obj.cmd || hit.obj.command || '').trim();
-          if (!cmd) return `${tracePrefix}\nrun_cmd 失败：缺少 cmd`;
-          const timeout = Number(hit.obj.timeout || 30) || 30;
-          const cwd = (hit.obj.cwd === undefined || hit.obj.cwd === null) ? null : String(hit.obj.cwd || '');
-          try {
-            // Client-side guard (authoritative checks should also be done on server).
-            if (cmd.length > 4000) return `${tracePrefix}\nrun_cmd 失败：cmd 过长`;
-            if (/[\r\n]/.test(cmd)) return `${tracePrefix}\nrun_cmd 失败：不允许换行`;
-            if (/[<>|]/.test(cmd)) return `${tracePrefix}\nrun_cmd 失败：不允许重定向/管道符`;
-            if (/\&\&|\|\|/.test(cmd)) return `${tracePrefix}\nrun_cmd 失败：不允许复合命令`;
-            const res = await postWithUndo('/api/run_cmd', { cmd, timeout, cwd });
-            const ok = Boolean(res && res.ok);
-            const code = (res && res.exit_code !== undefined) ? Number(res.exit_code) : null;
-            const out = String((res && res.stdout) || '').trim();
-            const err = String((res && res.stderr) || '').trim();
-            let text = ok ? '已完成：执行命令' : '命令执行失败';
-            text = `${tracePrefix}\n` + text + `\n- cmd: ${cmd}`;
-            if (code !== null && Number.isFinite(code)) text += `\n- exit_code: ${code}`;
-            if (out) text += `\n\nstdout:\n${out}`;
-            if (err) text += `\n\nstderr:\n${err}`;
-            __gmAiPushExecSummary(`run_cmd -> ${ok ? 'ok' : 'fail'} (${cmd.slice(0, 64)})`);
-            return text;
-          } catch (e2) {
-            return `${tracePrefix}\nrun_cmd 执行失败：${cmd}`;
-          }
-        }
-
-        if (toolType === 'search_code') {
-          const query = String(hit.obj.query || hit.obj.q || '').trim();
-          if (!query) return 'search_code 失败：缺少 query';
-          const caseSensitive = Boolean(hit.obj.case_sensitive);
-          const maxResults = Number(hit.obj.max_results || 50) || 50;
-          try {
-            const pid = String(__gmAiSelectedProfileId || __gmAiConfig.active_profile_id || '');
-            const sid = String(__gmAiActiveSessionId || '');
-            const url = '/api/search_code?query=' + encodeURIComponent(query)
-              + '&case_sensitive=' + encodeURIComponent(caseSensitive ? '1' : '0')
-              + '&max_results=' + encodeURIComponent(String(maxResults))
-              + '&profile_id=' + encodeURIComponent(pid)
-              + '&session_id=' + encodeURIComponent(sid);
-            const res = await GET(url);
-            if (res && res.ok) {
-              return { ok: true, output: JSON.stringify(res.hits || [], null, 2) };
-            }
-            const hits = Array.isArray(res.hits) ? res.hits : [];
-            if (!hits.length) return `search_code\n- query: ${query}\n- 结果：0`;
-            const lines = hits.slice(0, 50).map(h => {
-              const p = String(h && h.path || '');
-              const ln = Number(h && h.line || 0) || 0;
-              const tx = String(h && h.text || '');
-              return `${p}:${ln}  ${tx}`;
-            });
-            return `search_code\n- query: ${query}\n- 结果：${hits.length}\n\n` + lines.join('\n');
-          } catch (e2) {
-            return 'search_code 执行失败：' + query;
-          }
-        }
-
-        if (toolType === 'read_file_range') {
-          let p0 = String(hit.obj.path || hit.obj.name || '').trim();
-          if (p0.startsWith('@')) p0 = p0.slice(1);
-          p0 = p0.trim();
-          if (!p0) return 'read_file_range 失败：缺少 path';
-          const start = Number(hit.obj.start || 1) || 1;
-          const end = Number(hit.obj.end || (start + 200)) || (start + 200);
-          try {
-            const url = '/api/read_file_range?path=' + encodeURIComponent(p0)
-              + '&start=' + encodeURIComponent(String(start))
-              + '&end=' + encodeURIComponent(String(end));
-            const res = await GET(url);
-            if (!(res && res.ok && res.data)) return 'read_file_range 失败：' + String((res && (res.msg || res.error)) || '读取失败');
-            const d = res.data;
-            const lines = Array.isArray(d.lines) ? d.lines : [];
-            const s0 = Number(d.start || start) || start;
-            const out = lines.map((t, i) => `${s0 + i}| ${String(t || '')}`).join('\n');
-            return `read_file_range\n- ${String(d.path || p0)}\n- 行：${s0}-${Number(d.end || end) || end}\n\n` + out;
-          } catch (e2) {
-            return `read_file_range 执行失败：${p0}`;
-          }
-        }
-
-        if (toolType === 'list_dir_tree') {
-          let p0 = String(hit.obj.path || hit.obj.dir || '').trim();
-          if (p0.startsWith('@')) p0 = p0.slice(1);
-          p0 = p0.trim();
-          const depth = Number(hit.obj.depth || 3) || 3;
-          const maxEntries = Number(hit.obj.max_entries || 500) || 500;
-          try {
-            const url = '/api/list_dir_tree?path=' + encodeURIComponent(p0)
-              + '&depth=' + encodeURIComponent(String(depth))
-              + '&max_entries=' + encodeURIComponent(String(maxEntries));
-            const res = await GET(url);
-            if (!(res && res.ok)) return 'list_dir_tree 失败：' + String((res && (res.msg || res.error)) || '生成失败');
-            const tree = String(res.tree || '').trim();
-            return `list_dir_tree\n- path: ${p0 || '.'}\n- depth: ${depth}\n\n` + (tree || '(empty)');
-          } catch (e2) {
-            return `list_dir_tree 执行失败：${p0 || '.'}`;
-          }
-        }
-
-        if (toolType === 'delete_file') {
-          let p0 = String(hit.obj.path || hit.obj.name || '').trim();
-          if (p0.startsWith('@')) p0 = p0.slice(1);
-          p0 = p0.trim();
-          if (!p0) return 'delete_file 失败：缺少 path';
-          try {
-            const res = await postWithUndo('/api/delete_file', { path: p0 }, idemKey ? { 'X-Idempotency-Key': idemKey } : null);
-            const ok = Boolean(res && res.ok);
-            const msg = String((res && (res.msg || res.error)) || (ok ? '删除成功' : '删除失败'));
-            const out = ok ? (`已完成：删除文件\n- ${p0}`) : (`删除失败\n- 文件：${p0}\n- 原因：${msg}`);
-            if (idemKey) __gmAiIdempotencyCache.set(idemKey, out);
-            __gmAiPushExecSummary(`delete_file ${p0} -> ${ok ? 'ok' : 'fail'}`);
-            return out;
-          } catch (e2) {
-            return `delete_file 执行失败：${p0}`;
-          }
-        }
-
-        if (toolType === 'verify_python') {
-          const ps = hit.obj && (hit.obj.paths || hit.obj.files);
-          const arr = Array.isArray(ps) ? ps : [];
-          const paths = arr.map(x => String(x || '').trim()).filter(Boolean).slice(0, 30);
-          try {
-            const res = await POST('/api/verify_python', { paths });
-            const ok = Boolean(res && res.ok);
-            let text = ok ? '✓ Python 语法检查通过' : 'Python 语法检查失败';
-            if (res && Array.isArray(res.files) && res.files.length) {
-              text += `\n- files: ${res.files.join(', ')}`;
-            }
-            const err = String((res && (res.error || res.msg)) || '').trim();
-            if (err) text += `\n- error: ${err}`;
-            return text;
-          } catch (e2) {
-            return `verify_python 执行失败`;
-          }
-        }
-
-        if (toolType === 'revert_file') {
-          let p0 = String(hit.obj.path || '').trim();
-          if (!p0) p0 = String(hit.obj.name || '').trim();
-          if (p0.startsWith('@')) p0 = p0.slice(1);
-          p0 = p0.trim();
-          if (!p0) return 'revert_file 失败：缺少 path';
-          const stRaw = String(hit.obj.status || hit.obj.kind || hit.obj.type2 || '').trim().toLowerCase();
-          const st = (stRaw === 'untracked' || stRaw === 'u') ? 'U' : 'M';
-          try {
-            const res = await postWithUndo('/api/revert_file', { path: p0, status: st }, idemKey ? { 'X-Idempotency-Key': idemKey } : null);
-            const ok = Boolean(res && res.ok);
-            const msg = String((res && (res.msg || res.error)) || (ok ? '撤回成功' : '撤回失败'));
-            const out = ok ? (`已撤回：${p0}`) : (`撤回失败：${p0}\n${msg}`);
-            if (idemKey) __gmAiIdempotencyCache.set(idemKey, out);
-            __gmAiPushExecSummary(`revert_file ${p0} -> ${ok ? 'ok' : 'fail'}`);
-            return out;
-          } catch (e2) {
-            return `revert_file 执行失败：${p0}`;
-          }
-        }
-
-        if (toolType === 'stage_file') {
-          let p0 = String(hit.obj.path || '').trim();
-          if (!p0) p0 = String(hit.obj.name || '').trim();
-          if (p0.startsWith('@')) p0 = p0.slice(1);
-          p0 = p0.trim();
-          if (!p0) return 'stage_file 失败：缺少 path';
-          try {
-            const res = await postWithUndo('/api/stage_file', { path: p0 });
-            if (res && res.ok) return `已暂存：${p0}`;
-            const msg = String((res && (res.error || res.msg)) || '暂存失败');
-            return `暂存失败：${p0}\n${msg}`;
-          } catch (e2) {
-            return `stage_file 执行失败：${p0}`;
-          }
-        }
-
-        if (toolType === 'commit') {
-          const message = String(hit.obj.message || '').trim();
-          const fs = hit.obj.files;
-          if (!message) return 'commit 失败：缺少 message';
-          const body = { message };
-          if (Array.isArray(fs)) body.files = fs;
-          try {
-            const res = await postWithUndo('/api/commit', body);
-            if (res && res.ok) {
-              const h = String(res.hash || res.full_hash || '').trim();
-              return h ? `提交成功：${h}` : '提交成功';
-            }
-            const msg = String((res && (res.error || res.msg)) || '提交失败');
-            return `提交失败\n${msg}`;
-          } catch (e2) {
-            return 'commit 执行失败';
-          }
-        }
-
-        if (toolType === 'pull') {
-          try {
-            const res = await postWithUndo('/api/pull', {});
-            let out = '';
-            try { out = JSON.stringify(res); } catch (e0) { out = String(res || ''); }
-            if (out.length > 6000) out = out.slice(0, 6000);
-            return `pull\n\n${out}`;
-          } catch (e2) {
-            return 'pull 执行失败';
-          }
-        }
-
-        if (toolType === 'push') {
-          try {
-            const res = await postWithUndo('/api/push', {});
-            let out = '';
-            try { out = JSON.stringify(res); } catch (e0) { out = String(res || ''); }
-            if (out.length > 6000) out = out.slice(0, 6000);
-            return `push\n\n${out}`;
-          } catch (e2) {
-            return 'push 执行失败';
-          }
-        }
-
-        if (toolType === 'stash_and_pull') {
-          try {
-            const res = await postWithUndo('/api/stash_and_pull', {});
-            let out = '';
-            try { out = JSON.stringify(res); } catch (e0) { out = String(res || ''); }
-            if (out.length > 6000) out = out.slice(0, 6000);
-            return `stash_and_pull\n\n${out}`;
-          } catch (e2) {
-            return 'stash_and_pull 执行失败';
-          }
-        }
-
-        if (toolType === 'commit_and_pull') {
-          const message = String(hit.obj.message || '').trim();
-          if (!message) return 'commit_and_pull 失败：缺少 message';
-          try {
-            const res = await postWithUndo('/api/commit_and_pull', { message });
-            let out = '';
-            try { out = JSON.stringify(res); } catch (e0) { out = String(res || ''); }
-            if (out.length > 6000) out = out.slice(0, 6000);
-            return `commit_and_pull\n\n${out}`;
-          } catch (e2) {
-            return 'commit_and_pull 执行失败';
-          }
-        }
-
-        if (toolType === 'switch_branch') {
-          const branch = String(hit.obj.branch || '').trim();
-          const detached = Boolean(hit.obj.detached);
-          if (!branch) return 'switch_branch 失败：缺少 branch';
-          try {
-            const res = await postWithUndo('/api/switch_branch', { branch, detached });
-            let out = '';
-            try { out = JSON.stringify(res); } catch (e0) { out = String(res || ''); }
-            if (out.length > 6000) out = out.slice(0, 6000);
-            return `switch_branch\n\n${out}`;
-          } catch (e2) {
-            return 'switch_branch 执行失败';
-          }
-        }
-
-        if (toolType === 'stash_and_switch') {
-          const branch = String(hit.obj.branch || '').trim();
-          if (!branch) return 'stash_and_switch 失败：缺少 branch';
-          try {
-            const res = await postWithUndo('/api/stash_and_switch', { branch });
-            let out = '';
-            try { out = JSON.stringify(res); } catch (e0) { out = String(res || ''); }
-            if (out.length > 6000) out = out.slice(0, 6000);
-            return `stash_and_switch\n\n${out}`;
-          } catch (e2) {
-            return 'stash_and_switch 执行失败';
-          }
-        }
-
-        if (toolType === 'commit_and_switch') {
-          const branch = String(hit.obj.branch || '').trim();
-          const message = String(hit.obj.message || '').trim();
-          if (!branch) return 'commit_and_switch 失败：缺少 branch';
-          if (!message) return 'commit_and_switch 失败：缺少 message';
-          try {
-            const res = await postWithUndo('/api/commit_and_switch', { branch, message });
-            let out = '';
-            try { out = JSON.stringify(res); } catch (e0) { out = String(res || ''); }
-            if (out.length > 6000) out = out.slice(0, 6000);
-            return `commit_and_switch\n\n${out}`;
-          } catch (e2) {
-            return 'commit_and_switch 执行失败';
-          }
-        }
-
-        if (toolType === 'stash_pop') {
-          try {
-            const res = await postWithUndo('/api/stash_pop', {});
-            let out = '';
-            try { out = JSON.stringify(res); } catch (e0) { out = String(res || ''); }
-            if (out.length > 6000) out = out.slice(0, 6000);
-            return `stash_pop\n\n${out}`;
-          } catch (e2) {
-            return 'stash_pop 执行失败';
-          }
-        }
-
-        // 默认：save_file / update_file（两者都走 /api/save_file）
-        let p = String(hit.obj.path || '').trim();
-        if (p.startsWith('@')) p = p.slice(1);
-        p = p.trim();
-        const c = (hit.obj.content === undefined || hit.obj.content === null) ? '' : String(hit.obj.content);
-        if (!p) return '保存失败\n- 原因：缺少 path';
-        const res = await postWithUndo('/api/save_file', { path: p, content: c }, idemKey ? { 'X-Idempotency-Key': idemKey } : null);
-        const ok = Boolean(res && res.ok);
-        const msg = String((res && (res.msg || res.error)) || (ok ? '保存成功' : '保存失败'));
-        const out = ok
-          ? (`已保存：${p}`)
-          : (`保存失败\n- 文件：${p}\n- 原因：${msg}`);
-        if (idemKey) __gmAiIdempotencyCache.set(idemKey, out);
-        __gmAiPushExecSummary(`save_file ${p} -> ${ok ? 'ok' : 'fail'}`);
-        return out;
-      };
-
-      for (const h of hits) {
-        const r = await execOne(h);
-        if (r) results.push(String(r));
-      }
-
-      const outText = (preface ? (preface + '\n\n') : '') + results.join('\n\n');
-      return { handled: true, content: outText.trim() };
-    } catch (e) {
-      return { handled: true, content: '操作失败\n- 原因：工具指令解析或执行异常' };
-    }
   }
 
   function __gmAiSanitizeAssistantContent(text) {
@@ -9666,6 +9572,14 @@ flex-shrink:0;cursor:pointer;
       s = s.replace(/<\|start_header_id\|>[^<]*<\|end_header_id\|>\s*/gi, '');
       s = s.replace(/<\|eot_id\|>\s*/gi, '');
       s = s.replace(/^\s*assistant\s*:\s*/i, '');
+
+      try {
+        const looksHtml = /<\s*(div|span|style|script|iframe|img|svg|link|meta|table|tr|td|th|ul|ol|li|h\d|p|br)\b/i.test(s);
+        if (looksHtml) {
+          s = s.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+      } catch (eH) {}
+
       return s.trim();
     } catch (e) {
       return String(text || '');
@@ -10439,7 +10353,10 @@ flex-shrink:0;cursor:pointer;
       const pid = String(__gmAiSelectedProfileId || __gmAiConfig.active_profile_id || '');
       if (!pid) return;
       const sessions = Array.isArray(__gmAiSessions) ? __gmAiSessions.slice() : [];
-      const ids = sessions.map(x => String(x && x.id || '')).filter(Boolean);
+      const ids = sessions
+        .map(x => String(x && x.id || ''))
+        .filter(Boolean)
+        .filter(id => !String(id || '').startsWith(__gmAiEphemeralSessionPrefix));
       await POST('/api/ai_sessions', { profile_id: pid, action: 'reorder', session_ids: ids });
     } catch (e) {}
     finally {
@@ -10508,7 +10425,159 @@ flex-shrink:0;cursor:pointer;
       if (key) key.value = String((p && p.api_key) || '');
       if (model) model.value = String((p && p.model) || '');
       if (del) del.style.display = (__gmAiEditingProfileId ? 'inline-flex' : 'none');
+      try { __gmAiScheduleRefreshModels(); } catch (e3) {}
     } catch (e) {}
+  }
+
+  function __gmAiNormalizeBaseUrl(u) {
+    try {
+      let s = String(u || '').trim();
+      if (!s) return '';
+      s = s.replace(/\s+/g, '');
+      if (s.endsWith('/')) s = s.replace(/\/+$/g, '');
+      return s;
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function __gmAiModelSuggestHide() {
+    try {
+      const el = document.getElementById('aiModelSuggest');
+      if (!el) return;
+      el.style.display = 'none';
+      el.innerHTML = '';
+      __gmAiModelSuggestVisible = false;
+      __gmAiModelSuggestIndex = -1;
+    } catch (e) {}
+  }
+
+  function __gmAiModelSuggestGetFilteredItems() {
+    try {
+      const modelEl = document.getElementById('aiModel');
+      const q = String((modelEl && modelEl.value) || '').trim().toLowerCase();
+      const items = Array.isArray(__gmAiModels) ? __gmAiModels : [];
+      if (!items.length) return [];
+      if (!q) return items.slice(0, 80);
+      const out = [];
+      for (let i = 0; i < items.length; i++) {
+        const v = String(items[i] || '').trim();
+        if (!v) continue;
+        if (v.toLowerCase().includes(q)) out.push(v);
+        if (out.length >= 80) break;
+      }
+      return out;
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function __gmAiModelSuggestReposition() {
+    try {
+      if (!__gmAiModelSuggestVisible) return;
+      const el = document.getElementById('aiModelSuggest');
+      const modelEl = document.getElementById('aiModel');
+      if (!el || !modelEl) return;
+      const r = modelEl.getBoundingClientRect();
+      el.style.left = Math.round(r.left) + 'px';
+      el.style.top = Math.round(r.bottom + 6) + 'px';
+      el.style.width = Math.round(r.width) + 'px';
+    } catch (e) {}
+  }
+
+  function __gmAiModelSuggestRender(forceOpen=false) {
+    try {
+      const el = document.getElementById('aiModelSuggest');
+      const modelEl = document.getElementById('aiModel');
+      if (!el || !modelEl) return;
+      const items = __gmAiModelSuggestGetFilteredItems();
+      if (!items.length) {
+        __gmAiModelSuggestHide();
+        return;
+      }
+      let idx = Number(__gmAiModelSuggestIndex || 0);
+      if (!(idx >= 0 && idx < items.length)) idx = 0;
+      __gmAiModelSuggestIndex = idx;
+
+      const rows = [];
+      for (let i = 0; i < items.length; i++) {
+        const v = String(items[i] || '').trim();
+        if (!v) continue;
+        const cls = (i === idx) ? 'it active' : 'it';
+        rows.push(`<div class="${cls}" data-idx="${i}">${esc(v)}</div>`);
+      }
+      el.innerHTML = rows.join('');
+
+      el.onmousedown = (ev) => {
+        try { if (ev) ev.preventDefault(); } catch (e0) {}
+      };
+      el.onclick = (ev) => {
+        try {
+          const t = ev && ev.target;
+          const it = t && t.closest ? t.closest('.it') : null;
+          if (!it) return;
+          const i = Number(it.getAttribute('data-idx') || -1);
+          const arr = __gmAiModelSuggestGetFilteredItems();
+          const pick = (i >= 0 && i < arr.length) ? String(arr[i] || '').trim() : '';
+          if (!pick) return;
+          modelEl.value = pick;
+          __gmAiModelSuggestHide();
+          try { __gmAiSyncEditingProfileFromEditor(); } catch (e1) {}
+        } catch (e2) {}
+      };
+
+      if (forceOpen || !__gmAiModelSuggestVisible) {
+        el.style.display = 'block';
+        __gmAiModelSuggestVisible = true;
+      }
+      __gmAiModelSuggestReposition();
+    } catch (e) {}
+  }
+
+  function __gmAiRenderModelSelect() {
+    try {
+      if (__gmAiModelSuggestVisible) __gmAiModelSuggestRender(false);
+    } catch (e) {}
+  }
+
+  function __gmAiScheduleRefreshModels() {
+    try {
+      if (__gmAiModelRefreshTimer) {
+        clearTimeout(__gmAiModelRefreshTimer);
+        __gmAiModelRefreshTimer = 0;
+      }
+      __gmAiModelRefreshTimer = setTimeout(() => {
+        __gmAiModelRefreshTimer = 0;
+        __gmAiRefreshModelsForEditingProfile().catch(()=>{});
+      }, 250);
+    } catch (e) {}
+  }
+
+  async function __gmAiRefreshModelsForEditingProfile(force=false) {
+    const baseEl = document.getElementById('aiProfBaseUrl');
+    const keyEl = document.getElementById('aiApiKey');
+    const base = __gmAiNormalizeBaseUrl(baseEl ? String(baseEl.value || '') : '');
+    const key = keyEl ? String(keyEl.value || '') : '';
+    if (!base) {
+      __gmAiModels = [];
+      __gmAiModelsMeta = { base_url: '', api_key: '' };
+      __gmAiRenderModelSelect();
+      return;
+    }
+    if (!force && __gmAiModelsMeta && __gmAiModelsMeta.base_url === base && __gmAiModelsMeta.api_key === (key ? '1' : '0')) {
+      __gmAiRenderModelSelect();
+      return;
+    }
+    const res = await POST('/api/ai_models', { base_url: base, api_key: key });
+    if (res && res.ok) {
+      __gmAiModels = Array.isArray(res.models) ? res.models : [];
+      __gmAiModelsMeta = { base_url: base, api_key: (key ? '1' : '0') };
+      __gmAiRenderModelSelect();
+      return;
+    }
+    __gmAiModels = [];
+    __gmAiModelsMeta = { base_url: base, api_key: (key ? '1' : '0') };
+    __gmAiRenderModelSelect();
   }
 
   function showAiChatPanel() {
@@ -10539,6 +10608,7 @@ flex-shrink:0;cursor:pointer;
       const btn = document.getElementById('aiPlusBtn');
       if (btn) btn.textContent = '×';
       __gmAiRenderProfileList();
+      try { __gmAiBindModelConfigEvents(); } catch (eB0) {}
       if (!__gmAiEditingProfileId) {
         const profiles = Array.isArray(__gmAiConfig.profiles) ? __gmAiConfig.profiles : [];
         if (profiles.length) {
@@ -10547,6 +10617,86 @@ flex-shrink:0;cursor:pointer;
         } else {
           __gmAiFillEditor(null);
         }
+      }
+    } catch (e) {}
+  }
+
+  function __gmAiBindModelConfigEvents() {
+    try {
+      const base = document.getElementById('aiProfBaseUrl');
+      const key = document.getElementById('aiApiKey');
+      const model = document.getElementById('aiModel');
+      if (base && !base.__gmAiModelBound) {
+        base.__gmAiModelBound = true;
+        base.addEventListener('input', () => { try { __gmAiScheduleRefreshModels(); } catch (e) {} });
+        base.addEventListener('change', () => { try { __gmAiScheduleRefreshModels(); } catch (e) {} });
+      }
+      if (key && !key.__gmAiModelBound) {
+        key.__gmAiModelBound = true;
+        key.addEventListener('input', () => { try { __gmAiScheduleRefreshModels(); } catch (e) {} });
+        key.addEventListener('change', () => { try { __gmAiScheduleRefreshModels(); } catch (e) {} });
+      }
+      if (model && !model.__gmAiModelBound) {
+        model.__gmAiModelBound = true;
+        model.addEventListener('focus', () => { try { __gmAiModelSuggestRender(true); } catch (e) {} });
+        model.addEventListener('click', () => { try { __gmAiModelSuggestRender(true); } catch (e) {} });
+        model.addEventListener('input', () => { try { __gmAiModelSuggestRender(true); } catch (e) {} });
+        model.addEventListener('keydown', (e) => {
+          try {
+            if (!__gmAiModelSuggestVisible) return;
+            const arr = __gmAiModelSuggestGetFilteredItems();
+            if (!arr.length) { __gmAiModelSuggestHide(); return; }
+            if (e.key === 'ArrowDown') {
+              e.preventDefault();
+              __gmAiModelSuggestIndex = Math.min(arr.length - 1, (__gmAiModelSuggestIndex || 0) + 1);
+              __gmAiModelSuggestRender(false);
+              return;
+            }
+            if (e.key === 'ArrowUp') {
+              e.preventDefault();
+              __gmAiModelSuggestIndex = Math.max(0, (__gmAiModelSuggestIndex || 0) - 1);
+              __gmAiModelSuggestRender(false);
+              return;
+            }
+            if (e.key === 'Enter') {
+              const i = Number(__gmAiModelSuggestIndex || 0);
+              const pick = (i >= 0 && i < arr.length) ? String(arr[i] || '').trim() : '';
+              if (pick) {
+                e.preventDefault();
+                model.value = pick;
+                __gmAiModelSuggestHide();
+                try { __gmAiSyncEditingProfileFromEditor(); } catch (e1) {}
+              }
+              return;
+            }
+            if (e.key === 'Escape') {
+              e.preventDefault();
+              __gmAiModelSuggestHide();
+              return;
+            }
+          } catch (e2) {}
+        });
+        model.addEventListener('blur', () => {
+          try {
+            if (__gmAiModelSuggestCloseTimer) clearTimeout(__gmAiModelSuggestCloseTimer);
+            __gmAiModelSuggestCloseTimer = setTimeout(() => {
+              __gmAiModelSuggestCloseTimer = 0;
+              __gmAiModelSuggestHide();
+            }, 120);
+          } catch (e) {}
+        });
+        window.addEventListener('resize', () => { try { __gmAiModelSuggestReposition(); } catch (e) {} });
+        window.addEventListener('scroll', () => { try { __gmAiModelSuggestReposition(); } catch (e) {} }, true);
+        document.addEventListener('mousedown', (ev) => {
+          try {
+            if (!__gmAiModelSuggestVisible) return;
+            const el = document.getElementById('aiModelSuggest');
+            const t = ev && ev.target;
+            if (el && (t === el || (el.contains && el.contains(t)))) return;
+            if (t === model || (model.contains && model.contains(t))) return;
+            __gmAiModelSuggestHide();
+          } catch (e) {}
+        });
       }
     } catch (e) {}
   }
@@ -10597,122 +10747,6 @@ flex-shrink:0;cursor:pointer;
         sendAiChat();
       }
     } catch (e2) {}
-  }
-
-  async function __gmAiSendAiChatNow() {
-    const ta = document.getElementById('aiChatInput');
-    const text = ta ? String(ta.value || '').trim() : '';
-    if (!text) return;
-    const pid = String(__gmAiSelectedProfileId || __gmAiConfig.active_profile_id || '');
-    if (!pid) {
-      toast('请先选择/配置一个 Profile（Base URL / API Key / Model）后再对话', 'err');
-      try { showAiConfigPanel(); } catch (e) {}
-      return;
-    }
-    if (ta) ta.value = '';
-
-    const turnUndoGid = 'ai-' + __gmGenReqId();
-    __gmAiActiveTurnUndoGroupId = turnUndoGid;
-    __gmAiChatMessages.push({ role: 'user', content: text, undo_gid: turnUndoGid });
-    __gmAiChatMessages.push({ role: 'assistant', content: '', pending: true });
-    __gmAiRenderChat();
-
-    try { __gmAiRefreshSendCounter(); } catch (eC0) {}
-
-    try { await __gmAiSaveHistoryNow(); } catch (e0) {}
-
-    __gmAiIsResponding = true;
-    try { __gmAiSetSendButtonState(true); } catch (eB0) {}
-    try { __gmAiChatAbortController = new AbortController(); } catch (eAC0) { __gmAiChatAbortController = null; }
-    try { __gmAiRefreshSendCounter(); } catch (eC0b) {}
-
-    try {
-      const sys = await __gmBuildAiSystemContext(text);
-      const msgs = __gmAiBuildMessagesForApi(sys);
-      const res = await api('/api/ai_chat', {
-        method: 'POST',
-        body: JSON.stringify({ messages: msgs, profile_id: pid, session_id: __gmAiActiveSessionId }),
-        signal: __gmAiChatAbortController ? __gmAiChatAbortController.signal : undefined,
-      });
-
-      if (res && res.aborted) {
-        try {
-          const last = __gmAiChatMessages[__gmAiChatMessages.length - 1];
-          if (last && String(last.role || '') === 'assistant' && last.pending) {
-            __gmAiChatMessages.pop();
-            __gmAiRenderChat();
-          }
-        } catch (e0) {}
-        __gmAiIsResponding = false;
-        try { __gmAiSetSendButtonState(false); } catch (eB0x) {}
-        __gmAiChatAbortController = null;
-        __gmAiActiveTurnUndoGroupId = '';
-        return;
-      }
-
-      if (res && res.ok) {
-        let content = __gmAiSanitizeAssistantContent(String(res.content || ''));
-        try {
-          const h = await __gmAiTryHandleAgentToolCall(content);
-          if (h && h.handled && typeof h.content === 'string') content = h.content;
-        } catch (e00) {}
-        try { content = __gmAiSanitizeAssistantContent(String(content || '')); } catch (e01) {}
-        try {
-          const last = __gmAiChatMessages[__gmAiChatMessages.length - 1];
-          if (last && String(last.role || '') === 'assistant' && last.pending) {
-            __gmAiChatMessages.pop();
-          }
-        } catch (e0) {}
-        __gmAiChatMessages.push({ role: 'assistant', content });
-        __gmAiRenderChat();
-        try { await __gmAiRefreshSendCounter(); } catch (eC1) {}
-        try {
-          const h = await POST('/api/ai_chat_history', { profile_id: pid, session_id: __gmAiActiveSessionId, messages: __gmAiChatMessages });
-          if (h && h.ok) {
-            if (Array.isArray(h.sessions)) __gmAiSessions = h.sessions;
-            if (h.active_session_id) __gmAiActiveSessionId = String(h.active_session_id || '');
-            __gmAiRenderHistoryChips();
-          } else {
-            toast('保存会话失败：' + String((h && (h.msg || h.error)) || '保存失败'), 'err');
-          }
-        } catch (e2) {
-          toast('保存会话失败', 'err');
-        }
-        __gmAiIsResponding = false;
-        try { __gmAiSetSendButtonState(false); } catch (eB1) {}
-        __gmAiChatAbortController = null;
-        __gmAiActiveTurnUndoGroupId = '';
-        return;
-      }
-      const msg = (res && (res.msg || res.error)) ? String(res.msg || res.error) : '对话失败';
-      try {
-        const last = __gmAiChatMessages[__gmAiChatMessages.length - 1];
-        if (last && String(last.role || '') === 'assistant' && last.pending) {
-          __gmAiChatMessages.pop();
-          __gmAiRenderChat();
-        }
-      } catch (e0) {}
-      __gmToastApiError('对话失败', res, msg);
-      __gmAiIsResponding = false;
-      try { __gmAiSetSendButtonState(false); } catch (eB2) {}
-      __gmAiChatAbortController = null;
-      __gmAiActiveTurnUndoGroupId = '';
-    } catch (e) {
-      try {
-        const last = __gmAiChatMessages[__gmAiChatMessages.length - 1];
-        if (last && String(last.role || '') === 'assistant' && last.pending) {
-          __gmAiChatMessages.pop();
-          __gmAiRenderChat();
-        }
-      } catch (e0) {}
-      try {
-        if (!__gmIsAbortError(e)) toast('对话失败', 'err');
-      } catch (eT0) {}
-      __gmAiIsResponding = false;
-      try { __gmAiSetSendButtonState(false); } catch (eB3) {}
-      __gmAiChatAbortController = null;
-      __gmAiActiveTurnUndoGroupId = '';
-    }
   }
 
   window.aiClearAiCache = async function() {
@@ -10791,19 +10825,17 @@ flex-shrink:0;cursor:pointer;
       if (res && res.ok) {
         __gmAiSetMeta('已保存到本地配置文件');
         toast('✓ AI 配置已保存', 'ok');
-        await loadAiConfig();
+        try { __gmAiRenderProfileList(); } catch (eR0) {}
+        try {
+          const prof = (__gmAiConfig.profiles || []).find(p => p && String(p.id || '') === String(__gmAiEditingProfileId || '')) || null;
+          __gmAiFillEditor(prof);
+        } catch (eR1) {}
         return;
       }
       __gmToastApiError('保存失败', res, (res && (res.msg || res.error)) || '保存失败');
     } catch (e) {
       toast('保存失败', 'err');
     }
-  }
-
-  function onAiProfileChanged(v) {
-    __gmAiSelectedProfileId = String(v || '');
-    __gmAiRenderProfileModelName();
-    try { loadAiChatHistory(__gmAiSelectedProfileId).then(()=>__gmAiRefreshSendCounter()).catch(()=>{}); } catch (e) {}
   }
 
   function onAiHistoryChipClick(sessionId) {
@@ -10815,8 +10847,20 @@ flex-shrink:0;cursor:pointer;
     const sid = String(sessionId || '');
     if (!pid || !sid) return;
     showAiChatPanel();
+    try { __gmAiPersistDraftForActiveSession(); } catch (e0d) {}
     __gmAiActiveSessionId = sid;
     __gmAiRenderHistoryChips();
+    try { __gmAiSetContinueState(false, ''); } catch (eCS0) {}
+    try {
+      const ta = document.getElementById('aiChatInput');
+      if (ta) ta.value = '';
+    } catch (e0Ta) {}
+    if (sid.startsWith(__gmAiEphemeralSessionPrefix)) {
+      __gmAiChatMessages = [];
+      __gmAiRenderChat();
+      try { __gmAiRefreshSendCounter(); } catch (eC0) {}
+      return;
+    }
     POST('/api/ai_sessions', { profile_id: pid, action: 'set_active', session_id: sid }).catch(()=>{});
     loadAiChatHistory(pid, sid).then(()=>__gmAiRefreshSendCounter()).catch(()=>{});
   }
@@ -10856,6 +10900,33 @@ flex-shrink:0;cursor:pointer;
     const pid = String(__gmAiSelectedProfileId || __gmAiConfig.active_profile_id || '');
     const sid = String(sessionId || '');
     if (!pid || !sid) return;
+    if (sid.startsWith(__gmAiEphemeralSessionPrefix)) {
+      const sessions0 = Array.isArray(__gmAiSessions) ? __gmAiSessions.slice() : [];
+      const next = sessions0.filter(x => String(x && x.id || '') !== sid);
+      __gmAiSessions = next;
+      if (String(__gmAiActiveSessionId || '') === sid) {
+        const pick = next[0] ? String(next[0].id || '') : '';
+        __gmAiActiveSessionId = pick;
+        if (!pick) {
+          __gmAiChatMessages = [];
+          __gmAiRenderChat();
+          try { __gmAiSetContinueState(false, ''); } catch (eCS0) {}
+          try { __gmAiRefreshSendCounter(); } catch (eC0) {}
+        } else {
+          if (pick.startsWith(__gmAiEphemeralSessionPrefix)) {
+            __gmAiChatMessages = [];
+            __gmAiRenderChat();
+            try { __gmAiSetContinueState(false, ''); } catch (eCS0) {}
+            try { __gmAiRefreshSendCounter(); } catch (eC0) {}
+          } else {
+            POST('/api/ai_sessions', { profile_id: pid, action: 'set_active', session_id: pick }).catch(()=>{});
+            loadAiChatHistory(pid, pick).then(()=>__gmAiRefreshSendCounter()).catch(()=>{});
+          }
+        }
+      }
+      __gmAiRenderHistoryChips();
+      return;
+    }
     POST('/api/ai_sessions', { profile_id: pid, action: 'delete', session_id: sid }).then(res => {
       if (res && res.ok) {
         __gmAiSessions = Array.isArray(res.sessions) ? res.sessions : [];
@@ -10869,24 +10940,71 @@ flex-shrink:0;cursor:pointer;
   async function createAiSession() {
     const pid = String(__gmAiSelectedProfileId || __gmAiConfig.active_profile_id || '');
     if (!pid) return;
+    try { __gmAiPersistDraftForActiveSession(); } catch (e0d) {}
+    const now = Date.now();
+    const sid = __gmAiEphemeralSessionPrefix + String(now) + '_' + String(Math.floor(Math.random() * 1000000));
+    try {
+      const sessions0 = Array.isArray(__gmAiSessions) ? __gmAiSessions.slice() : [];
+      if (!sessions0.find(x => String(x && x.id || '') === sid)) {
+        sessions0.push({ id: sid, title: '会话', updated_at: Date.now() / 1000.0 });
+      }
+      __gmAiSessions = sessions0;
+    } catch (e0) {}
+    __gmAiActiveSessionId = sid;
+    __gmAiChatMessages = [];
+    __gmAiRenderHistoryChips();
+    __gmAiRenderChat();
+    try { __gmAiSetContinueState(false, ''); } catch (eCS0) {}
+    try {
+      const ta = document.getElementById('aiChatInput');
+      if (ta) ta.value = '';
+    } catch (e0Ta) {}
+    try { __gmAiPersistDraftForActiveSession(); } catch (e0d2) {}
+    try { await __gmAiRefreshSendCounter(); } catch (eC0) {}
+    toast('✓ 已新建会话', 'ok');
+  }
+
+  async function __gmAiEnsurePersistentSessionBeforeSend(profileId) {
+    const pid = String(profileId || __gmAiSelectedProfileId || __gmAiConfig.active_profile_id || '').trim();
+    const sid = String(__gmAiActiveSessionId || '').trim();
+    if (!pid) return false;
+    if (!sid) return true;
+    if (!sid.startsWith(__gmAiEphemeralSessionPrefix)) return true;
     const res = await POST('/api/ai_sessions', { profile_id: pid, action: 'create' });
     if (res && res.ok) {
       __gmAiSessions = Array.isArray(res.sessions) ? res.sessions : [];
       __gmAiActiveSessionId = String(res.active_session_id || res.session_id || '');
       __gmAiRenderHistoryChips();
-      await loadAiChatHistory(pid, __gmAiActiveSessionId);
-      toast('✓ 已新建会话', 'ok');
-      return;
+      try { __gmAiSetContinueState(false, ''); } catch (eCS0) {}
+      try {
+        const ta = document.getElementById('aiChatInput');
+        if (ta) ta.value = '';
+      } catch (e0Ta) {}
+      try { __gmAiRestoreDraftForActiveSession(); } catch (eDR) {}
+      return true;
     }
     __gmToastApiError('新建会话失败', res, (res && (res.msg || res.error)) || '新建会话失败');
+    return false;
   }
 
-  async function loadAiChatHistory(profileId, sessionId) {
+  async function loadAiChatHistory(profileId, sessionId, opts) {
     const pid = String(profileId || '');
     const sid = String(sessionId || '');
+    const o = (opts && typeof opts === 'object') ? opts : {};
+    const restoreDraft = (o.restoreDraft === undefined) ? true : Boolean(o.restoreDraft);
+    const restoreContinue = (o.restoreContinue === undefined) ? true : Boolean(o.restoreContinue);
     if (!pid) {
       __gmAiChatMessages = [];
       __gmAiRenderChat();
+      if (restoreContinue) {
+        try { __gmAiSetContinueState(false, ''); } catch (eCS0) {}
+      }
+      if (restoreDraft) {
+        try {
+          const ta = document.getElementById('aiChatInput');
+          if (ta) ta.value = '';
+        } catch (e0Ta) {}
+      }
       try { await __gmAiRefreshSendCounter(); } catch (eC0) {}
       return;
     }
@@ -10900,6 +11018,12 @@ flex-shrink:0;cursor:pointer;
         __gmAiChatMessages = res.messages;
         __gmAiRenderChat();
       }
+    }
+    if (restoreContinue) {
+      try { __gmAiRestoreContinueStateForActiveSession(); } catch (eCR) {}
+    }
+    if (restoreDraft) {
+      try { __gmAiRestoreDraftForActiveSession(); } catch (eDR) {}
     }
     try { await __gmAiRefreshSendCounter(); } catch (eC1) {}
   }
@@ -10931,144 +11055,59 @@ flex-shrink:0;cursor:pointer;
         const r = await GET('/api/workspace_context');
         if (r && r.ok && typeof r.context === 'string') ws = String(r.context || '');
       } catch (e4) {}
+      if (!ws || !String(ws || '').trim()) {
+        ws = '（工作区信息未就绪：无法获取 workspace_context。通常原因：未打开仓库或后端未就绪。若要执行文件/代码相关操作，请先确认仓库已打开；否则先向用户澄清仓库路径或提示其在 UI 中打开仓库。）';
+      }
 
-      // @file references
-      let refsBlock = '';
+      // @file references: only extract tokens; backend will resolve and read
+      let refsIndex = [];
       try {
         const t = String(userText || '');
-        const m = t.match(/@[^\s]+/g) || [];
-        const toks = Array.from(new Set(m.map(x => String(x || '').trim().slice(1)).filter(Boolean))).slice(0, 5);
-        if (toks.length) {
-          const blocks = [];
-          for (const tok of toks) {
-            const res = await GET('/api/find_files?name=' + encodeURIComponent(tok));
-            const list = (res && res.ok && Array.isArray(res.files)) ? res.files : [];
-            if (!list.length) {
-              blocks.push(`@${tok}: (未找到)`);
-              continue;
-            }
-            let pick = String(list[0] || '');
-            const tokLower = tok.toLowerCase();
-            for (const rel of list) {
-              const bn = String(rel || '').split('/').pop() || '';
-              if (bn.toLowerCase() === tokLower) { pick = String(rel || ''); break; }
-            }
-            let c = '';
-            try {
-              const r2 = await GET('/api/file_content?path=' + encodeURIComponent(pick));
-              if (r2 && r2.ok && typeof r2.content === 'string') c = String(r2.content || '');
-            } catch (e5) {}
-            c = (c || '').slice(0, 6000);
-            if (!c) {
-              blocks.push(`@${tok}: ${pick} (无法读取内容)`);
-            } else {
-              blocks.push(`@${tok}: ${pick}\n\n${c}`);
-            }
-          }
-          refsBlock = blocks.join('\n\n---\n\n');
-        }
-      } catch (e4b) {}
+        const m = t.match(/@[^\u007f\s]+|@[^\s]+/g) || [];
+        refsIndex = Array.from(new Set(m.map(x => String(x || '').trim().slice(1)).filter(Boolean))).slice(0, 8);
+      } catch (e4b) { refsIndex = []; }
 
-      const capability = `重要：你可以阅读本工具通过上下文提供的工作区信息和“引用文件内容/当前编辑内容”。你可以通过输出 JSON 指令调用工具（一次回复最多 3 条；每条 JSON 独占一段；JSON 放在末尾）。仅当确实需要执行操作时才输出 JSON；普通对话请只回复文本。不要输出聊天模板 token。
-
-多媒体展示能力（必须遵守）：
-- 本系统的聊天框支持 Markdown 图片语法 \`![](...)\`，会直接渲染为图片（用户可点击预览、下载、打开）。
-- 重要：前端不会基于纯文本中的文件名/路径自动插入图片或音视频；是否展示媒体必须由你（AI）在回复中显式输出 Markdown 来控制。
-- 工作区内的图片/音视频文件可以通过 GET \`/api/raw_file?path=相对路径\` 访问。
-- 当用户要求“查看/打开/展示”某个工作区图片或音视频时，你应该主动输出 Markdown 来展示：
-  - 图片：\`![](/api/raw_file?path=123.png)\`
-  - 音频：\`[播放音频](/api/raw_file?path=xxx.mp3)\`（用户点击链接打开）
-  - 视频：\`[播放视频](/api/raw_file?path=xxx.mp4)\`（用户点击链接打开）
-- 重要：不要说“无法渲染/显示图片”。如果文件存在但你不确定相对路径，先用目录树/搜索工具确认后再输出上述 Markdown。
-
-工作流（必须遵守）：
-- Plan：先用 2-5 步列出计划（若无需操作，则直接回答并结束）
-- Act：仅在需要时输出工具 JSON，并解释为什么需要
-- Verify：若改动了后端/Python，优先追加 verify_python
-- Report：汇总改动点、验证结果、下一步建议（不要重复触发已完成的写操作）`;
-
-      const capability2 = `执行能力（常用）：\n1) 搜索代码：{"type":"search_code","query":"关键字/正则","case_sensitive":false,"max_results":50}\n2) 读取文件片段：{"type":"read_file_range","path":"server.py","start":1,"end":120}\n3) 查看目录树：{"type":"list_dir_tree","path":"","depth":3,"max_entries":500}\n4) 修改后验证(Python)：{"type":"verify_python","paths":["server.py"]}\n5) 执行命令(受控)：{"type":"run_cmd","cmd":"git status","timeout":30}`;
-
-      const capability3 = `系统接口索引（摘要）：
-
-[Repo/Workspace]
-- GET  /api/files
-- GET  /api/commits
-- GET  /api/commit_detail?hash
-- GET  /api/commit_file_diff?hash&path
-- GET  /api/branches
-- GET  /api/commit_push_status?hash
-- GET  /api/workspace_context
-- GET  /api/ai_chat_history?profile_id&session_id&limit
-
-[Write]
-- POST /api/save_file {path,content}
-- POST /api/delete_file {path}
-- POST /api/rename_file {old_path,new_path}
-- POST /api/revert_file {path,status}
-
-[System]
-- POST /api/open_file {name,view} (必须走接口调度)
-- POST /api/verify_python {paths}
-
-[Git]
-- POST /api/stage_file {path}
-- POST /api/commit {message,files?}
-- POST /api/pull
-- POST /api/push
-
-[Undo]
-- POST /api/undo
-- GET  /api/undo_stats
-
-[IDE Assistant]
-- GET  /api/search_code?query&case_sensitive&max_results
-- GET  /api/read_file_range?path&start&end
-- GET  /api/list_dir_tree?path&depth&max_entries
-
-[Cmd]
-- POST /api/run_cmd {cmd,timeout,cwd?}
-- 约束：优先使用 /api/* 完成业务 CRUD；只有在接口确实无法覆盖时才使用 run_cmd；输出必须是单行命令，不允许换行/管道/重定向/复合命令
-`;
-
-      let capability3Dyn = '';
+      let contextPoolJsonBlock = '';
       try {
-        await __gmAiLoadCapabilitiesOnce(false);
-        if (__gmAiCapabilitiesText) capability3Dyn = __gmAiCapabilitiesText;
-      } catch (eCap) { capability3Dyn = ''; }
-
-      let execSummaryBlock = '';
-      try {
-        if (__gmAiRecentExecSummaries && __gmAiRecentExecSummaries.length) {
-          const lines = __gmAiRecentExecSummaries.slice(0, 6).map(x => `- ${String(x || '')}`);
-          execSummaryBlock = `\n\n最近已执行的操作（已完成，勿重复触发写入）：\n${lines.join('\n')}`;
-        }
-      } catch (eS) {}
+        const pool = {
+          workspace_context_ready: !!(ws && String(ws || '').trim() && ws.indexOf('未就绪') < 0),
+          current_file: path || '',
+          current_snippet_chars: snippet ? snippet.length : 0,
+          refs: Array.isArray(refsIndex) ? refsIndex : [],
+        };
+        contextPoolJsonBlock = 'CONTEXT_POOL_JSON:\n' + JSON.stringify(pool, null, 2);
+      } catch (eCP) { contextPoolJsonBlock = ''; }
 
       if (!path && !snippet) {
-        if (ws || refsBlock) {
-          return `你是 Hivo，一名内置在 Git 管理工具里的 AI 助手（用户称呼你为 Hivo）。\n\n工作区上下文：\n${ws}`
-            + (refsBlock ? (`\n\n引用文件内容：\n\n${refsBlock}`) : '')
-            + `\n\n${capability}\n\n${capability2}\n\n${capability3Dyn || capability3}`
-            + execSummaryBlock;
-        }
-        return '';
+        if (!ws) return { dyn_context: '', context_refs: Array.isArray(refsIndex) ? refsIndex : [] };
+        return {
+          dyn_context: `【工作区信息】\n${ws}`
+            + (contextPoolJsonBlock ? (`\n\n${contextPoolJsonBlock}`) : '')
+            + execSummaryBlock,
+          context_refs: Array.isArray(refsIndex) ? refsIndex : [],
+        };
       }
 
       if (!snippet) {
-        return `当前文件：${path}\n\n工作区上下文：\n${ws}`
-          + (refsBlock ? (`\n\n引用文件内容：\n\n${refsBlock}`) : '')
-          + `\n\n${capability}\n\n${capability2}\n\n${capability3Dyn || capability3}`
-          + execSummaryBlock;
+        return {
+          dyn_context: `【当前文件】\n${path}\n\n【工作区信息】\n${ws}`
+            + (contextPoolJsonBlock ? (`\n\n${contextPoolJsonBlock}`) : '')
+            + execSummaryBlock,
+          context_refs: Array.isArray(refsIndex) ? refsIndex : [],
+        };
       }
 
-      return `你是 Hivo，一名内置在 Git 管理工具里的 AI 助手（用户称呼你为 Hivo）。\n\n工作区上下文：\n${ws}`
-        + (refsBlock ? (`\n\n引用文件内容：\n\n${refsBlock}`) : '')
-        + `\n\n${capability}\n\n${capability2}\n\n${capability3Dyn || capability3}`
-        + execSummaryBlock
-        + `\n\n当前文件：${path || '(未知)'}\n\n当前编辑内容（截断）：\n\n${snippet}`;
+      const sys = `【工作区信息】\n${ws}`
+        + `\n\n【当前编辑文件】\n${path || '（无）'}`
+        + `\n\n【当前编辑内容片段】\n${snippet || '（空）'}`;
+      return {
+        dyn_context: sys
+          + (contextPoolJsonBlock ? (`\n\n${contextPoolJsonBlock}`) : '')
+          + execSummaryBlock,
+        context_refs: Array.isArray(refsIndex) ? refsIndex : [],
+      };
     } catch (e) {
-      return '';
+      return { dyn_context: '', context_refs: [] };
     }
   }
 
@@ -11092,6 +11131,7 @@ flex-shrink:0;cursor:pointer;
       if (ta.__gmMentionBound) return;
       ta.__gmMentionBound = true;
       ta.addEventListener('input', () => {
+        __gmAiSchedulePersistDraft();
         __gmAiUpdateMentionMenu();
       });
       ta.addEventListener('click', () => {
@@ -11225,6 +11265,7 @@ flex-shrink:0;cursor:pointer;
       <div class="ctx-item" data-act="file_log">查看历史</div>
       <div class="ctx-item" data-act="pull_file">更新</div>
       <div class="ctx-sep"></div>
+      <div class="ctx-item" data-act="stage_file">暂存</div>
       <div class="ctx-item" data-act="revert_file">撤回</div>
       <div class="ctx-item danger" data-act="delete_file">删除</div>
     `;
@@ -11377,6 +11418,17 @@ flex-shrink:0;cursor:pointer;
         await refresh();
       } else {
         __gmToastApiError('重命名失败', res, (res && (res.msg || res.error)) || '重命名失败');
+        await refresh();
+      }
+      return;
+    }
+    if (act === 'stage_file') {
+      const res = await POST('/api/stage_file', { path });
+      if (res && res.ok) {
+        toast('✓ 已暂存', 'ok');
+        await refresh();
+      } else {
+        __gmToastApiError('暂存失败', res, (res && (res.error || res.msg)) || '暂存失败');
         await refresh();
       }
       return;
@@ -11617,7 +11669,22 @@ flex-shrink:0;cursor:pointer;
     const repoLabelEl = document.getElementById('repoLabel');
     repoLabelEl.textContent = repo;
     repoLabelEl.setAttribute('data-repo', repo);
+    try {
+      if (!repoLabelEl.__gmCopyBound) {
+        repoLabelEl.__gmCopyBound = true;
+        repoLabelEl.title = '点击复制路径';
+        repoLabelEl.style.cursor = 'pointer';
+        repoLabelEl.addEventListener('click', async (e) => {
+          try { e.preventDefault(); e.stopPropagation(); } catch (e2) {}
+          const p = String(repoLabelEl.getAttribute('data-repo') || repoLabelEl.textContent || '').trim();
+          if (!p) return;
+          const ok = await __gmCopyTextToClipboard(p);
+          toast(ok ? '✓ 已复制路径' : '复制失败', ok ? 'ok' : 'err');
+        });
+      }
+    } catch (e) {}
     document.getElementById('pullBtn').style.display    = 'flex';
+    document.getElementById('stagedBtn').style.display  = 'none';
     document.getElementById('refreshBtn').style.display = 'flex';
     document.getElementById('changeBtn').style.display  = 'flex';
     initBranchDropdown();
@@ -11736,7 +11803,7 @@ flex-shrink:0;cursor:pointer;
     document.getElementById('app').style.display       = 'none';
     document.getElementById('branchTag').style.display = 'none';
     document.getElementById('repoLabel').textContent   = '';
-    ['pullBtn','refreshBtn','changeBtn'].forEach(id =>
+    ['stagedBtn','pullBtn','refreshBtn','changeBtn'].forEach(id =>
             document.getElementById(id).style.display = 'none');
 
     try { localStorage.removeItem('lastRepoPath'); } catch (e) {}
@@ -11810,10 +11877,11 @@ flex-shrink:0;cursor:pointer;
     btn.style.opacity = '.5';
     btn.style.pointerEvents = 'none';
 
-    const [fRes, lRes, bRes] = await Promise.all([
+    const [fRes, lRes, bRes, stRes] = await Promise.all([
       GET('/api/files'),
       GET('/api/log'),
       GET('/api/branches'),
+      GET('/api/status'),
     ]);
 
     if (fRes.error) {
@@ -11853,6 +11921,18 @@ flex-shrink:0;cursor:pointer;
     }));
     lastBranchesRes = bRes;
     if (bRes.current) document.getElementById('branchName').textContent = bRes.current;
+
+    try {
+      const stagedBtn = document.getElementById('stagedBtn');
+      const stagedBtnText = document.getElementById('stagedBtnText');
+      const hasStaged = Boolean(stRes && stRes.has_staged_changes);
+      const cnt = Number((stRes && stRes.staged_count) || 0) || 0;
+      if (stagedBtn) {
+        stagedBtn.style.display = hasStaged ? 'flex' : 'none';
+        const label = (hasStaged && cnt > 0) ? (`暂存(${cnt})`) : '暂存';
+        if (stagedBtnText) stagedBtnText.textContent = label;
+      }
+    } catch (e) {}
 
     // 重建 checkedSet（按 path 保留勾选，不再默认全选）
     const checkedPaths = new Set();
@@ -11908,110 +11988,156 @@ flex-shrink:0;cursor:pointer;
     const btn = document.getElementById('pullBtn');
     setButtonBusy(btn, true);
 
-    // 先检查是否有本地未提交的修改
-    const filesRes = await GET('/api/files');
-    const hasLocalChanges = filesRes && filesRes.files && filesRes.files.length > 0;
+    try {
+      // 先检查是否有本地未提交的修改
+      const filesRes = await GET('/api/files');
+      if (!filesRes || filesRes.error) {
+        const msg0 = (filesRes && filesRes.error) ? filesRes.error : '无法获取本地修改状态';
+        __gmToastApiError('更新失败', filesRes, msg0);
+        const retry = await showConfirm({
+          title: '更新失败',
+          message: msg0 + '\n\n是否重试？',
+          okText: '重试',
+          cancelText: '关闭',
+          danger: true,
+        });
+        if (retry) return pullUpdate();
+        return;
+      }
 
-    if (hasLocalChanges) {
-      // 有本地修改,先询问用户如何处理
-      setButtonBusy(btn, false);
-      
-      const affectedList = (filesRes.files || [])
-        .slice(0, 10)
-        .map(f => f.path)
-        .join('\n');
-      const more = (filesRes.files || []).length > 10 
-        ? `\n... 等 ${filesRes.files.length} 个文件` 
-        : '';
-      
-      const choice = await showLocalChangesConflictDialog(affectedList + more);
-      
-      if (choice === 'commit') {
-        // 提交并更新
-        await commitAndPull();
-      } else if (choice === 'stash') {
-        // 暂存并更新
-        await stashAndPull();
-      } else if (choice === 'direct') {
-        // 直接更新（git pull）
-        setButtonBusy(btn, true);
-        toast('直接更新中...','warn');
-        const res = await POST('/api/pull', {});
+      const hasLocalChanges = filesRes && filesRes.files && filesRes.files.length > 0;
+
+      if (hasLocalChanges) {
+        // 有本地修改,先询问用户如何处理
         setButtonBusy(btn, false);
-        if (res && res.ok) {
-          toast('✓ 更新完成','ok');
-          await refresh();
-          return;
-        }
-        if (res && res.has_conflicts) {
-          const list = (res.conflict_files || []).slice(0, 12).join('\n');
-          const more = (res.conflict_files || []).length > 12 ? `\n... 等 ${(res.conflict_files || []).length} 个文件` : '';
-          await showConfirm({
-            title: '更新发生冲突',
-            message:
-                    `检测到合并冲突，请先在本地解决冲突：\n\n${list}${more}\n\n处理建议：\n1) 打开冲突文件，手动解决标记（<<<<<<</=======/>>>>>>>)\n2) 解决后执行提交（commit）\n3) 如需推送，再执行 Push`,
-            okText: '知道了',
+        
+        const affectedList = (filesRes.files || [])
+          .slice(0, 10)
+          .map(f => f.path)
+          .join('\n');
+        const more = (filesRes.files || []).length > 10 
+          ? `\n... 等 ${filesRes.files.length} 个文件` 
+          : '';
+        
+        const choice = await showLocalChangesConflictDialog(affectedList + more);
+        
+        if (choice === 'commit') {
+          // 提交并更新
+          await commitAndPull();
+        } else if (choice === 'stash') {
+          // 暂存并更新
+          await stashAndPull();
+        } else if (choice === 'direct') {
+          // 直接更新（git pull）
+          setButtonBusy(btn, true);
+          toast('直接更新中...','warn');
+          const res = await POST('/api/pull', {});
+          setButtonBusy(btn, false);
+          if (res && res.ok) {
+            toast('✓ 更新完成','ok');
+            await refresh();
+            return;
+          }
+          if (res && res.has_conflicts) {
+            const list = (res.conflict_files || []).slice(0, 12).join('\n');
+            const more = (res.conflict_files || []).length > 12 ? `\n... 等 ${(res.conflict_files || []).length} 个文件` : '';
+            await showConfirm({
+              title: '更新发生冲突',
+              message:
+                      `检测到合并冲突，请先在本地解决冲突：\n\n${list}${more}\n\n处理建议：\n1) 打开冲突文件，手动解决标记（<<<<<<</=======/>>>>>>>)\n2) 解决后执行提交（commit）\n3) 如需推送，再执行 Push`,
+              okText: '知道了',
+              cancelText: '关闭',
+              danger: true,
+            });
+            await refresh();
+            return;
+          }
+          const msg = (res && (res.error || res.msg || res.message || res.output)) ? (res.error || res.msg || res.message || res.output) : '更新失败';
+          __gmToastApiError('更新失败', res, msg);
+          const retry = await showConfirm({
+            title: '更新失败',
+            message: msg + '\n\n是否重试？',
+            okText: '重试',
             cancelText: '关闭',
             danger: true,
           });
+          if (retry) return pullUpdate();
           await refresh();
           return;
         }
-        const msg = (res && (res.error || res.msg || res.message || res.output)) ? (res.error || res.msg || res.message || res.output) : '更新失败';
-        __gmToastApiError('更新失败', res, msg);
+        // choice === 'cancel' 时不做任何操作
+        return;
+      }
+
+      // 没有本地修改,直接 pull
+      toast('更新中...','warn');
+
+      const res = await POST('/api/pull', {});
+
+      if (res && res.ok) {
+        toast('✓ 更新完成','ok');
         await refresh();
         return;
       }
-      // choice === 'cancel' 时不做任何操作
-      return;
-    }
 
-    // 没有本地修改,直接 pull
-    toast('更新中...','warn');
-
-    const res = await POST('/api/pull', {});
-
-    setButtonBusy(btn, false);
-
-    if (res && res.ok) {
-      toast('✓ 更新完成','ok');
-      await refresh();
-      return;
-    }
-
-    // 这里作为兜底,处理意外情况下的本地修改冲突
-    if (res && res.local_changes_conflict) {
-      const affectedList = (res.affected_files || []).slice(0, 10).join('\n');
-      const more = (res.affected_files || []).length > 10 ? `\n... 等 ${(res.affected_files || []).length} 个文件` : '';
-      
-      const choice = await showLocalChangesConflictDialog(affectedList + more);
-      
-      if (choice === 'commit') {
-        await commitAndPull();
-      } else if (choice === 'stash') {
-        await stashAndPull();
+      // 这里作为兜底,处理意外情况下的本地修改冲突
+      if (res && res.local_changes_conflict) {
+        setButtonBusy(btn, false);
+        const affectedList = (res.affected_files || []).slice(0, 10).join('\n');
+        const more = (res.affected_files || []).length > 10 ? `\n... 等 ${(res.affected_files || []).length} 个文件` : '';
+        
+        const choice = await showLocalChangesConflictDialog(affectedList + more);
+        
+        if (choice === 'commit') {
+          await commitAndPull();
+        } else if (choice === 'stash') {
+          await stashAndPull();
+        }
+        return;
       }
-      return;
-    }
 
-    if (res && res.has_conflicts) {
-      const list = (res.conflict_files || []).slice(0, 12).join('\n');
-      const more = (res.conflict_files || []).length > 12 ? `\n... 等 ${(res.conflict_files || []).length} 个文件` : '';
-      await showConfirm({
-        title: '更新发生冲突',
-        message:
-                `检测到合并冲突，请先在本地解决冲突：\n\n${list}${more}\n\n处理建议：\n1) 打开冲突文件，手动解决标记（<<<<<<</=======/>>>>>>>)\n2) 解决后执行提交（commit）\n3) 如需推送，再执行 Push`,
-        okText: '知道了',
+      if (res && res.has_conflicts) {
+        const list = (res.conflict_files || []).slice(0, 12).join('\n');
+        const more = (res.conflict_files || []).length > 12 ? `\n... 等 ${(res.conflict_files || []).length} 个文件` : '';
+        await showConfirm({
+          title: '更新发生冲突',
+          message:
+                  `检测到合并冲突，请先在本地解决冲突：\n\n${list}${more}\n\n处理建议：\n1) 打开冲突文件，手动解决标记（<<<<<<</=======/>>>>>>>)\n2) 解决后执行提交（commit）\n3) 如需推送，再执行 Push`,
+          okText: '知道了',
+          cancelText: '关闭',
+          danger: true,
+        });
+        await refresh();
+        return;
+      }
+
+      const msg = (res && (res.error || res.msg || res.message || res.output)) ? (res.error || res.msg || res.message || res.output) : '更新失败';
+      __gmToastApiError('更新失败', res, msg);
+      const retry = await showConfirm({
+        title: '更新失败',
+        message: msg + '\n\n是否重试？',
+        okText: '重试',
         cancelText: '关闭',
         danger: true,
       });
+      if (retry) return pullUpdate();
       await refresh();
       return;
+    } catch (e) {
+      const msg = '更新失败：' + (e && e.message ? e.message : String(e || '未知错误'));
+      __gmToastApiError('更新失败', null, msg);
+      const retry = await showConfirm({
+        title: '更新失败',
+        message: msg + '\n\n是否重试？',
+        okText: '重试',
+        cancelText: '关闭',
+        danger: true,
+      });
+      if (retry) return pullUpdate();
+      return;
+    } finally {
+      setButtonBusy(btn, false);
     }
-
-    const msg = (res && (res.error || res.msg || res.message || res.output)) ? (res.error || res.msg || res.message || res.output) : '更新失败';
-    __gmToastApiError('更新失败', res, msg);
-    await refresh();
   }
 
   async function showLocalChangesConflictDialog(affectedFiles) {
@@ -12045,7 +12171,7 @@ flex-shrink:0;cursor:pointer;
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
                 <polyline points="20 6 9 17 4 12"/>
               </svg>
-              提交本地修改后更新
+              提交后更新
             </div>
             <div style="font-size: 11px; color: var(--text2); margin-left: 22px;">将本地修改提交到版本库，然后从远程更新。如果远程也有修改，可能产生合并冲突需要手动解决。</div>
           </button>
@@ -12054,7 +12180,7 @@ flex-shrink:0;cursor:pointer;
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
                 <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
               </svg>
-              暂存修改后更新
+              暂存后更新
             </div>
             <div style="font-size: 11px; color: var(--text2); margin-left: 22px;">临时保存你的本地修改（不提交），更新后自动恢复。适用于临时调整不想提交的情况。</div>
           </button>
@@ -12126,90 +12252,144 @@ flex-shrink:0;cursor:pointer;
 
   async function commitAndPull() {
     // 先显示提交信息输入框
-    const message = await showCommitMessageDialog('提交本地修改');
+    const message = await showCommitMessageDialog('提交');
     if (!message) {
-      toast('已取消', 'warn');
       return;
     }
     
     const btn = document.getElementById('pullBtn');
     setButtonBusy(btn, true);
-    toast('提交并更新中...', 'warn');
+    toast('提交后更新中...', 'warn');
     
-    const res = await POST('/api/commit_and_pull', { message });
+    try {
+      const res = await POST('/api/commit_and_pull', { message });
+      
+      if (res && res.ok) {
+        toast('✓ 提交后更新完成', 'ok');
+        await showConfirm({
+          title: '✓ 更新完成',
+          message: '已完成提交与更新。\n\n如需同步到远端，请检查并执行 push。',
+          okText: '知道了',
+          hideCancel: true,
+        });
+        await refresh();
+        return;
+      }
     
-    setButtonBusy(btn, false);
+      if (res && res.has_conflicts) {
+        const list = (res.conflict_files || []).slice(0, 12).join('\n');
+        const more = (res.conflict_files || []).length > 12 ? `\n... 等 ${(res.conflict_files || []).length} 个文件` : '';
+        await showConfirm({
+          title: '更新发生冲突',
+          message: `提交成功，但更新时检测到合并冲突：\n\n${list}${more}\n\n请手动解决冲突后再提交。`,
+          okText: '知道了',
+          cancelText: '关闭',
+          danger: true,
+        });
+        await refresh();
+        return;
+      }
     
-    if (res && res.ok) {
-      toast('✓ 提交并更新完成', 'ok');
-      await refresh();
-      return;
-    }
-    
-    if (res && res.has_conflicts) {
-      const list = (res.conflict_files || []).slice(0, 12).join('\n');
-      const more = (res.conflict_files || []).length > 12 ? `\n... 等 ${(res.conflict_files || []).length} 个文件` : '';
-      await showConfirm({
-        title: '更新发生冲突',
-        message: `提交成功，但更新时检测到合并冲突：\n\n${list}${more}\n\n请手动解决冲突后再提交。`,
-        okText: '知道了',
+      const msg = (res && (res.error || res.pull_error || res.commit_output || res.message)) ? (res.error || res.pull_error || res.commit_output || res.message) : '操作失败';
+      __gmToastApiError('操作失败', res, msg);
+      const retry = await showConfirm({
+        title: '操作失败',
+        message: msg + '\n\n是否重试？',
+        okText: '重试',
         cancelText: '关闭',
         danger: true,
       });
+      if (retry) return commitAndPull();
       await refresh();
-      return;
+    } catch (e) {
+      const msg = '操作失败：' + (e && e.message ? e.message : String(e || '未知错误'));
+      __gmToastApiError('操作失败', null, msg);
+      const retry = await showConfirm({
+        title: '操作失败',
+        message: msg + '\n\n是否重试？',
+        okText: '重试',
+        cancelText: '关闭',
+        danger: true,
+      });
+      if (retry) return commitAndPull();
+    } finally {
+      setButtonBusy(btn, false);
     }
-    
-    const msg = (res && (res.error || res.pull_error || res.commit_output || res.message)) ? (res.error || res.pull_error || res.commit_output || res.message) : '操作失败';
-    __gmToastApiError('操作失败', res, msg);
-    await refresh();
   }
 
   async function stashAndPull() {
     const btn = document.getElementById('pullBtn');
     setButtonBusy(btn, true);
-    toast('暂存修改并更新中...', 'warn');
+    toast('暂存后更新中...', 'warn');
     
-    const res = await POST('/api/stash_and_pull', {});
-    
-    setButtonBusy(btn, false);
-    
-    if (res && res.ok) {
-      const msg = res.stashed ? '✓ 暂存修改、更新并恢复修改完成' : '✓ 更新完成（无需暂存）';
-      toast(msg, 'ok');
-      await refresh();
-      return;
-    }
-    
-    if (res && res.pop_conflict) {
-      await showConfirm({
-        title: '恢复修改时发生冲突',
-        message: '更新成功，但恢复你暂存的修改时发生冲突，请手动解决冲突。\n\n冲突详情：\n' + (res.pop_error || '未知错误'),
-        okText: '知道了',
+    try {
+      const res = await POST('/api/stash_and_pull', {});
+      
+      if (res && res.ok) {
+        if (res.stashed) {
+          toast('✓ 暂存并更新完成', 'ok');
+          const shouldPop = await showConfirm({
+            title: '✓ 更新完成',
+            message: '已完成更新。\n\n你的修改已暂存，是否要恢复这些修改？',
+            okText: '恢复修改',
+            cancelText: '稍后手动恢复'
+          });
+          if (shouldPop) {
+            setButtonBusy(btn, true);
+            toast('恢复修改中...', 'warn');
+            const popRes = await POST('/api/stash_pop', {});
+            setButtonBusy(btn, false);
+            if (popRes && popRes.ok) {
+              toast('✓ 已恢复修改', 'ok');
+            } else {
+              const msg2 = (popRes && (popRes.error || popRes.msg || popRes.message)) ? (popRes.error || popRes.msg || popRes.message) : '恢复修改失败';
+              __gmToastApiError('恢复修改失败', popRes, msg2);
+            }
+          }
+          await refresh();
+          return;
+        }
+        toast('✓ 更新完成（无需暂存）', 'ok');
+        await showConfirm({
+          title: '✓ 更新完成',
+          message: '已完成更新。',
+          okText: '知道了',
+          hideCancel: true
+        });
+        await refresh();
+        return;
+      }
+      
+      if (res && res.stashed) {
+        toast('更新未完成：你的本地修改已暂存（可稍后手动恢复）', 'warn');
+      }
+      const msg = (res && (res.error || res.pull_error || res.msg || res.message || res.pull_output))
+        ? (res.error || res.pull_error || res.msg || res.message || res.pull_output)
+        : '操作失败';
+      __gmToastApiError('操作失败', res, msg);
+      const retry = await showConfirm({
+        title: '操作失败',
+        message: msg + '\n\n是否重试？',
+        okText: '重试',
         cancelText: '关闭',
         danger: true,
       });
+      if (retry) return stashAndPull();
       await refresh();
-      return;
-    }
-    
-    if (res && res.has_conflicts) {
-      const list = (res.conflict_files || []).slice(0, 12).join('\n');
-      const more = (res.conflict_files || []).length > 12 ? `\n... 等 ${(res.conflict_files || []).length} 个文件` : '';
-      await showConfirm({
-        title: '更新发生冲突',
-        message: `更新时检测到合并冲突：\n\n${list}${more}\n\n请手动解决冲突后再提交。`,
-        okText: '知道了',
+    } catch (e) {
+      const msg = '操作失败：' + (e && e.message ? e.message : String(e || '未知错误'));
+      __gmToastApiError('操作失败', null, msg);
+      const retry = await showConfirm({
+        title: '操作失败',
+        message: msg + '\n\n是否重试？',
+        okText: '重试',
         cancelText: '关闭',
         danger: true,
       });
-      await refresh();
-      return;
+      if (retry) return stashAndPull();
+    } finally {
+      setButtonBusy(btn, false);
     }
-    
-    const msg = (res && (res.error || res.pull_error || res.pop_error || res.message || res.pull_output)) ? (res.error || res.pull_error || res.pop_error || res.message || res.pull_output) : '操作失败';
-    __gmToastApiError('操作失败', res, msg);
-    await refresh();
   }
 
   async function showCommitMessageDialog(title) {
@@ -18341,6 +18521,21 @@ flex-shrink:0;cursor:pointer;
   document.addEventListener('keydown', (e) => {
     try {
       if (!window.__gmAiMediaPreviewOpen) return;
+      // Safety: if modal is not actually visible, do not hijack arrow keys.
+      try {
+        const modal = document.getElementById('aiMediaPreviewModal');
+        if (!modal || !modal.classList || !modal.classList.contains('show')) {
+          window.__gmAiMediaPreviewOpen = false;
+          return;
+        }
+      } catch (e0) {}
+
+      // Do not break caret navigation in inputs/editors
+      try {
+        const t = e && e.target;
+        const tag = t && t.tagName ? String(t.tagName).toLowerCase() : '';
+        if (tag === 'input' || tag === 'textarea' || (t && t.isContentEditable)) return;
+      } catch (e1) {}
       if (e.key === 'Escape') {
         e.preventDefault();
         __gmAiCloseMediaPreview();

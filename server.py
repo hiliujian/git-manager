@@ -89,6 +89,12 @@ ws_clients_lock = threading.Lock()
 
 ai_config_lock = threading.Lock()
 ai_history_lock = threading.Lock()
+
+_hivo_mem_lock = threading.Lock()
+_hivo_session_mem: dict = {}  # session_id -> {summary:str, chat:list[dict], tool_log:list[dict], tool_cache:dict}
+
+_hivo_cfg_lock = threading.Lock()
+_hivo_cfg_cache: dict = {}
 undo_lock = threading.Lock()
 _undo_groups = {}  # group_id -> list[entry]
 _undo_group_order = []  # stack of group_id in commit order
@@ -97,6 +103,65 @@ _changed_files_cache = {
     "ts": 0.0,
     "files": None,
 }
+
+
+def _undo_repo_key():
+    try:
+        rp = str(REPO_PATH or "").strip()
+        if not rp:
+            return "global"
+        return hashlib.sha1(rp.encode("utf-8", errors="ignore")).hexdigest()[:12]
+    except Exception:
+        return "global"
+
+
+def _undo_state_path():
+    try:
+        base = Path.home() / ".git-manager"
+        base.mkdir(parents=True, exist_ok=True)
+        return base / ("undo_state_" + _undo_repo_key() + ".json")
+    except Exception:
+        return Path.home() / ".git-manager" / "undo_state_global.json"
+
+
+def _undo_save_state():
+    try:
+        p = _undo_state_path()
+        with undo_lock:
+            payload = {
+                "version": 1,
+                "repo": str(REPO_PATH or ""),
+                "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "order": list(_undo_group_order),
+                "groups": dict(_undo_groups),
+            }
+        p.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        return
+
+
+def _undo_load_state():
+    try:
+        p = _undo_state_path()
+        if not p.exists():
+            return
+        raw = p.read_text(encoding="utf-8")
+        data = json.loads(raw or "{}")
+        order = data.get("order")
+        groups = data.get("groups")
+        if not isinstance(order, list) or not isinstance(groups, dict):
+            return
+        with undo_lock:
+            _undo_group_order[:] = [str(x) for x in order if str(x).strip()]
+            _undo_groups.clear()
+            for k, v in groups.items():
+                if not str(k).strip():
+                    continue
+                if not isinstance(v, list):
+                    continue
+                _undo_groups[str(k)] = v
+    except Exception:
+        return
 
 # Idempotency cache for write APIs (prevents repeated tool calls)
 idempotency_lock = threading.Lock()
@@ -205,6 +270,10 @@ def _undo_record(group_id: str, entry: dict):
             except Exception:
                 pass
         _undo_groups[gid].append(entry)
+    try:
+        _undo_save_state()
+    except Exception:
+        pass
 
 
 def _undo_pop_latest_group():
@@ -213,8 +282,14 @@ def _undo_pop_latest_group():
             gid = _undo_group_order.pop()
             actions = _undo_groups.pop(gid, None)
             if actions:
-                return gid, actions
-        return "", []
+                break
+        else:
+            gid, actions = "", []
+    try:
+        _undo_save_state()
+    except Exception:
+        pass
+    return gid, actions
 
 
 def _undo_pop_group_by_id(group_id: str):
@@ -229,12 +304,29 @@ def _undo_pop_group_by_id(group_id: str):
             _undo_group_order[:] = [x for x in _undo_group_order if str(x) != gid]
         except Exception:
             pass
-        return gid, actions
+    try:
+        _undo_save_state()
+    except Exception:
+        pass
+    return gid, actions
 
 
 def _undo_get_steps():
     with undo_lock:
         return len(_undo_group_order)
+
+
+def _undo_get_steps_for_session(session_id: str):
+    sid = str(session_id or "").strip()
+    if not sid:
+        return 0
+    prefix = "ai-" + sid + "-"
+    with undo_lock:
+        n = 0
+        for gid in _undo_group_order:
+            if str(gid).startswith(prefix):
+                n += 1
+        return n
 
 
 def _undo_apply_actions(actions: list):
@@ -325,6 +417,489 @@ def broadcast_to_clients(message):
     if disconnected:
         with ws_clients_lock:
             ws_clients.difference_update(disconnected)
+
+
+def _hivo_cfg_path():
+    try:
+        return Path(__file__).resolve().parent / "hivo_ai_config.json"
+    except Exception:
+        return Path("hivo_ai_config.json")
+
+
+def _hivo_load_cfg():
+    with _hivo_cfg_lock:
+        try:
+            p = _hivo_cfg_path()
+            if p.exists():
+                data = json.loads(p.read_text(encoding="utf-8") or "{}")
+                if isinstance(data, dict):
+                    _hivo_cfg_cache.clear()
+                    _hivo_cfg_cache.update(data)
+        except Exception:
+            pass
+        if not _hivo_cfg_cache:
+            _hivo_cfg_cache.update({
+                "version": 1,
+                "max_rounds": 12,
+                "max_tool_calls_per_round": 3,
+                "max_visible_history": 80,
+                "repeat_block": {"window": 4, "max_same": 3, "signature": "tool_types"},
+                "status_events": {"enabled": True},
+                "status_messages": {
+                    "sending": "发送中...",
+                    "thinking": "思考中...",
+                    "executing": "执行中...",
+                    "done": "完成",
+                },
+                "memory": {
+                    "short_term_turns": 6,
+                    "long_term_summary_chars": 3500,
+                    "tool_log_items": 80,
+                    "tool_cache_items": 120,
+                },
+                "agent": {
+                    "mode": "fallback_chat",
+                    "system_prompt": "",
+                    "tools": [],
+                },
+            })
+        return dict(_hivo_cfg_cache)
+
+
+def _hivo_status_message(cfg: dict, stage: str, **kwargs):
+    try:
+        st = str(stage or "").strip()
+        sm = cfg.get("status_messages") if isinstance(cfg, dict) else None
+        sm = sm if isinstance(sm, dict) else {}
+        base = str(sm.get(st) or "").strip()
+        if not base:
+            base = st
+
+        if st == "thinking":
+            ri = kwargs.get("round_i")
+            mr = kwargs.get("max_rounds")
+            if isinstance(ri, int) and isinstance(mr, int) and mr > 0:
+                return f"{base} (round {ri}/{mr})"
+            return base
+
+        if st == "executing":
+            n = kwargs.get("tool_count")
+            if isinstance(n, int) and n >= 0:
+                return f"{base} ({n} 个工具)"
+            return base
+
+        return base
+    except Exception:
+        return str(stage or "")
+
+
+def _hivo_get_session_state(session_id: str):
+    sid = str(session_id or "").strip()
+    if not sid:
+        sid = "global"
+    with _hivo_mem_lock:
+        st = _hivo_session_mem.get(sid)
+        if not isinstance(st, dict):
+            st = {"summary": "", "chat": [], "tool_log": [], "tool_cache": {}}
+            _hivo_session_mem[sid] = st
+        if not isinstance(st.get("summary"), str):
+            st["summary"] = ""
+        if not isinstance(st.get("chat"), list):
+            st["chat"] = []
+        if not isinstance(st.get("tool_log"), list):
+            st["tool_log"] = []
+        if not isinstance(st.get("tool_cache"), dict):
+            st["tool_cache"] = {}
+        return st
+
+
+def _hivo_mem_conf(cfg: dict):
+    m = cfg.get("memory") if isinstance(cfg, dict) else None
+    if not isinstance(m, dict):
+        m = {}
+    try:
+        short_turns = int(m.get("short_term_turns") or 6)
+    except Exception:
+        short_turns = 6
+    short_turns = max(3, min(12, short_turns))
+    try:
+        long_summary_chars = int(m.get("long_term_summary_chars") or 3500)
+    except Exception:
+        long_summary_chars = 3500
+    long_summary_chars = max(800, min(12000, long_summary_chars))
+    try:
+        tool_log_items = int(m.get("tool_log_items") or 80)
+    except Exception:
+        tool_log_items = 80
+    tool_log_items = max(10, min(300, tool_log_items))
+    try:
+        tool_cache_items = int(m.get("tool_cache_items") or 120)
+    except Exception:
+        tool_cache_items = 120
+    tool_cache_items = max(20, min(500, tool_cache_items))
+    return {
+        "short_term_turns": short_turns,
+        "long_term_summary_chars": long_summary_chars,
+        "tool_log_items": tool_log_items,
+        "tool_cache_items": tool_cache_items,
+    }
+
+
+def _hivo_summarize_for_long_term(messages: list, max_chars: int = 3500):
+    try:
+        arr = messages if isinstance(messages, list) else []
+        items = []
+        for m in arr:
+            if not isinstance(m, dict):
+                continue
+            role = str(m.get("role") or "").strip()
+            if role not in ("user", "assistant"):
+                continue
+            c = str(m.get("content") or "").strip()
+            if not c:
+                continue
+            head = c.splitlines()[0].strip()
+            if len(head) > 180:
+                head = head[:180]
+            items.append((role, head))
+        if not items:
+            return ""
+
+        goal = []
+        status = []
+        ops = []
+        for role, head in items:
+            if role == "user":
+                if re.search(r"(目标|需求|希望|请|实现|修复|优化)", head):
+                    goal.append(head)
+                else:
+                    status.append(head)
+            else:
+                if re.search(r"(已完成|完成|结论|原因|根因|修复|结果|验证)", head):
+                    status.append(head)
+                else:
+                    status.append(head)
+
+        lines = []
+        lines.append("【长期摘要记忆】")
+        if goal:
+            lines.append("【目标】")
+            for x in goal[-8:]:
+                lines.append(f"- {x}")
+        if status:
+            lines.append("【进展/结论】")
+            for x in status[-12:]:
+                lines.append(f"- {x}")
+        if ops:
+            lines.append("【已执行操作】")
+            for x in ops[-12:]:
+                lines.append(f"- {x}")
+        out = "\n".join(lines).strip()
+        if len(out) > int(max_chars):
+            out = out[: int(max_chars)]
+        return out
+    except Exception:
+        return ""
+
+
+def _hivo_is_timeout_error(msg: str) -> bool:
+    try:
+        s = str(msg or "").strip().lower()
+    except Exception:
+        return False
+    if not s:
+        return False
+    if "timed out" in s:
+        return True
+    if "timeout" in s:
+        return True
+    if "read operation" in s and "timed" in s:
+        return True
+    return False
+
+
+def _hivo_resolve_path_if_needed(rp: str) -> str:
+    """Resolve a possibly-ambiguous file name to a repo-relative path.
+
+    Root goal: even if the model provides only a basename (e.g. get_ip.py / 123.png),
+    tools should still work by locating the file in workspace first.
+    """
+    try:
+        p0 = str(rp or "").strip()
+        if not p0:
+            return ""
+        p1 = p0.replace("\\", "/")
+        if "/" in p1:
+            return p1
+        hits = find_files_by_name(p1, max_results=5)
+        hits = hits if isinstance(hits, list) else []
+        if len(hits) == 1:
+            return str(hits[0] or "").strip()
+        return p1
+    except Exception:
+        return str(rp or "").strip()
+
+
+def _hivo_tool_call_sig(call: dict):
+    try:
+        if not isinstance(call, dict):
+            return ""
+        return json.dumps(call, ensure_ascii=False, sort_keys=True)
+    except Exception:
+        return ""
+
+
+def _hivo_tool_log_record(tool_type: str, call: dict, ok: bool, msg: str, data: dict | None = None):
+    try:
+        rec = {
+            "ts": time.time(),
+            "type": str(tool_type or ""),
+            "args": call if isinstance(call, dict) else {},
+            "ok": bool(ok),
+            "msg": str(msg or "")[:400],
+        }
+        if isinstance(data, dict):
+            slim = {}
+            for k in ("path", "paths", "count", "output", "content", "file", "files", "hits", "entries"):
+                if k in data:
+                    v = data.get(k)
+                    if isinstance(v, str) and len(v) > 800:
+                        v = v[:800]
+                    slim[k] = v
+            if slim:
+                rec["data"] = slim
+        return rec
+    except Exception:
+        return {"ts": time.time(), "type": str(tool_type or ""), "args": {}, "ok": bool(ok), "msg": str(msg or "")[:400]}
+
+
+def _hivo_format_tool_memory_block(tool_log: list, limit: int = 60):
+    try:
+        arr = tool_log if isinstance(tool_log, list) else []
+        picked = arr[-max(0, int(limit)) :]
+        if not picked:
+            return ""
+        payload = {"recent_tool_calls": picked}
+        s = json.dumps(payload, ensure_ascii=False, indent=2)
+        return "【工具执行记忆（用于避免重复调用/支持结果复用）】\n" + s
+    except Exception:
+        return ""
+
+
+def _hivo_parse_context_refs_structured(context_refs: list, per_file_chars: int = 6000, total_chars: int = 24000):
+    if not isinstance(context_refs, list) or not context_refs:
+        return "", []
+    out = []
+    used = 0
+    for ref0 in context_refs[:8]:
+        raw = str(ref0 or "").strip().lstrip("@")
+        if not raw:
+            continue
+
+        rp = raw.replace("\\", "/").lstrip("/")
+        candidates = []
+        resolved = ""
+        parse_way = ""
+        conf = 0.0
+
+        def _score_candidate(rel: str):
+            try:
+                p = str(rel or "")
+                if not p:
+                    return 0
+                bn_in = rp.split("/")[-1].lower()
+                bn = p.split("/")[-1].lower()
+                score = 10
+                if bn == bn_in:
+                    score += 50
+                # prefer shallower path (likely primary)
+                depth = p.count("/")
+                score += max(0, 12 - depth)
+                # slight preference if user typed a dir prefix and candidate matches it
+                if "/" in rp:
+                    pref = "/".join(rp.split("/")[:-1]).lower()
+                    if pref and p.lower().startswith(pref + "/"):
+                        score += 8
+                return score
+            except Exception:
+                return 0
+
+        if "/" in rp:
+            safe = _safe_repo_abspath(rp)
+            if safe and os.path.isfile(safe):
+                resolved = rp
+                candidates = [rp]
+                parse_way = "精确匹配"
+                conf = 0.99
+        if not resolved:
+            bn = rp.split("/")[-1]
+            cands = find_files_by_name(bn, max_results=20) or []
+            candidates = [str(x) for x in cands if x is not None and str(x).strip()]
+            if candidates:
+                try:
+                    candidates.sort(key=lambda x: _score_candidate(x), reverse=True)
+                except Exception:
+                    pass
+            if len(candidates) == 1:
+                resolved = candidates[0]
+                parse_way = "搜索匹配"
+                conf = 0.92
+            elif len(candidates) > 1:
+                # pick a best-effort default while still reporting ambiguity
+                resolved = candidates[0]
+                parse_way = "搜索匹配(多候选)"
+                conf = 0.72
+
+        status = "not_found"
+        content = ""
+        if resolved:
+            ok, msg, c0 = get_file_content(resolved)
+            if ok and c0 is not None:
+                content = str(c0 or "")
+            if content:
+                content = content[: max(0, int(per_file_chars))]
+                status = "resolved"
+            else:
+                status = "unreadable"
+        else:
+            status = "ambiguous" if candidates else "not_found"
+
+        item = {
+            "解析结果": status,
+            "资源类型": "文件",
+            "用户输入名称": raw,
+            "真实路径": resolved,
+            "文件内容": "",
+            "候选列表": candidates[:8],
+            "解析方式": parse_way,
+            "置信度": conf,
+            "是否需要工具调用": True,
+        }
+
+        if status == "ambiguous":
+            try:
+                bn = rp.split("/")[-1]
+            except Exception:
+                bn = raw
+            item["提示"] = "存在多个候选路径，当前真实路径为最佳猜测，可能不确定；请优先通过 find_files/search_code 进一步确认后再做修改。"
+            item["建议工具调用"] = [{"type": "find_files", "name": bn}]
+
+        if content and used < int(total_chars):
+            room = int(total_chars) - used
+            chunk = content[:room]
+            used += len(chunk)
+            item["文件内容"] = chunk
+
+        out.append(item)
+        if used >= int(total_chars):
+            break
+
+    if not out:
+        return "", []
+    block = "【@引用解析结果（高优先级上下文，禁止忽略）】\n" + json.dumps({"refs": out}, ensure_ascii=False, indent=2)
+    return block, out
+
+
+def _hivo_repeat_signature(calls: list, mode: str = "tool_types"):
+    try:
+        m = str(mode or "tool_types").strip().lower()
+        if not isinstance(calls, list):
+            calls = []
+        if m == "full":
+            return json.dumps(calls, ensure_ascii=False, sort_keys=True)
+        # default: only tool type sequence; much less sensitive to params ordering/details
+        seq = [str((c or {}).get("type") or "").strip() for c in calls if isinstance(c, dict)]
+        seq = [x for x in seq if x]
+        return "|".join(seq)
+    except Exception:
+        return ""
+
+
+def _hivo_repeat_escalation_prompt(level: int, last_sig: str = ""):
+    lv = int(level or 1)
+    sig = str(last_sig or "")
+    base = (
+        "【重复调用自我修正指引】\n"
+        "你刚才的工具调用方案出现重复趋势。禁止输出类似 <|tool_call...|> 的文本模拟；若需要调用工具，必须输出严格合法的工具 JSON。\n"
+        "你必须改变策略，而不是重复上一轮同样的工具序列。\n"
+    )
+    if sig:
+        base += f"- 最近重复的工具序列签名: {sig}\n"
+
+    if lv <= 1:
+        return base + (
+            "一级策略（先补齐信息/澄清）：\n"
+            "- 如果 path/文件名不明确：先用 find_files 或 search_code 确认真实路径\n"
+            "- 如果需要文件内容：用 file_content/read_file_range 获取证据后再决定 save/update\n"
+            "- 如果参数缺失：先向用户提 1-2 个关键澄清问题\n"
+            "输出要求：要么给出最终结论；要么输出新的（不同于上一轮策略的）工具 JSON。"
+        )
+    if lv == 2:
+        return base + (
+            "二级策略（换工具/换路径）：\n"
+            "- 不要再次调用同一组工具；尝试替代路径：例如从 search_code -> list_dir_tree -> file_content\n"
+            "- 将任务拆分为更小的子目标，每轮只做一个明确动作\n"
+            "输出要求：必须输出与上一轮不同的工具 JSON（或明确提出你需要的关键信息）。"
+        )
+    return base + (
+        "三级策略（重新理解目标/请求补充）：\n"
+        "- 重新总结用户目标与当前已知事实\n"
+        "- 明确指出卡点，并请求用户补充最小必要信息（例如：目标文件名、期望修改点、报错文本）\n"
+        "输出要求：不要再尝试重复工具；以澄清问题为主。"
+    )
+
+
+def _hivo_agent_conf(cfg: dict):
+    try:
+        a = cfg.get("agent") if isinstance(cfg, dict) else None
+        if not isinstance(a, dict):
+            a = {}
+        mode = str(a.get("mode") or "hivo_agent").strip() or "hivo_agent"
+        sys_prompt = str(a.get("system_prompt") or "")
+        tools = a.get("tools")
+        if not isinstance(tools, list):
+            tools = []
+        return {
+            "mode": mode,
+            "system_prompt": sys_prompt,
+            "tools": tools,
+        }
+    except Exception:
+        return {"mode": "fallback_chat", "system_prompt": "", "tools": []}
+
+
+def _hivo_ws_emit(run_id: str, session_id: str, stage: str, message: str = "", extra: dict | None = None):
+    try:
+        payload = {
+            "type": "ai_agent_status",
+            "run_id": str(run_id or ""),
+            "session_id": str(session_id or ""),
+            "stage": str(stage or ""),
+            "message": str(message or ""),
+            "ts": time.time(),
+        }
+        if isinstance(extra, dict):
+            payload.update(extra)
+        broadcast_to_clients(payload)
+    except Exception:
+        pass
+
+
+def _hivo_ws_emit_final(run_id: str, session_id: str, content: str, ok: bool = True, extra: dict | None = None):
+    try:
+        payload = {
+            "type": "ai_agent_final",
+            "run_id": str(run_id or ""),
+            "session_id": str(session_id or ""),
+            "ok": bool(ok),
+            "content": str(content or ""),
+            "ts": time.time(),
+        }
+        if isinstance(extra, dict):
+            payload.update(extra)
+        broadcast_to_clients(payload)
+    except Exception:
+        pass
 
 
 def get_file_state_hash():
@@ -645,6 +1220,40 @@ def has_any_staged_changes():
     raw = out or ""
     files = [p for p in raw.split("\x00") if p]
     return (len(files) > 0), None
+
+
+def get_staged_files():
+    if not REPO_PATH:
+        return [], "未打开仓库"
+    out, err, code = run_git(["diff", "--cached", "--name-status", "-z"], timeout=60)
+    if code != 0:
+        return [], (err or "读取暂存区失败")
+    raw = out or ""
+    parts = [x for x in raw.split("\x00") if x]
+    files = []
+    i = 0
+    while i < len(parts):
+        item = parts[i]
+        i += 1
+        if not item:
+            continue
+        cols = item.split("\t")
+        st = (cols[0] or "").strip()
+        path = ""
+        if len(cols) >= 2:
+            path = cols[1]
+        else:
+            if i < len(parts):
+                path = parts[i]
+                i += 1
+        st2 = (st[:1] or "M").upper()
+        if st2 not in ("A", "M", "D", "R", "C"):
+            st2 = "M"
+        p = (path or "").replace("\\", "/")
+        if not p:
+            continue
+        files.append({"path": p, "status": st2})
+    return files, None
 
 def _safe_repo_abspath(rel_path: str):
     """Resolve a repo-relative path to an absolute path, preventing path traversal."""
@@ -2432,11 +3041,19 @@ def revert_multi_lines(filepath: str, hunk_idx: int, start_line_idx: int, end_li
     return True, ""
 
 
-def get_log():
+def get_log(limit: int = 50):
     """获取提交历史"""
     logger.debug("获取提交历史")
+    try:
+        limit_i = int(limit)
+    except Exception:
+        limit_i = 50
+    if limit_i < 1:
+        limit_i = 1
+    if limit_i > 200:
+        limit_i = 200
     fmt = "--pretty=format:%H%x00%an%x00%ae%x00%ad%x00%s"
-    out, _, code = run_git(["log", fmt, "--date=iso", "-50"])
+    out, _, code = run_git(["log", fmt, "--date=iso", f"-{limit_i}"])
     if code != 0:
         logger.warning("获取提交历史失败")
         return []
@@ -2467,6 +3084,19 @@ def _ai_config_path():
     return Path.home() / ".git-manager" / "ai_config.json"
 
 
+def _ai_pick_latest_history_path(base_dir: Path) -> Path | None:
+    try:
+        if not base_dir or not base_dir.exists() or not base_dir.is_dir():
+            return None
+        items = list(base_dir.glob("ai_chat_history_*.json"))
+        if not items:
+            return None
+        items.sort(key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True)
+        return items[0]
+    except Exception:
+        return None
+
+
 def _ai_history_path():
     repo = (REPO_PATH or "")
     repo_key = "global"
@@ -2477,8 +3107,32 @@ def _ai_history_path():
         repo_key = "global"
     appdata = os.environ.get("APPDATA")
     if appdata:
-        return Path(appdata) / "git-manager" / f"ai_chat_history_{repo_key}.json"
-    return Path.home() / ".git-manager" / f"ai_chat_history_{repo_key}.json"
+        base = Path(appdata) / "git-manager"
+        p0 = base / f"ai_chat_history_{repo_key}.json"
+        if not repo:
+            try:
+                if not (p0.exists() and p0.is_file() and p0.stat().st_size > 0):
+                    p1 = _ai_pick_latest_history_path(base)
+                    if p1:
+                        return p1
+            except Exception:
+                p1 = _ai_pick_latest_history_path(base)
+                if p1:
+                    return p1
+        return p0
+    base2 = Path.home() / ".git-manager"
+    p0 = base2 / f"ai_chat_history_{repo_key}.json"
+    if not repo:
+        try:
+            if not (p0.exists() and p0.is_file() and p0.stat().st_size > 0):
+                p1 = _ai_pick_latest_history_path(base2)
+                if p1:
+                    return p1
+        except Exception:
+            p1 = _ai_pick_latest_history_path(base2)
+            if p1:
+                return p1
+    return p0
 
 
 _AI_GLOBAL_PROFILE_ID = "__global__"
@@ -2697,6 +3351,7 @@ def set_ai_active_session(profile_id: str, session_id: str):
     pid = _AI_GLOBAL_PROFILE_ID
     if not sid:
         return False, "缺少参数"
+
     data = _ai_load_history_data()
     node = _ai_ensure_profile_node(data, pid)
     sess = node.get("sessions") or []
@@ -2736,6 +3391,7 @@ def delete_ai_session(profile_id: str, session_id: str):
     pid = _AI_GLOBAL_PROFILE_ID
     if not sid:
         return False, "缺少参数"
+
     data = _ai_load_history_data()
     node = _ai_ensure_profile_node(data, pid)
     sess = node.get("sessions")
@@ -2745,8 +3401,51 @@ def delete_ai_session(profile_id: str, session_id: str):
     if len(new_sess) == len(sess):
         return False, "会话不存在"
     node["sessions"] = new_sess
-    if str(node.get("active_session_id") or "").strip() == sid:
-        node["active_session_id"] = str(new_sess[0].get("id") or "").strip() if new_sess else ""
+
+    # Update session_order and pick a reasonable next active session.
+    try:
+        order0 = node.get("session_order")
+        if not isinstance(order0, list):
+            order0 = []
+        order_ids0 = [str(x).strip() for x in order0 if str(x).strip()]
+        existing_ids = [str(x.get("id") or "").strip() for x in new_sess if isinstance(x, dict) and str(x.get("id") or "").strip()]
+        existing_set = set(existing_ids)
+
+        # Normalize order: keep existing only, and ensure deleted sid is removed.
+        order_ids = [x for x in order_ids0 if x and x != sid and x in existing_set]
+        # Append any sessions not in order to the end.
+        for x in existing_ids:
+            if x and x not in order_ids:
+                order_ids.append(x)
+        node["session_order"] = order_ids
+
+        if str(node.get("active_session_id") or "").strip() == sid:
+            # Prefer the previous session in the stored order; fallback to next.
+            next_active = ""
+            try:
+                idx0 = -1
+                if sid in order_ids0:
+                    idx0 = order_ids0.index(sid)
+                if idx0 >= 0:
+                    for j in range(idx0 - 1, -1, -1):
+                        cand = str(order_ids0[j] or "").strip()
+                        if cand and cand in existing_set:
+                            next_active = cand
+                            break
+                    if not next_active:
+                        for j in range(idx0 + 1, len(order_ids0)):
+                            cand = str(order_ids0[j] or "").strip()
+                            if cand and cand in existing_set:
+                                next_active = cand
+                                break
+            except Exception:
+                next_active = ""
+            if not next_active:
+                next_active = existing_ids[0] if existing_ids else ""
+            node["active_session_id"] = next_active
+    except Exception:
+        if str(node.get("active_session_id") or "").strip() == sid:
+            node["active_session_id"] = str(new_sess[0].get("id") or "").strip() if new_sess else ""
     _ai_write_history_data(data)
     return True, ""
 
@@ -2758,6 +3457,7 @@ def load_ai_chat_history(profile_id: str, limit: int = 40, session_id: str | Non
     sid = str(session_id or "").strip() or str(node.get("active_session_id") or "").strip()
     if not sid:
         return []
+
     for s in (node.get("sessions") or []):
         if not isinstance(s, dict):
             continue
@@ -2784,6 +3484,7 @@ def load_ai_chat_history(profile_id: str, limit: int = 40, session_id: str | Non
 def save_ai_chat_history(profile_id: str, messages: list, limit: int = 80, session_id: str | None = None):
     pid = _AI_GLOBAL_PROFILE_ID
     cleaned = _ai_clean_messages(messages, limit)
+
     data = _ai_load_history_data()
     node = _ai_ensure_profile_node(data, pid)
     sid = str(session_id or "").strip() or str(node.get("active_session_id") or "").strip()
@@ -2896,6 +3597,7 @@ def get_workspace_context(max_entries: int = 80):
     return (
         f"Repo: {repo_root}\n"
         + (f"Branch: {branch}\n" if branch else "")
+        + "Hints: If a file path is uncertain, use find_files(name) or list_dir_tree(path,depth) before calling open_file/save_file.\n"
         + "Top-level:\n"
         + (tree or "- (empty)")
     )
@@ -2999,11 +3701,114 @@ def _ai_build_chat_url(base_url: str):
     return u + "/v1/chat/completions"
 
 
+def _ai_build_models_url(base_url: str):
+    u = (base_url or "").strip()
+    if not u:
+        return ""
+    u = u.rstrip("/")
+    if u.endswith("/models"):
+        return u
+    return u + "/models"
+
+
+_ai_models_cache = {
+    "items": {},
+    "ttl_s": 60.0,
+}
+
+
+def ai_list_models(base_url: str, api_key: str | None = None):
+    base_url = str(base_url or "").strip()
+    api_key = str(api_key or "")
+    url = _ai_build_models_url(base_url)
+    if not url:
+        return False, "未配置 API Base URL", []
+
+    cache_key = (url, "1" if api_key else "0")
+    try:
+        ent = _ai_models_cache.get("items", {}).get(cache_key)
+        if isinstance(ent, dict) and (time.time() - float(ent.get("ts") or 0.0)) <= float(_ai_models_cache.get("ttl_s") or 60.0):
+            models = ent.get("models")
+            if isinstance(models, list):
+                return True, "", models
+    except Exception:
+        pass
+
+    headers = {
+        "Accept": "application/json",
+        "Connection": "close",
+    }
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    req = urllib.request.Request(url, headers=headers, method="GET")
+    try:
+        https_handler = urllib.request.HTTPSHandler(context=_AI_SSL_CONTEXT) if _AI_SSL_CONTEXT else urllib.request.HTTPSHandler()
+        opener = urllib.request.build_opener(https_handler)
+        with opener.open(req, timeout=30) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+        data = json.loads(raw or "{}")
+    except urllib.error.HTTPError as e:
+        try:
+            body = e.read().decode("utf-8", errors="replace")
+        except Exception:
+            body = ""
+        msg = body.strip()[:400] if body else str(e)
+        return False, f"上游返回错误: {msg}", []
+    except Exception as e:
+        return False, str(e), []
+
+    if not isinstance(data, dict) or str(data.get("object") or "").strip() != "list":
+        return False, "响应格式不是 OpenAI 兼容的 models list", []
+    arr = data.get("data")
+    if not isinstance(arr, list):
+        return False, "响应缺少 data 数组", []
+
+    out = []
+    for it in arr:
+        if not isinstance(it, dict):
+            continue
+        mid = str(it.get("id") or "").strip()
+        if not mid:
+            continue
+        out.append(mid)
+        if len(out) >= 300:
+            break
+    out = sorted(list(dict.fromkeys(out)))
+
+    try:
+        items = _ai_models_cache.get("items")
+        if not isinstance(items, dict):
+            items = {}
+            _ai_models_cache["items"] = items
+        items[cache_key] = {"ts": time.time(), "models": out}
+    except Exception:
+        pass
+    return True, "", out
+
+
 def get_capabilities_spec():
+    cfg0 = _hivo_load_cfg()
+    cap = cfg0.get("capabilities") if isinstance(cfg0, dict) else None
+    cap = cap if isinstance(cap, dict) else {}
+    dis_ep = cap.get("disable_endpoints")
+    dis_ep = dis_ep if isinstance(dis_ep, list) else []
+    dis_tool = cap.get("disable_tools")
+    dis_tool = dis_tool if isinstance(dis_tool, list) else []
+    ep_extra = cap.get("endpoints_extra")
+    ep_extra = ep_extra if isinstance(ep_extra, list) else []
+    tool_extra = cap.get("agent_tools_extra")
+    tool_extra = tool_extra if isinstance(tool_extra, list) else []
+
     endpoints = [
         # Repo/Workspace
         {"method": "GET", "path": "/api/status"},
         {"method": "POST", "path": "/api/open_repo", "body": {"path": "<abs path>"}},
+        {"method": "GET", "path": "/api/staged_files"},
+        {"method": "POST", "path": "/api/unstage_file", "body": {"path": "<rel path>"}},
+        {"method": "POST", "path": "/api/discard_staged_file", "body": {"path": "<rel path>"}},
+        {"method": "POST", "path": "/api/unstage_all_staged"},
+        {"method": "POST", "path": "/api/discard_all_staged"},
         {"method": "GET", "path": "/api/files", "query": {"max_age": "0-10"}},
         {"method": "GET", "path": "/api/diff", "query": {"path": "<rel>", "status": "M/A/D/R/U", "ctx": "0-200"}},
         {"method": "GET", "path": "/api/file_content", "query": {"path": "<rel>"}},
@@ -3017,6 +3822,7 @@ def get_capabilities_spec():
         # Write / File ops
         {"method": "POST", "path": "/api/save_file", "body": {"path": "<rel>", "content": "<text>"}},
         {"method": "POST", "path": "/api/delete_file", "body": {"path": "<rel>"}},
+        {"method": "POST", "path": "/api/file_content_head", "body": {"path": "<rel>"}},
         {"method": "POST", "path": "/api/rename_file", "body": {"old_path": "<rel>", "new_path": "<rel>"}},
         {"method": "POST", "path": "/api/revert_file", "body": {"path": "<rel>", "status": "M/A/D/R/U"}},
         {"method": "POST", "path": "/api/revert_hunk", "body": {"path": "<rel>", "hunk_index": 0, "status": "M/A/D/R/U"}},
@@ -3026,12 +3832,16 @@ def get_capabilities_spec():
 
         # Git
         {"method": "GET", "path": "/api/commits"},
+        {"method": "GET", "path": "/api/log"},
         {"method": "GET", "path": "/api/commit_detail", "query": {"hash": "<sha>"}},
         {"method": "GET", "path": "/api/commit_file_diff", "query": {"hash": "<sha>", "path": "<rel>"}},
         {"method": "GET", "path": "/api/branches"},
         {"method": "GET", "path": "/api/commit_push_status", "query": {"hash": "<sha>"}},
+        {"method": "GET", "path": "/api/file_log", "query": {"path": "<rel>", "limit": "1-200"}},
         {"method": "POST", "path": "/api/stage_file", "body": {"path": "<rel>"}},
         {"method": "POST", "path": "/api/commit", "body": {"message": "<text>", "files": ["<rel>"]}},
+        {"method": "POST", "path": "/api/commit_hunks", "body": {"message": "<text>", "path": "<rel>", "status": "M/A/D/R/U", "hunks": [], "ctx": 0}},
+        {"method": "POST", "path": "/api/commit_lines", "body": {"message": "<text>", "path": "<rel>", "status": "M/A/D/R/U", "lines": [], "ctx": 0}},
         {"method": "POST", "path": "/api/pull", "body": {}},
         {"method": "POST", "path": "/api/push", "body": {}},
         {"method": "POST", "path": "/api/stash_and_pull", "body": {}},
@@ -3040,19 +3850,26 @@ def get_capabilities_spec():
         {"method": "POST", "path": "/api/stash_and_switch", "body": {"branch": "<name>"}},
         {"method": "POST", "path": "/api/commit_and_switch", "body": {"branch": "<name>", "message": "<text>", "files": ["<rel>"]}},
         {"method": "POST", "path": "/api/stash_pop", "body": {}},
+        {"method": "POST", "path": "/api/pull_file", "body": {"path": "<rel>"}},
+        {"method": "POST", "path": "/api/restore_file", "body": {"hash": "<sha>", "path": "<rel>"}},
+        {"method": "POST", "path": "/api/restore_workspace", "body": {"hash": "<sha>"}},
+        {"method": "POST", "path": "/api/revert_commit", "body": {"hash": "<sha>"}},
+        {"method": "POST", "path": "/api/soft_reset_commit", "body": {"hash": "<sha>"}},
 
         # AI
         {"method": "GET", "path": "/api/ai_config"},
         {"method": "POST", "path": "/api/ai_config", "body": {"config": {"active_profile_id": "", "profiles": []}}},
+        {"method": "GET", "path": "/api/ai_models", "query": {"base_url": "<url>", "api_key": "<key>"}},
         {"method": "POST", "path": "/api/ai_chat", "body": {"messages": [], "profile_id": "<id>", "session_id": "<id>"}},
         {"method": "GET", "path": "/api/ai_chat_history", "query": {"profile_id": "<id>", "session_id": "<id>", "limit": "1-200"}},
         {"method": "POST", "path": "/api/ai_chat_history", "body": {"profile_id": "<id>", "session_id": "<id>", "messages": []}},
+        {"method": "POST", "path": "/api/hivo_agent", "body": {"profile_id": "<id>", "session_id": "<id>", "user_text": "<text>", "messages": [], "dyn_context": "<text>", "env_observation": "<text?>"}},
         {"method": "GET", "path": "/api/ai_sessions", "query": {"profile_id": "<id>"}},
         {"method": "POST", "path": "/api/ai_sessions", "body": {"profile_id": "<id>", "action": "create/delete/set_active/reorder", "session_id": "<id>"}},
         {"method": "POST", "path": "/api/ai_cache_clear", "body": {}},
 
         # System
-        {"method": "POST", "path": "/api/open_file", "body": {"name": "<name or rel path>", "view": "editor/split"}},
+        {"method": "POST", "path": "/api/open_file", "body": {"name": "<name or rel path>", "view": "editor/split/change/unified"}},
         {"method": "POST", "path": "/api/verify_python", "body": {"paths": ["<rel>"]}},
         {"method": "POST", "path": "/api/run_cmd", "body": {"cmd": "<single line>", "timeout": 30, "cwd": "<rel?>"}},
         {"method": "POST", "path": "/api/undo", "body": {}},
@@ -3060,12 +3877,475 @@ def get_capabilities_spec():
         {"method": "GET", "path": "/api/capabilities"},
     ]
 
+    try:
+        for e in ep_extra:
+            if isinstance(e, dict) and e.get("method") and e.get("path"):
+                endpoints.append(e)
+    except Exception:
+        pass
+
+    # Agent Tools 定义
+    agent_tools = [
+        {
+            "type": "save_file",
+            "desc": "创建新文件或覆盖已有文件的内容（同时支持新建和修改）。",
+            "required": ["path", "content"],
+            "properties": {
+                "path": {"type": "string", "desc": "相对路径，必须在仓库内，例如 src/main.py"},
+                "content": {"type": "string", "desc": "完整文件内容"},
+            },
+            "example": {"type": "save_file", "path": "README.md", "content": "# Title"},
+        },
+        {
+            "type": "find_files",
+            "desc": "按文件名搜索工作区内的文件（用于定位真实路径）。",
+            "required": ["name"],
+            "properties": {
+                "name": {"type": "string", "desc": "文件名（可包含扩展名），例如 server.py / index.html"},
+            },
+            "example": {"type": "find_files", "name": "server.py"},
+        },
+        {
+            "type": "delete_file",
+            "desc": "删除文件。",
+            "required": ["path"],
+            "properties": {
+                "path": {"type": "string", "desc": "相对路径"},
+            },
+            "example": {"type": "delete_file", "path": "tmp.txt"},
+        },
+        {
+            "type": "rename_file",
+            "desc": "重命名文件（移动路径）。",
+            "required": ["old_path", "new_path"],
+            "properties": {
+                "old_path": {"type": "string", "desc": "原相对路径"},
+                "new_path": {"type": "string", "desc": "新相对路径"},
+            },
+            "example": {"type": "rename_file", "old_path": "a.txt", "new_path": "b.txt"},
+        },
+        {
+            "type": "revert_hunk",
+            "desc": "撤回某个文件的指定 hunk。",
+            "required": ["path", "hunk_index"],
+            "properties": {
+                "path": {"type": "string", "desc": "相对路径"},
+                "hunk_index": {"type": "number", "desc": "hunk 索引（从 0 开始）"},
+                "status": {"type": "string", "desc": "可选：M/A/D/R/U（默认 M）"},
+            },
+            "example": {"type": "revert_hunk", "path": "server.py", "hunk_index": 0, "status": "M"},
+        },
+        {
+            "type": "revert_line",
+            "desc": "撤回某个文件的指定行（位于某个 hunk 内）。",
+            "required": ["path", "hunk_index", "line_index"],
+            "properties": {
+                "path": {"type": "string", "desc": "相对路径"},
+                "hunk_index": {"type": "number", "desc": "hunk 索引（从 0 开始）"},
+                "line_index": {"type": "number", "desc": "行索引（从 0 开始）"},
+                "status": {"type": "string", "desc": "可选：M/A/D/R/U（默认 M）"},
+            },
+            "example": {"type": "revert_line", "path": "server.py", "hunk_index": 0, "line_index": 0, "status": "M"},
+        },
+        {
+            "type": "revert_multi_lines",
+            "desc": "撤回某个文件的多行（位于某个 hunk 内）。",
+            "required": ["path", "hunk_index", "start_line_index", "end_line_index"],
+            "properties": {
+                "path": {"type": "string", "desc": "相对路径"},
+                "hunk_index": {"type": "number", "desc": "hunk 索引（从 0 开始）"},
+                "start_line_index": {"type": "number", "desc": "起始行索引（从 0 开始）"},
+                "end_line_index": {"type": "number", "desc": "结束行索引（从 0 开始，包含）"},
+                "status": {"type": "string", "desc": "可选：M/A/D/R/U（默认 M）"},
+            },
+            "example": {"type": "revert_multi_lines", "path": "server.py", "hunk_index": 0, "start_line_index": 0, "end_line_index": 3, "status": "M"},
+        },
+        {
+            "type": "revert_file",
+            "desc": "撤回整个文件的修改（恢复为 HEAD 版本或删除未跟踪文件）。",
+            "required": ["path"],
+            "properties": {
+                "path": {"type": "string", "desc": "相对路径"},
+                "status": {"type": "string", "desc": "可选：M/A/D/R/U（默认 M）"},
+            },
+            "example": {"type": "revert_file", "path": "server.py", "status": "M"},
+        },
+        {
+            "type": "revert_all",
+            "desc": "撤回多个文件的所有修改（整文件级别）。",
+            "required": ["paths"],
+            "properties": {
+                "paths": {"type": "array", "desc": "相对路径数组"},
+            },
+            "example": {"type": "revert_all", "paths": ["server.py", "README.md"]},
+        },
+        {
+            "type": "open_file",
+            "desc": "在 IDE 中打开文件（必须走 /api/open_file 调度）。支持多种视图：editor=文本视图，split=并排对比（双栏），change=变更视图(单栏)，unified=统一 diff 视图(单栏)。",
+            "required": ["name"],
+            "properties": {
+                "name": {"type": "string", "desc": "文件名或相对路径"},
+                "view": {"type": "string", "desc": "可选视图：editor/split/change/unified（默认 editor）"},
+            },
+            "example": {"type": "open_file", "name": "README.md", "view": "change"},
+        },
+        {
+            "type": "status",
+            "desc": "获取当前仓库/工作区状态（包含仓库是否打开、分支、变更概览等）。",
+            "required": [],
+            "properties": {},
+            "example": {"type": "status"},
+        },
+        {
+            "type": "open_repo",
+            "desc": "打开/切换仓库（有副作用，会改变当前工作区仓库）。",
+            "required": ["path"],
+            "properties": {
+                "path": {"type": "string", "desc": "仓库路径（绝对路径或可展开的用户路径）"},
+            },
+            "example": {"type": "open_repo", "path": "C:/path/to/repo"},
+        },
+        {
+            "type": "staged_files",
+            "desc": "列出暂存区（index）文件列表（只读）。",
+            "required": [],
+            "properties": {},
+            "example": {"type": "staged_files"},
+        },
+        {
+            "type": "unstage_file",
+            "desc": "将指定文件从暂存区恢复到工作区（取消暂存，保留工作区改动）。",
+            "required": ["path"],
+            "properties": {
+                "path": {"type": "string", "desc": "文件相对路径"},
+            },
+            "example": {"type": "unstage_file", "path": "server.py"},
+        },
+        {
+            "type": "discard_staged_file",
+            "desc": "丢弃指定文件在暂存区的内容（并同步丢弃工作区该文件改动，恢复到 HEAD）。",
+            "required": ["path"],
+            "properties": {
+                "path": {"type": "string", "desc": "文件相对路径"},
+            },
+            "example": {"type": "discard_staged_file", "path": "server.py"},
+        },
+        {
+            "type": "unstage_all_staged",
+            "desc": "将全部暂存区文件恢复到工作区（取消全部暂存，保留工作区改动）。",
+            "required": [],
+            "properties": {},
+            "example": {"type": "unstage_all_staged"},
+        },
+        {
+            "type": "discard_all_staged",
+            "desc": "丢弃全部暂存区内容（并同步丢弃相关工作区改动，恢复到 HEAD）。",
+            "required": [],
+            "properties": {},
+            "example": {"type": "discard_all_staged"},
+        },
+        {
+            "type": "workspace_context",
+            "desc": "获取工作区上下文摘要（用于让 AI 了解当前工作区、文件树摘要等）。",
+            "required": [],
+            "properties": {},
+            "example": {"type": "workspace_context"},
+        },
+        {
+            "type": "list_files",
+            "desc": "列出仓库文件变更列表（用于了解哪些文件有修改/新增/删除）。",
+            "required": [],
+            "properties": {
+                "max_age": {"type": "number", "desc": "可选：缓存最大年龄（秒），0 表示强制刷新"},
+            },
+            "example": {"type": "list_files", "max_age": 0},
+        },
+        {
+            "type": "diff_file",
+            "desc": "获取单个文件的 diff（用于审阅变更）。",
+            "required": ["path"],
+            "properties": {
+                "path": {"type": "string", "desc": "相对路径"},
+                "status": {"type": "string", "desc": "可选：M/A/D/R/U（默认 M）"},
+                "ctx_lines": {"type": "number", "desc": "可选：diff 上下文行数（0-200）"},
+            },
+            "example": {"type": "diff_file", "path": "server.py", "status": "M", "ctx_lines": 80},
+        },
+        {
+            "type": "file_content",
+            "desc": "读取文件完整内容（文本）。",
+            "required": ["path"],
+            "properties": {
+                "path": {"type": "string", "desc": "相对路径"},
+            },
+            "example": {"type": "file_content", "path": "README.md"},
+        },
+        {
+            "type": "raw_file",
+            "desc": "获取媒体/二进制文件的结构化信息对象。返回 {file:{path,file_name,file_type,file_size,raw_url_template}}；其中 raw_url_template 为 /api/raw_file?path={path}，{path} 用 file.path 替换。不要自行发明或二次包装 raw_file URL。",
+            "required": ["path"],
+            "properties": {
+                "path": {"type": "string", "desc": "相对路径"},
+            },
+            "example": {"type": "raw_file", "path": "assets/logo.png"},
+        },
+        {
+            "type": "undo_stats",
+            "desc": "获取 Undo 统计信息（用于判断当前是否可撤销/撤销栈状态）。",
+            "required": [],
+            "properties": {},
+            "example": {"type": "undo_stats"},
+        },
+        {
+            "type": "ai_cache_clear",
+            "desc": "清理 AI 缓存（例如模型列表缓存等）。",
+            "required": [],
+            "properties": {},
+            "example": {"type": "ai_cache_clear"},
+        },
+        {
+            "type": "branches",
+            "desc": "列出本地/远端分支信息（只读）。",
+            "required": [],
+            "properties": {},
+            "example": {"type": "branches"},
+        },
+        {
+            "type": "commits",
+            "desc": "列出最近提交记录（只读）。",
+            "required": [],
+            "properties": {
+                "limit": {"type": "number", "desc": "可选：最大条数"},
+            },
+            "example": {"type": "commits", "limit": 30},
+        },
+        {
+            "type": "commit_detail",
+            "desc": "获取单个提交详情（只读）。",
+            "required": ["hash"],
+            "properties": {
+                "hash": {"type": "string", "desc": "提交 hash（短或长）"},
+            },
+            "example": {"type": "commit_detail", "hash": "abc1234"},
+        },
+        {
+            "type": "commit_file_diff",
+            "desc": "获取某次提交中某个文件的 diff（只读）。",
+            "required": ["hash", "path"],
+            "properties": {
+                "hash": {"type": "string", "desc": "提交 hash"},
+                "path": {"type": "string", "desc": "文件相对路径"},
+            },
+            "example": {"type": "commit_file_diff", "hash": "abc1234", "path": "server.py"},
+        },
+        {
+            "type": "commit_push_status",
+            "desc": "查询某次提交的 push 状态（是否已推送/远端是否存在等，只读）。",
+            "required": ["hash"],
+            "properties": {
+                "hash": {"type": "string", "desc": "提交 hash"},
+            },
+            "example": {"type": "commit_push_status", "hash": "abc1234"},
+        },
+        {
+            "type": "api_request",
+            "desc": "调用 /api/* HTTP 接口。**仅在无更具体工具时使用**，优先使用本列表中的专用工具（如 file_content, diff_file 等）。",
+            "required": ["method", "path"],
+            "properties": {
+                "method": {"type": "string", "desc": "GET 或 POST"},
+                "path": {"type": "string", "desc": "/api/ 开头的路径，例如 /api/workspace_context"},
+                "query": {"type": "object", "desc": "可选，URL 查询参数"},
+                "body": {"type": "object", "desc": "可选，POST 请求的 JSON body"},
+            },
+            "example": {"type": "api_request", "method": "GET", "path": "/api/branches"},
+        },
+        {
+            "type": "undo_last_turn",
+            "desc": "撤销上一轮操作（文件修改、重命名、AI 配置变更等）。",
+            "required": [],
+            "properties": {},
+            "example": {"type": "undo_last_turn"},
+        },
+        {
+            "type": "run_cmd",
+            "desc": "执行底层终端命令（Windows: CMD/PowerShell；Linux/macOS: Shell）。这是**系统命令执行入口**，不是普通业务功能。**仅当没有任何其他工具能完成任务时使用**。禁止换行、管道、重定向、复合命令（如 `cmd1 && cmd2`）。跨平台要求：生成命令时必须根据当前运行平台选择对应指令；若命令不兼容，必须明确说明当前平台并给出正确平台命令。返回 result.output（stdout+stderr）。",
+            "required": ["cmd"],
+            "properties": {
+                "cmd": {"type": "string", "desc": "单行命令，例如 'git log -1'"},
+                "timeout": {"type": "number", "desc": "超时秒数，默认 30，最大 600"},
+                "cwd": {"type": "string", "desc": "可选，工作目录（相对仓库根目录）"},
+            },
+            "example": {"type": "run_cmd", "cmd": "git status", "timeout": 30},
+        },
+        {
+            "type": "search_code",
+            "desc": "搜索代码。",
+            "required": ["query"],
+            "properties": {
+                "query": {"type": "string", "desc": "关键字/正则"},
+                "case_sensitive": {"type": "boolean", "desc": "可选"},
+                "max_results": {"type": "number", "desc": "可选"},
+            },
+            "example": {"type": "search_code", "query": "ai_chat", "case_sensitive": False, "max_results": 50},
+        },
+        {
+            "type": "read_file_range",
+            "desc": "读取文件片段。",
+            "required": ["path", "start", "end"],
+            "properties": {
+                "path": {"type": "string", "desc": "相对路径"},
+                "start": {"type": "number", "desc": "起始行(1-indexed)"},
+                "end": {"type": "number", "desc": "结束行(1-indexed)"},
+            },
+            "example": {"type": "read_file_range", "path": "server.py", "start": 1, "end": 120},
+        },
+        {
+            "type": "list_dir_tree",
+            "desc": "列目录树。",
+            "required": ["path"],
+            "properties": {
+                "path": {"type": "string", "desc": "相对路径或空"},
+                "depth": {"type": "number", "desc": "可选"},
+                "max_entries": {"type": "number", "desc": "可选"},
+            },
+            "example": {"type": "list_dir_tree", "path": "", "depth": 3, "max_entries": 500},
+        },
+        {
+            "type": "verify_python",
+            "desc": "编译校验 Python 文件。",
+            "required": ["paths"],
+            "properties": {
+                "paths": {"type": "array", "desc": "相对路径列表"},
+            },
+            "example": {"type": "verify_python", "paths": ["server.py"]},
+        },
+        {
+            "type": "stage_file",
+            "desc": "Git 暂存单个文件。",
+            "required": ["path"],
+            "properties": {
+                "path": {"type": "string", "desc": "相对路径"},
+            },
+            "example": {"type": "stage_file", "path": "README.md"},
+        },
+        {
+            "type": "commit",
+            "desc": "Git 提交。",
+            "required": ["message"],
+            "properties": {
+                "message": {"type": "string", "desc": "提交信息"},
+                "files": {"type": "array", "desc": "可选：要提交的文件列表（相对路径）"},
+            },
+            "example": {"type": "commit", "message": "fix: ...", "files": ["README.md"]},
+        },
+        {
+            "type": "pull",
+            "desc": "Git pull 拉取远端。",
+            "required": [],
+            "properties": {},
+            "example": {"type": "pull"},
+        },
+        {
+            "type": "push",
+            "desc": "Git push 推送远端。",
+            "required": [],
+            "properties": {},
+            "example": {"type": "push"},
+        },
+        {
+            "type": "stash_and_pull",
+            "desc": "暂存(stash)后拉取(pull)。",
+            "required": [],
+            "properties": {},
+            "example": {"type": "stash_and_pull"},
+        },
+        {
+            "type": "commit_and_pull",
+            "desc": "提交(commit)后拉取(pull)。",
+            "required": ["message"],
+            "properties": {
+                "message": {"type": "string", "desc": "提交信息"},
+                "files": {"type": "array", "desc": "要提交的文件列表"},
+            },
+            "example": {"type": "commit_and_pull", "message": "chore: sync", "files": ["README.md"]},
+        },
+        {
+            "type": "switch_branch",
+            "desc": "切换分支。",
+            "required": ["branch"],
+            "properties": {
+                "branch": {"type": "string", "desc": "分支名"},
+            },
+            "example": {"type": "switch_branch", "branch": "main"},
+        },
+        {
+            "type": "stash_and_switch",
+            "desc": "暂存(stash)后切换分支。",
+            "required": ["branch"],
+            "properties": {
+                "branch": {"type": "string", "desc": "分支名"},
+            },
+            "example": {"type": "stash_and_switch", "branch": "main"},
+        },
+        {
+            "type": "commit_and_switch",
+            "desc": "提交(commit)后切换分支。",
+            "required": ["branch", "message"],
+            "properties": {
+                "branch": {"type": "string", "desc": "分支名"},
+                "message": {"type": "string", "desc": "提交信息"},
+                "files": {"type": "array", "desc": "要提交的文件列表"},
+            },
+            "example": {"type": "commit_and_switch", "branch": "main", "message": "chore: save", "files": ["README.md"]},
+        },
+        {
+            "type": "stash_pop",
+            "desc": "应用 stash（stash pop）。",
+            "required": [],
+            "properties": {},
+            "example": {"type": "stash_pop"},
+        },
+    ]
+
+    try:
+        for t in tool_extra:
+            if isinstance(t, dict) and str(t.get("type") or "").strip():
+                agent_tools.append(t)
+    except Exception:
+        pass
+
+    try:
+        dis_ep_set = set(str(x) for x in dis_ep if x is not None and str(x).strip())
+        if dis_ep_set:
+            endpoints = [e for e in endpoints if (str(e.get("path") or "") not in dis_ep_set)]
+    except Exception:
+        pass
+
+    try:
+        dis_tool_set = set(str(x) for x in dis_tool if x is not None and str(x).strip())
+        if dis_tool_set:
+            agent_tools = [t for t in agent_tools if (str(t.get("type") or "") not in dis_tool_set)]
+    except Exception:
+        pass
+
     lines = []
     lines.append("系统接口索引（后端单一真源，自动生成）：")
     lines.append("")
     lines.append("重要约束：")
     lines.append("- 优先使用 /api/* 完成业务 CRUD；只有接口确实无法覆盖时才使用 /api/run_cmd")
-    lines.append("- run_cmd 必须是单行命令，不允许换行/管道/重定向/复合命令")
+    lines.append("- run_cmd 是底层终端命令执行入口（不是普通业务功能），必须是单行命令，不允许换行/管道/重定向/复合命令")
+    lines.append("- 跨平台：生成命令必须匹配当前运行平台（Windows vs Linux/macOS）；不兼容时必须说明平台并提供正确命令")
+    lines.append("- 工具选择：只允许从下方 Agent Tools 列表中选择；输出 JSON 时严格遵守 required 字段与类型")
+    lines.append("- 参数不确定：先澄清/补全（例如 path 不明确、缺少 content），不要瞎猜")
+    lines.append("")
+    lines.append("Agent Tools（前端可执行的工具 JSON schema 摘要）：")
+    for t in agent_tools:
+        tt = str(t.get("type") or "").strip()
+        if not tt:
+            continue
+        req = t.get("required") or []
+        req_s = ",".join([str(x) for x in req]) if isinstance(req, list) else ""
+        lines.append(f"- {tt} required=[{req_s}]")
     lines.append("")
     for e in endpoints:
         method = str(e.get("method") or "").upper()
@@ -3079,6 +4359,7 @@ def get_capabilities_spec():
         "version": "1",
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "endpoints": endpoints,
+        "agent_tools": agent_tools,
         "text": text,
     }
 
@@ -3185,6 +4466,1070 @@ def ai_chat(messages: list, temperature: float | None = None, profile_id: str | 
         return True, "", {"content": content, "raw": data}
     except Exception:
         return False, "解析响应失败", None
+
+
+def _ai_build_system_context_text():
+    """构建系统提示词（强约束）"""
+    try:
+        spec = get_capabilities_spec()
+    except Exception:
+        spec = {}
+    try:
+        tools0 = (spec.get("agent_tools") or []) if isinstance(spec, dict) else []
+        eps0 = (spec.get("endpoints") or []) if isinstance(spec, dict) else []
+
+        slim_tools = []
+        for t in (tools0[:200] if isinstance(tools0, list) else []):
+            if not isinstance(t, dict):
+                continue
+            tt = str(t.get("type") or "").strip()
+            if not tt:
+                continue
+            desc = str(t.get("desc") or "").strip()
+            if len(desc) > 160:
+                desc = desc[:160] + "…"
+            req = t.get("required") if isinstance(t.get("required"), list) else []
+            props_in = t.get("properties") if isinstance(t.get("properties"), dict) else {}
+            props = {}
+            for k, v in list(props_in.items())[:30]:
+                if not isinstance(v, dict):
+                    continue
+                ptype = str(v.get("type") or "").strip()
+                pdesc = str(v.get("desc") or "").strip()
+                if len(pdesc) > 120:
+                    pdesc = pdesc[:120] + "…"
+                props[str(k)] = {"type": ptype, "desc": pdesc}
+            slim_tools.append({"type": tt, "desc": desc, "required": req, "properties": props})
+
+        slim_eps = []
+        for e in (eps0[:200] if isinstance(eps0, list) else []):
+            if not isinstance(e, dict):
+                continue
+            m = str(e.get("method") or "").upper().strip()
+            p = str(e.get("path") or "").strip()
+            if not m or not p:
+                continue
+            slim_eps.append({"method": m, "path": p})
+
+        slim = {
+            "version": spec.get("version") if isinstance(spec, dict) else "",
+            "generated_at": spec.get("generated_at") if isinstance(spec, dict) else "",
+            "agent_tools": slim_tools,
+            "endpoints": slim_eps,
+        }
+    except Exception:
+        slim = {"version": "", "generated_at": "", "agent_tools": [], "endpoints": []}
+
+    tool_registry = "TOOL_REGISTRY_JSON:\n" + json.dumps(slim, ensure_ascii=False, indent=2)
+
+    try:
+        cfg0 = _hivo_load_cfg()
+        extra = str((cfg0.get("system_context_extra") if isinstance(cfg0, dict) else "") or "").strip()
+    except Exception:
+        extra = ""
+
+    strong = (
+        "你是 Hivo，Git Manager 系统的智能助手，负责帮助用户管理 Git 仓库和文件操作。\n\n"
+        
+        "# 核心原则\n"
+        "1. **工具驱动**：通过调用工具完成实际操作，而非仅描述步骤\n"
+        "2. **结果导向**：基于工具返回的真实结果回复用户，不臆造结果\n"
+        "3. **清晰沟通**：用自然语言解释操作结果，隐藏技术细节\n\n"
+        
+        "# 输出规范\n\n"
+        
+        "## 对话回复\n"
+        "- 使用 Markdown 格式（段落、列表、标题、代码块）\n"
+        "- 代码使用三个反引号包裹，指定语言类型\n"
+        "- 图片使用 `![描述](URL)` 格式\n"
+        "- 保持自然对话风格，避免僵硬模板\n\n"
+        
+        "## 工具调用格式\n"
+        "**位置**：工具 JSON 必须放在回复末尾，独占一行  \n"
+        "**数量**：每次回复最多 3 个工具调用  \n"
+        "**格式**：严格的 JSON（双引号、无注释、无尾逗号）  \n"
+        "**时机**：只在需要执行操作时输出，纯对话不输出工具\n\n"
+        
+        "✅ 正确示例：\n"
+        "```\n"
+        "我来帮你找到这个文件并查看内容。\n\n"
+        "{\"type\": \"find_files\", \"name\": \"server.py\"}\n"
+        "{\"type\": \"file_content\", \"path\": \"server.py\"}\n"
+        "```\n\n"
+        
+        "❌ 错误示例：\n"
+        "```\n"
+        "我已经打开了文件（实际未调用 open_file）\n"
+        "让我执行 {\"type\": \"save_file\", ...}（不要用\"让我\"等描述）\n"
+        "```\n\n"
+        
+        "# 工具使用指南\n\n"
+        
+        "## 必须遵循的规则\n"
+        "1. **单一真源**：只使用 TOOL_REGISTRY_JSON 中定义的工具\n"
+        "2. **参数完整**：确保 `required` 字段都已提供\n"
+        "3. **等待回执**：工具调用后等待系统返回结果再进行下一步\n"
+        "4. **单一职责**：每个工具调用只做一件事\n\n"
+        
+        "## 常用工具速查\n\n"
+        
+        "### 文件操作\n"
+        "- `save_file` - 创建或修改文件（统一接口）\n"
+        "- `file_content` - 读取完整文件内容\n"
+        "- `read_file_range` - 读取文件片段（指定行号）\n"
+        "- `delete_file` - 删除文件\n"
+        "- `rename_file` - 重命名或移动文件\n"
+        "- `raw_file` - 获取媒体文件信息（返回结构化对象）\n\n"
+        
+        "### 文件查找\n"
+        "- `find_files` - 按文件名搜索（支持模糊匹配）\n"
+        "- `search_code` - 按内容搜索（支持正则）\n"
+        "- `list_dir_tree` - 列出目录结构\n\n"
+        
+        "### 版本控制\n"
+        "- `diff_file` - 查看文件变更详情\n"
+        "- `revert_file` - 撤销整个文件的修改\n"
+        "- `revert_hunk` - 撤销指定变更块\n"
+        "- `revert_line` - 撤销单行修改\n"
+        "- `revert_multi_lines` - 撤销多行修改\n"
+        "- `undo_last_turn` - 撤销上一轮操作\n\n"
+        
+        "### Git 操作\n"
+        "- `stage_file` - 暂存文件\n"
+        "- `commit` - 提交更改\n"
+        "- `pull` - 拉取远程更新\n"
+        "- `push` - 推送到远程\n"
+        "- `switch_branch` - 切换分支\n"
+        "- `stash_pop` - 恢复暂存的修改\n\n"
+        
+        "### 信息查询\n"
+        "- `status` - 查看仓库状态\n"
+        "- `workspace_context` - 获取工作区概览\n"
+        "- `branches` - 列出分支\n"
+        "- `commits` - 查看提交历史\n"
+        "- `staged_files` - 查看已暂存文件\n\n"
+        
+        "### 特殊工具\n"
+        "- `open_file` - 在 IDE 中打开文件  \n"
+        "  视图模式：`editor`/`change`/`split`/`unified`\n"
+        "- `verify_python` - 编译检查 Python 语法\n"
+        "- `api_request` - 调用底层 API（仅当无专用工具时）\n"
+        "- `run_cmd` - 执行底层终端命令（最后手段，单行命令；注意跨平台差异）\n\n"
+        
+        "## 工具选择优先级\n"
+        "1. **专用工具优先**：如 `file_content` 而非 `api_request`\n"
+        "2. **避免 run_cmd**：除非确实没有其他工具；并且命令必须按当前平台生成（Windows vs Linux/macOS）\n"
+        "3. **参数明确时直接调用**：用户已提供完整参数时，直接执行\n\n"
+        
+        "## 路径处理规则\n"
+        "- 只有文件名（如 `server.py`）→ 先用 `find_files` 定位\n"
+        "- 完整路径（如 `src/server.py`）→ 直接使用\n"
+        "- 多个同名文件 → 列出选项让用户选择\n\n"
+        
+        "# 多步骤任务处理流程\n\n"
+        "1. **理解需求** - 确认用户意图和所需参数\n"
+        "2. **规划步骤** - 心里分解任务（不向用户描述）\n"
+        "3. **依次执行** - 按依赖顺序调用工具（最多3个）\n"
+        "4. **等待结果** - 每轮工具调用后等待系统返回\n"
+        "5. **汇报结论** - 基于实际结果向用户说明完成情况\n\n"
+        
+        "**示例**：用户说\"帮我找到 config.json 并修改端口为 8080\"  \n"
+        "回复：\n"
+        "```\n"
+        "好的，我来帮你定位并修改配置文件。\n\n"
+        "{\"type\": \"find_files\", \"name\": \"config.json\"}\n"
+        "{\"type\": \"file_content\", \"path\": \"config.json\"}\n"
+        "```\n"
+        "（等待工具返回后，根据文件内容构造修改内容，再调用 save_file）\n\n"
+        
+        "# 错误处理\n"
+        "- 工具调用失败 → 解释原因并提供替代方案\n"
+        "- 参数不足 → 礼貌询问缺失信息（一次1-2个问题）\n"
+        "- 遇到系统限制 → 说明约束并建议调整需求\n\n"
+        
+        "# 禁止事项\n"
+        "❌ 臆造工具执行结果（必须等待实际回执）  \n"
+        "❌ 向用户输出工具回执原文（如 `{\"ok\": true}`）  \n"
+        "❌ 使用\"让我调用XXX工具\"等技术性描述  \n"
+        "❌ 重复调用相同参数的工具  \n"
+        "❌ 使用 TOOL_REGISTRY_JSON 之外的工具名称\n\n"
+        
+        "# 重要说明\n\n"
+        
+        "**save_file 统一接口**  \n"
+        "创建和修改使用同一个工具，系统自动处理，无需区分 create_file/update_file\n\n"
+        
+        "**open_file 视图参数**  \n"
+        "- `editor` - 纯文本编辑视图  \n"
+        "- `change` - 单栏变更视图（推荐快速查看修改）  \n"
+        "- `split` - 双栏对比视图（左旧右新）  \n"
+        "- `unified` - 统一 diff 视图（传统 git diff）\n\n"
+        
+        "**raw_file 返回格式**  \n"
+        "返回结构化对象，包含 `raw_url_template`，  \n"
+        "使用时将 `{path}` 替换为文件路径即可，不要额外包装\n"
+    )
+
+    if extra:
+        return strong + "\n\n" + extra + "\n\n" + tool_registry
+    return strong + "\n\n" + tool_registry
+
+
+def _hivo_scan_json_objects(text: str, max_objects: int = 10):
+    out = []
+    s = str(text or "")
+    if not s:
+        return out
+    depth = 0
+    start = -1
+    in_str = False
+    esc = False
+    for i, ch in enumerate(s):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+            continue
+        if ch == '{':
+            if depth == 0:
+                start = i
+            depth += 1
+            continue
+        if ch == '}':
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and start >= 0:
+                    seg = s[start:i + 1]
+                    out.append(seg)
+                    if len(out) >= max_objects:
+                        break
+                    start = -1
+            continue
+    return out
+
+
+def _hivo_extract_tool_calls(text: str, max_calls: int = 3):
+    calls = []
+    s = str(text or "").strip()
+    if not s:
+        return calls
+
+    # 1) Fast path: whole output is a JSON object or JSON array.
+    #    Note: system prompt允许“单个 JSON 对象或 JSON 数组”，这里必须支持数组，否则多指令不会被执行。
+    try:
+        whole = json.loads(s)
+        if isinstance(whole, dict):
+            if str(whole.get("type") or "").strip():
+                return [whole]
+        if isinstance(whole, list):
+            for it in whole:
+                if isinstance(it, dict) and str(it.get("type") or "").strip():
+                    calls.append(it)
+                    if len(calls) >= max_calls:
+                        break
+            if calls:
+                return calls
+    except Exception:
+        pass
+
+    # 2) Fallback: scan embedded JSON objects in mixed text.
+    for seg in _hivo_scan_json_objects(s, max_objects=max_calls * 2):
+        try:
+            obj = json.loads(seg)
+        except Exception:
+            continue
+        if isinstance(obj, dict) and str(obj.get("type") or "").strip():
+            calls.append(obj)
+            if len(calls) >= max_calls:
+                break
+    return calls
+
+
+def _hivo_tool_receipt_line(name: str, ok: bool, detail: str = ""):
+    s = f"- {name}: {'ok' if ok else 'fail'}"
+    if detail:
+        s += f" ({detail})"
+    return s
+
+
+def _hivo_exec_tool(tool: dict, undo_gid: str = ""):
+    t = str((tool or {}).get("type") or "").strip()
+    if not t:
+        return False, "missing type", {}
+
+    # System/Repo ops
+    if t == "status":
+        try:
+            ok, msg, st0 = get_repo_status()
+            if not ok:
+                return False, msg or "status failed", {}
+            return True, "", {"status": st0}
+        except Exception as e:
+            return False, str(e), {}
+
+    if t == "open_repo":
+        path0 = str(tool.get("path") or "").strip()
+        if not path0:
+            return False, "缺少 path", {}
+        ok, msg = open_repo(path0)
+        if not ok:
+            return False, msg or "open_repo failed", {"path": path0}
+        return True, "", {"path": path0}
+
+    if t == "workspace_context":
+        try:
+            txt = workspace_context_text()
+            return True, "", {"content": txt}
+        except Exception as e:
+            return False, str(e), {}
+
+    if t == "open_file":
+        name = str(tool.get("name") or tool.get("path") or "").strip()
+        view = str(tool.get("view") or "editor").strip().lower() or "editor"
+        if not name:
+            return False, "缺少 name", {}
+        if view not in ("editor", "change", "split", "unified"):
+            view = "editor"
+
+        # If looks like a path, try as-is first.
+        pick = ""
+        cand = name.replace("\\", "/").lstrip("/")
+        full = _safe_repo_abspath(cand)
+        if full and os.path.isfile(full):
+            pick = cand
+        else:
+            items = find_files_by_name(name, max_results=20)
+            if not items:
+                return False, "未找到文件", {"name": name}
+            pick = str(items[0] or "")
+            nm_lower = name.lower()
+            for rel in items:
+                bn = str(rel or "").replace("\\", "/").split("/")[-1]
+                if bn.lower() == nm_lower:
+                    pick = str(rel or "")
+                    break
+
+        content, encoding = get_file_content(pick, return_encoding=True)
+        if content is None:
+            return False, "无法读取文件内容", {"file": {"path": pick, "view": view}}
+        try:
+            broadcast_to_clients({
+                "type": "open_file",
+                "file": {
+                    "path": pick,
+                    "file_name": os.path.basename(pick),
+                    "view": view,
+                    "encoding": encoding,
+                    "content": content,
+                },
+            })
+        except Exception:
+            pass
+        return True, "", {"file": {"path": pick, "file_name": os.path.basename(pick), "view": view, "encoding": encoding, "content": content}}
+
+    # File/Workspace
+    if t in ("file_content",):
+        rp = _hivo_resolve_path_if_needed(str(tool.get("path") or tool.get("name") or "").strip())
+        content, encoding = get_file_content(rp, return_encoding=True)
+        if content is None:
+            return False, "无法读取文件内容", {"path": rp}
+        bn = os.path.basename(rp.replace("\\", "/"))
+        return True, "", {"file": {"path": rp, "file_name": bn, "encoding": encoding, "content": content}}
+
+    if t in ("read_file_range",):
+        rp = _hivo_resolve_path_if_needed(str(tool.get("path") or "").strip())
+        start = int(tool.get("start") or 1)
+        end = int(tool.get("end") or start)
+        content, encoding = get_file_content(rp, return_encoding=True)
+        if content is None:
+            return False, "无法读取文件内容", {"path": rp}
+        lines = str(content or "").splitlines()
+        start_i = max(1, start)
+        end_i = max(start_i, end)
+        if start_i > len(lines):
+            bn = os.path.basename(rp.replace("\\", "/"))
+            return True, "", {"file": {"path": rp, "file_name": bn, "encoding": encoding, "content": ""}}
+        seg = lines[start_i - 1:min(len(lines), end_i)]
+        bn = os.path.basename(rp.replace("\\", "/"))
+        return True, "", {"file": {"path": rp, "file_name": bn, "encoding": encoding, "content": "\n".join(seg), "range": {"start": start_i, "end": min(len(lines), end_i)}}}
+
+    if t in ("list_dir_tree",):
+        p0 = str(tool.get("path") or "").strip() or "."
+        depth = int(tool.get("depth") or 4)
+        max_entries = int(tool.get("max_entries") or 800)
+        out0, err0 = list_dir_tree(p0, max_depth=depth, max_entries=max_entries)
+        if err0:
+            return False, err0, {"path": p0}
+        return True, "", {"path": p0, "depth": depth, "max_entries": max_entries, "entries": out0}
+
+    if t in ("search_code",):
+        q = str(tool.get("query") or "").strip()
+        case_sensitive = bool(tool.get("case_sensitive"))
+        max_results = int(tool.get("max_results") or 50)
+        ok, msg, hits = search_code(q, case_sensitive=case_sensitive, max_results=max_results)
+        if not ok:
+            return False, msg or "search_code failed", {}
+        return True, "", {"query": q, "case_sensitive": case_sensitive, "max_results": max_results, "hits": hits}
+
+    if t in ("find_files",):
+        name = str(tool.get("name") or "").strip()
+        hits = find_files_by_name(name, max_results=50)
+        return True, "", {"name": name, "files": hits}
+
+    if t in ("list_files",):
+        try:
+            max_age = float(tool.get("max_age") or 0)
+        except Exception:
+            max_age = 0.0
+        if max_age < 0:
+            max_age = 0.0
+        if max_age > 10:
+            max_age = 10.0
+        files0 = get_changed_files_cached(max_age_sec=max_age)
+        return True, "", {"max_age": max_age, "files": files0}
+
+    if t in ("diff_file",):
+        rp = _hivo_resolve_path_if_needed(str(tool.get("path") or "").strip())
+        if not rp:
+            return False, "缺少 path", {}
+        st = str(tool.get("status") or "M").strip() or "M"
+        try:
+            ctx_lines = int(tool.get("ctx_lines") if (tool.get("ctx_lines") is not None) else (tool.get("ctx") if (tool.get("ctx") is not None) else 80))
+        except Exception:
+            ctx_lines = 80
+        diff0, err0 = get_file_diff(rp, st, ctx_lines=ctx_lines)
+        if err0:
+            return False, err0, {"path": rp}
+        bn = os.path.basename(rp.replace("\\", "/"))
+        return True, "", {"file": {"path": rp, "file_name": bn, "diff": diff0, "status": st, "ctx_lines": ctx_lines}}
+
+    if t in ("staged_files",):
+        files0, err0 = get_staged_files()
+        if err0:
+            return False, err0, {}
+        return True, "", {"files": files0}
+
+    if t == "unstage_file":
+        rp = str(tool.get("path") or "").strip()
+        if not rp:
+            return False, "缺少 path", {}
+        ok, msg = unstage_file(rp)
+        if not ok:
+            return False, msg or "unstage_file failed", {"path": rp}
+        invalidate_changed_files_cache()
+        notify_files_updated()
+        return True, "", {"path": rp}
+
+    if t == "discard_staged_file":
+        rp = str(tool.get("path") or "").strip()
+        if not rp:
+            return False, "缺少 path", {}
+        ok, msg = discard_staged_file(rp)
+        if not ok:
+            return False, msg or "discard_staged_file failed", {"path": rp}
+        invalidate_changed_files_cache()
+        notify_files_updated()
+        return True, "", {"path": rp}
+
+    if t == "unstage_all_staged":
+        ok, msg = unstage_all_staged()
+        if not ok:
+            return False, msg or "unstage_all_staged failed", {}
+        invalidate_changed_files_cache()
+        notify_files_updated()
+        return True, "", {}
+
+    if t == "discard_all_staged":
+        ok, msg = discard_all_staged()
+        if not ok:
+            return False, msg or "discard_all_staged failed", {}
+        invalidate_changed_files_cache()
+        notify_files_updated()
+        return True, "", {}
+
+    if t in ("raw_file",):
+        rp = _hivo_resolve_path_if_needed(str(tool.get("path") or "").strip())
+        if not rp:
+            return False, "缺少 path", {}
+        full = _safe_repo_abspath(rp)
+        if not full or (not os.path.exists(full)) or os.path.isdir(full):
+            return False, "文件不存在", {"path": rp}
+        try:
+            size0 = int(os.path.getsize(full))
+        except Exception:
+            size0 = 0
+        try:
+            mime0, _enc0 = mimetypes.guess_type(full)
+        except Exception:
+            mime0 = None
+        if not mime0:
+            mime0 = "application/octet-stream"
+        bn = os.path.basename(rp.replace("\\", "/"))
+        return True, "", {
+            "file": {
+                "path": rp,
+                "file_name": bn,
+                "file_type": mime0,
+                "file_size": size0,
+                "raw_url_template": "/api/raw_file?path={path}",
+            },
+            "hint": "Use file.path for定位; use file.raw_url_template with {path}=file.path if you must form a URL. Prefer returning the structured file object; do NOT invent or re-wrap raw_file URLs.",
+        }
+
+    # Write
+    if t in ("save_file",):
+        rp = str(tool.get("path") or "").strip()
+        content = str(tool.get("content") or "")
+        try:
+            cur = get_file_content(rp)
+            if isinstance(cur, str) and cur == content:
+                return True, "", {"path": rp, "no_change": True}
+        except Exception:
+            pass
+        if undo_gid:
+            snap = _undo_capture_file_snapshot(rp)
+            if snap is not None:
+                _undo_record(undo_gid, {"type": "file_snapshot", "snapshot": snap})
+        ok, msg = save_file_content(rp, content)
+        if ok:
+            invalidate_changed_files_cache()
+            notify_files_updated()
+        return bool(ok), msg or "", {"path": rp}
+
+    if t == "delete_file":
+        rp = str(tool.get("path") or "").strip()
+        if undo_gid:
+            snap = _undo_capture_file_snapshot(rp)
+            if snap is not None:
+                _undo_record(undo_gid, {"type": "file_snapshot", "snapshot": snap})
+        full = _safe_repo_abspath(rp)
+        if not full:
+            return False, "非法路径", {}
+        try:
+            if os.path.isdir(full):
+                return False, "目标是目录", {}
+            if os.path.exists(full):
+                os.remove(full)
+            invalidate_changed_files_cache()
+            notify_files_updated()
+            return True, "", {"path": rp}
+        except Exception as e:
+            return False, str(e), {}
+
+    if t == "rename_file":
+        oldp = str(tool.get("old_path") or "").strip()
+        newp = str(tool.get("new_path") or "").strip()
+        if undo_gid:
+            snap = _undo_capture_file_snapshot(oldp)
+            if snap is not None:
+                _undo_record(undo_gid, {"type": "file_snapshot", "snapshot": snap})
+        ok1, msg1 = rename_file(oldp, newp)
+        if ok1:
+            invalidate_changed_files_cache()
+            notify_files_updated()
+        return bool(ok1), msg1 or "", {"old_path": oldp, "new_path": newp}
+
+    if t == "revert_file":
+        rp = str(tool.get("path") or "").strip()
+        st = str(tool.get("status") or "M").strip() or "M"
+        ok, msg = revert_file(rp, st)
+        if ok:
+            invalidate_changed_files_cache()
+            notify_files_updated()
+        return bool(ok), msg or "", {"path": rp}
+
+    if t == "revert_hunk":
+        rp = str(tool.get("path") or "").strip()
+        idx = int(tool.get("hunk_index") or 0)
+        st = str(tool.get("status") or "M").strip() or "M"
+        ok, msg = revert_hunk(rp, idx, st)
+        if ok:
+            invalidate_changed_files_cache()
+            notify_files_updated()
+        return bool(ok), msg or "", {"path": rp, "hunk_index": idx}
+
+    if t == "revert_line":
+        rp = str(tool.get("path") or "").strip()
+        idx = int(tool.get("hunk_index") or 0)
+        li = int(tool.get("line_index") or 0)
+        st = str(tool.get("status") or "M").strip() or "M"
+        ok, msg = revert_line(rp, idx, li, st)
+        if ok:
+            invalidate_changed_files_cache()
+            notify_files_updated()
+        return bool(ok), msg or "", {"path": rp, "hunk_index": idx, "line_index": li}
+
+    if t == "revert_multi_lines":
+        rp = str(tool.get("path") or "").strip()
+        idx = int(tool.get("hunk_index") or 0)
+        s0 = int(tool.get("start_line_index") or 0)
+        e0 = int(tool.get("end_line_index") or 0)
+        st = str(tool.get("status") or "M").strip() or "M"
+        ok, msg = revert_multi_lines(rp, idx, s0, e0, st)
+        if ok:
+            invalidate_changed_files_cache()
+            notify_files_updated()
+        return bool(ok), msg or "", {"path": rp, "hunk_index": idx, "start": s0, "end": e0}
+
+    if t == "revert_all":
+        arr = tool.get("paths")
+        if not isinstance(arr, list):
+            arr = []
+        ok, msg = revert_all(arr)
+        if ok:
+            invalidate_changed_files_cache()
+            notify_files_updated()
+        return bool(ok), msg or "", {"paths": arr}
+
+    # Git
+    if t == "commits":
+        try:
+            limit = int(tool.get("limit") or 50)
+        except Exception:
+            limit = 50
+        out0 = get_log(limit=limit)
+        return True, "", {"limit": limit, "commits": out0}
+
+    if t == "stage_file":
+        rp = str(tool.get("path") or "").strip()
+        out, err, code = run_git(["add", "--", rp])
+        if code != 0:
+            return False, (err or out or "stage failed"), {}
+        invalidate_changed_files_cache()
+        notify_files_updated()
+        return True, "", {"path": rp}
+
+    if t == "commit":
+        msg = str(tool.get("message") or "").strip()
+        files0 = tool.get("files")
+        if isinstance(files0, list) and files0:
+            for rp in files0:
+                run_git(["add", "--", str(rp)])
+        out, err, code = run_git(["commit", "-m", msg])
+        if code != 0:
+            return False, (err or out or "commit failed"), {}
+        invalidate_changed_files_cache()
+        notify_files_updated()
+        return True, "", {"output": out}
+
+    if t == "pull":
+        out, err, code = run_git(["pull"]) 
+        if code != 0:
+            return False, (err or out or "pull failed"), {}
+        invalidate_changed_files_cache()
+        notify_files_updated()
+        return True, "", {"output": out}
+
+    if t == "push":
+        out, err, code = run_git(["push"])
+        if code != 0:
+            return False, (err or out or "push failed"), {}
+        return True, "", {"output": out}
+
+    if t == "stash_pop":
+        out, err, code = run_git(["stash", "pop"])
+        if code != 0:
+            return False, (err or out or "stash pop failed"), {}
+        invalidate_changed_files_cache()
+        notify_files_updated()
+        return True, "", {"output": out}
+
+    if t == "switch_branch":
+        br = str(tool.get("branch") or "").strip()
+        out, err, code = run_git(["switch", br])
+        if code != 0:
+            return False, (err or out or "switch failed"), {}
+        invalidate_changed_files_cache()
+        notify_files_updated()
+        return True, "", {"branch": br}
+
+    # Undo
+    if t in ("undo_last_turn", "undo"):
+        gid, actions = _undo_pop_latest_group()
+        if not actions:
+            return False, "无可撤销操作", {}
+        ok, msg = _undo_apply_actions(actions)
+        if not ok:
+            return False, msg or "撤销失败", {"group_id": gid}
+        invalidate_changed_files_cache()
+        notify_files_updated()
+        return True, "", {"group_id": gid}
+
+    if t == "verify_python":
+        arr = tool.get("paths") or tool.get("files") or []
+        if not isinstance(arr, list):
+            arr = []
+        paths = [str(x or "").strip().lstrip("@") for x in arr]
+        paths = [p for p in paths if p]
+        if not paths:
+            paths = ["server.py"]
+        checked = []
+        for rp in paths[:50]:
+            safe = _safe_repo_abspath(rp)
+            if not safe or (not os.path.isfile(safe)):
+                return False, f"非法路径或文件不存在: {rp}", {"files": checked}
+            checked.append(rp.replace("\\", "/"))
+            try:
+                py_compile.compile(safe, doraise=True)
+            except py_compile.PyCompileError as e:
+                return False, str(e), {"files": checked}
+        return True, "", {"files": checked}
+
+    if t == "run_cmd":
+        cmd = str(tool.get("cmd") or "").strip()
+        timeout = int(tool.get("timeout") or 30)
+        cwd = str(tool.get("cwd") or "").strip()
+        ok1, msg1, out1 = _run_cmd_simple(cmd, timeout=timeout, cwd=cwd)
+        if not ok1:
+            return False, msg1 or "run_cmd failed", {"result": {"cmd": cmd, "timeout": timeout, "cwd": cwd, "output": out1}}
+        return True, "", {"result": {"cmd": cmd, "timeout": timeout, "cwd": cwd, "output": out1}}
+
+    return False, f"unsupported tool: {t}", {}
+
+
+def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str, history_messages: list | None = None, dyn_context: str = "", undo_gid: str = ""):
+    cfg = _hivo_load_cfg()
+    agent_conf = _hivo_agent_conf(cfg)
+    mem_conf = _hivo_mem_conf(cfg)
+    feat = cfg.get("features") if isinstance(cfg, dict) else None
+    feat = feat if isinstance(feat, dict) else {}
+    memory_enabled = bool(feat.get("memory_enabled", True))
+    tool_memory_enabled = bool(feat.get("tool_memory_enabled", True))
+    tool_cache_enabled = bool(feat.get("tool_cache_enabled", True))
+    max_rounds = int(cfg.get("max_rounds") or 12)
+    max_calls = int(cfg.get("max_tool_calls_per_round") or 3)
+    max_hist = int(cfg.get("max_visible_history") or 80)
+    repeat_conf = cfg.get("repeat_block") if isinstance(cfg.get("repeat_block"), dict) else {}
+    rep_window = int(repeat_conf.get("window") or 3)
+    rep_max_same = int(repeat_conf.get("max_same") or 2)
+    rep_sig_mode = str(repeat_conf.get("signature") or "tool_types")
+    rep_escalation_limit = int(repeat_conf.get("escalation_limit") or 2)
+
+    undo_gid_eff = str(undo_gid or "").strip()
+    if not undo_gid_eff:
+        undo_gid_eff = f"ai-{session_id}-{run_id}" if session_id else f"ai-{run_id}"
+
+    st = _hivo_get_session_state(session_id) if memory_enabled else {"summary": "", "chat": [], "tool_log": [], "tool_cache": OrderedDict()}
+    try:
+        long_summary = str(st.get("summary") or "").strip()
+    except Exception:
+        long_summary = ""
+    try:
+        tool_log0 = st.get("tool_log") if isinstance(st.get("tool_log"), list) else []
+    except Exception:
+        tool_log0 = []
+    try:
+        tool_mem_block = _hivo_format_tool_memory_block(tool_log0, limit=int(mem_conf.get("tool_log_items") or 80)) if tool_memory_enabled else ""
+    except Exception:
+        tool_mem_block = ""
+    try:
+        tc0 = st.get("tool_cache")
+        if not isinstance(tc0, OrderedDict):
+            tc0 = OrderedDict(tc0 or {})
+            st["tool_cache"] = tc0
+        tool_cache = tc0
+    except Exception:
+        tool_cache = OrderedDict()
+
+    hist = []
+    try:
+        base_mem = st.get("chat") if (memory_enabled and isinstance(st, dict)) else None
+        if isinstance(base_mem, list) and base_mem:
+            for m in base_mem:
+                if not isinstance(m, dict):
+                    continue
+                role = str(m.get("role") or "").strip()
+                if role not in ("user", "assistant"):
+                    continue
+                content = str(m.get("content") or "")
+                if not content:
+                    continue
+                hist.append({"role": role, "content": content})
+        else:
+            base = history_messages if isinstance(history_messages, list) else []
+            for m in base:
+                if not isinstance(m, dict):
+                    continue
+                role = str(m.get("role") or "").strip()
+                if role not in ("user", "assistant"):
+                    continue
+                if bool(m.get("pending")) and role == "assistant":
+                    continue
+                content = str(m.get("content") or "")
+                if not content:
+                    continue
+                hist.append({"role": role, "content": content})
+    except Exception:
+        hist = []
+
+    # Short-term memory window (keep last N turns = 2N messages)
+    try:
+        short_turns = int(mem_conf.get("short_term_turns") or 6)
+    except Exception:
+        short_turns = 6
+    keep_n = max(6, min(24, int(short_turns) * 2))
+    if keep_n > 0 and len(hist) > keep_n:
+        hist = hist[-keep_n:]
+
+    if user_text:
+        hist.append({"role": "user", "content": str(user_text)})
+
+    sys_text = ""
+    try:
+        sys_text = str(agent_conf.get("system_prompt") or "")
+    except Exception:
+        sys_text = ""
+    # Always append tool registry so custom prompts never hide available tools (e.g. run_cmd)
+    try:
+        tool_ctx = _ai_build_system_context_text()
+    except Exception:
+        tool_ctx = ""
+    if sys_text.strip() and tool_ctx:
+        sys_text = sys_text.strip() + "\n\n" + tool_ctx
+    elif not sys_text.strip():
+        sys_text = tool_ctx
+    sys0 = {"role": "system", "content": sys_text}
+    msgs = [sys0]
+    if long_summary:
+        msgs.append({"role": "system", "content": long_summary})
+    if tool_mem_block:
+        msgs.append({"role": "system", "content": tool_mem_block})
+    if dyn_context and str(dyn_context).strip():
+        msgs.append({"role": "system", "content": str(dyn_context)})
+    msgs.extend(hist)
+
+    _hivo_ws_emit(run_id, session_id, "sending", _hivo_status_message(cfg, "sending"))
+
+    if str(agent_conf.get("mode") or "").strip() == "fallback_chat":
+        _hivo_ws_emit(run_id, session_id, "thinking", _hivo_status_message(cfg, "thinking"))
+        ok, msg, result = ai_chat(msgs, temperature=None, profile_id=profile_id)
+        if not ok:
+            err = msg or "对话失败"
+            _hivo_ws_emit(run_id, session_id, "error", err)
+            if _hivo_is_timeout_error(err):
+                _hivo_ws_emit_final(run_id, session_id, err, ok=False, extra={"rounds": 1, "can_continue": True, "continue_reason": "timeout"})
+            else:
+                _hivo_ws_emit_final(run_id, session_id, err, ok=False, extra={"rounds": 1})
+            return False, err, run_id
+        content = str((result or {}).get("content") or "")
+        try:
+            if user_text:
+                st_chat = st.get("chat") if isinstance(st.get("chat"), list) else []
+                st_chat.append({"role": "user", "content": str(user_text)})
+                st_chat.append({"role": "assistant", "content": content})
+                if memory_enabled:
+                    st["chat"] = st_chat[-max_hist:]
+                # roll older into summary when needed
+                if memory_enabled and len(st_chat) > keep_n:
+                    older = st_chat[:-keep_n]
+                    s2 = _hivo_summarize_for_long_term(older, max_chars=int(mem_conf.get("long_term_summary_chars") or 3500))
+                    if s2:
+                        st["summary"] = s2
+        except Exception:
+            pass
+        _hivo_ws_emit(run_id, session_id, "done", _hivo_status_message(cfg, "done"))
+        _hivo_ws_emit_final(run_id, session_id, content, ok=True, extra={"rounds": 1})
+        return True, content, run_id
+
+    tool_sig_hist = []
+    rep_escalations = 0
+    for round_i in range(max(1, max_rounds)):
+        _hivo_ws_emit(run_id, session_id, "thinking", _hivo_status_message(cfg, "thinking", round_i=round_i + 1, max_rounds=max_rounds))
+        ok, msg, result = ai_chat(msgs, temperature=None, profile_id=profile_id)
+        if not ok:
+            err = msg or "对话失败"
+            _hivo_ws_emit(run_id, session_id, "error", err)
+            if _hivo_is_timeout_error(err):
+                _hivo_ws_emit_final(run_id, session_id, err, ok=False, extra={"rounds": round_i + 1, "can_continue": True, "continue_reason": "timeout"})
+            else:
+                _hivo_ws_emit_final(run_id, session_id, err, ok=False, extra={"rounds": round_i + 1})
+            return False, err, run_id
+
+        content = str((result or {}).get("content") or "")
+        calls = _hivo_extract_tool_calls(content, max_calls=max_calls)
+        allow = agent_conf.get("tools")
+        if isinstance(allow, list) and allow:
+            allow_set = set(str(x).strip() for x in allow if str(x).strip())
+            calls = [c for c in calls if str(c.get("type") or "").strip() in allow_set]
+        if not calls:
+            try:
+                if user_text:
+                    st_chat = st.get("chat") if isinstance(st.get("chat"), list) else []
+                    st_chat.append({"role": "user", "content": str(user_text)})
+                    st_chat.append({"role": "assistant", "content": content})
+                    if memory_enabled:
+                        st["chat"] = st_chat[-max_hist:]
+                    if memory_enabled and len(st_chat) > keep_n:
+                        older = st_chat[:-keep_n]
+                        s2 = _hivo_summarize_for_long_term(older, max_chars=int(mem_conf.get("long_term_summary_chars") or 3500))
+                        if s2:
+                            st["summary"] = s2
+            except Exception:
+                pass
+            _hivo_ws_emit(run_id, session_id, "done", _hivo_status_message(cfg, "done"))
+            _hivo_ws_emit_final(run_id, session_id, content, ok=True, extra={"rounds": round_i + 1})
+            return True, content, run_id
+
+        sig = _hivo_repeat_signature(calls, mode=rep_sig_mode)
+        tool_sig_hist.append(sig)
+        if rep_window > 0 and len(tool_sig_hist) >= rep_window:
+            recent = tool_sig_hist[-rep_window:]
+            same = sum(1 for x in recent if x == recent[-1])
+            if same > rep_max_same:
+                if rep_escalations < rep_escalation_limit:
+                    rep_escalations += 1
+                    guide = _hivo_repeat_escalation_prompt(rep_escalations, last_sig=sig)
+                    _hivo_ws_emit(run_id, session_id, "thinking", f"检测到重复趋势，注入修正策略 (level {rep_escalations}/{rep_escalation_limit})")
+                    msgs.append({"role": "assistant", "content": content})
+                    msgs.append({"role": "user", "content": guide})
+                    continue
+
+                final = "检测到重复工具调用，已中止以避免死循环。请你调整需求或补充关键信息后重试。"
+                _hivo_ws_emit(run_id, session_id, "error", "检测到重复行为")
+                _hivo_ws_emit_final(run_id, session_id, final, ok=False, extra={"rounds": round_i + 1, "can_continue": True, "continue_reason": "repeat"})
+                return False, final, run_id
+
+        _hivo_ws_emit(run_id, session_id, "executing", _hivo_status_message(cfg, "executing", tool_count=len(calls)))
+        receipts = []
+        for c in calls:
+            name = str(c.get("type") or "")
+            cache_key = _hivo_tool_call_sig(c)
+            cached = None
+            try:
+                if tool_cache_enabled and cache_key and isinstance(tool_cache, OrderedDict):
+                    cached = tool_cache.get(cache_key)
+            except Exception:
+                cached = None
+
+            if isinstance(cached, dict) and "ok" in cached:
+                ok1 = bool(cached.get("ok"))
+                msg1 = str(cached.get("msg") or "")
+                data1 = cached.get("data") if isinstance(cached.get("data"), dict) else {}
+                try:
+                    if isinstance(data1, dict) and "cache_hit" not in data1:
+                        data1 = dict(data1)
+                        data1["cache_hit"] = True
+                except Exception:
+                    pass
+            else:
+                ok1, msg1, data1 = _hivo_exec_tool(c, undo_gid=undo_gid_eff)
+                try:
+                    if tool_cache_enabled and cache_key and isinstance(tool_cache, OrderedDict):
+                        tool_cache[cache_key] = {"ok": bool(ok1), "msg": str(msg1 or ""), "data": data1 if isinstance(data1, dict) else {}}
+                        while len(tool_cache) > int(mem_conf.get("tool_cache_items") or 120):
+                            try:
+                                tool_cache.popitem(last=False)
+                            except Exception:
+                                break
+                except Exception:
+                    pass
+
+            try:
+                if tool_memory_enabled and memory_enabled:
+                    rec = _hivo_tool_log_record(name, c, bool(ok1), str(msg1 or ""), data=data1 if isinstance(data1, dict) else {})
+                    tool_log0.append(rec)
+                    while len(tool_log0) > int(mem_conf.get("tool_log_items") or 80):
+                        tool_log0.pop(0)
+                    st["tool_log"] = tool_log0
+            except Exception:
+                pass
+
+            receipts.append({"type": name, "ok": bool(ok1), "msg": msg1 or "", "data": data1})
+
+        receipt_lines = ["【工具回执(真实执行结果)】"]
+        total_payload_chars = 0
+        max_total_payload_chars = 24000
+        for r in receipts:
+            nm = str(r.get("type") or "")
+            ok1 = bool(r.get("ok"))
+            detail = str(r.get("msg") or "")
+            receipt_lines.append(_hivo_tool_receipt_line(nm, ok1, detail))
+
+            # For read/inspect tools, include returned content so the model can actually see it.
+            try:
+                data1 = r.get("data") if isinstance(r.get("data"), dict) else {}
+                if not ok1:
+                    continue
+                payload = ""
+                if nm in ("file_content", "read_file_range"):
+                    f0 = data1.get("file") if isinstance(data1.get("file"), dict) else {}
+                    payload = str(f0.get("content") or "")
+                    path1 = str(f0.get("path") or "")
+                    if payload:
+                        receipt_lines.append(f"  path: {path1}")
+                elif nm in ("raw_file",):
+                    f0 = data1.get("file") if isinstance(data1.get("file"), dict) else {}
+                    if f0:
+                        payload = json.dumps({"file": f0}, ensure_ascii=False, indent=2)
+                elif nm in ("run_cmd",):
+                    payload = str(data1.get("output") or "")
+
+                if payload:
+                    if total_payload_chars >= max_total_payload_chars:
+                        continue
+                    room = max_total_payload_chars - total_payload_chars
+                    chunk = payload[:room]
+                    total_payload_chars += len(chunk)
+                    receipt_lines.append("  ---")
+                    receipt_lines.append(chunk)
+            except Exception:
+                pass
+        receipt_text = "\n".join(receipt_lines)
+
+        msgs.append({"role": "assistant", "content": content})
+        msgs.append({
+            "role": "user",
+            "content": receipt_text
+            + "\n\n【指令】上述内容是工具执行的内部回执（仅供你参考）。请基于这些**真实结果**生成面向用户的自然语言回复：\n"
+            + "- 不要输出回执原文或内部字段（如 'ok', 'msg', 'data'）\n"
+            + "- 若任务完成，直接给出结论；若还需继续，输出下一步的工具 JSON\n"
+            + "- 若回执中有错误或失败，向用户说明原因并建议替代方案"
+        })
+
+    final = "已达到最大轮次，任务仍未完成。请你缩小问题范围或补充信息后重试。"
+    _hivo_ws_emit(run_id, session_id, "error", "达到最大轮次")
+    _hivo_ws_emit_final(run_id, session_id, final, ok=False, extra={"rounds": max_rounds, "can_continue": True, "continue_reason": "max_rounds"})
+    return False, final, run_id
+
+
+def _run_cmd_simple(cmd: str, timeout: int = 30, cwd: str = ""):
+    if not REPO_PATH:
+        return False, "未打开仓库", ""
+    c = str(cmd or "").strip()
+    if not c:
+        return False, "缺少 cmd", ""
+    if "\n" in c or "\r" in c:
+        return False, "cmd 必须是单行命令", ""
+    try:
+        workdir = REPO_PATH
+        if cwd:
+            safe = _safe_repo_abspath(cwd)
+            if safe and os.path.isdir(safe):
+                workdir = safe
+        proc = subprocess.run(
+            c,
+            cwd=workdir,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=int(timeout or 30),
+            encoding="utf-8",
+            errors="replace",
+        )
+        out = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+        if proc.returncode != 0:
+            return False, f"exit={proc.returncode}", out.strip()
+        return True, "", out.strip()
+    except subprocess.TimeoutExpired:
+        return False, "命令超时", ""
+    except Exception as e:
+        return False, str(e), ""
 
 
 _rl_lock = threading.Lock()
@@ -3793,12 +6138,22 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         elif p == "/api/undo_stats":
-            self.send_json({"ok": True, "undo_steps": _undo_get_steps()})
+            try:
+                sid = qget("session_id")
+            except Exception:
+                sid = ""
+            payload = {"ok": True, "undo_steps": _undo_get_steps()}
+            if sid:
+                payload["session_id"] = sid
+                payload["session_undo_steps"] = _undo_get_steps_for_session(sid)
+            self.send_json(payload)
             return
 
         elif p == "/api/status":
             logger.debug("处理 /api/status 请求")
             origin_url = ""
+            has_staged = False
+            staged_count = 0
             if REPO_PATH:
                 try:
                     out, _, code = run_git(["config", "--get", "remote.origin.url"])
@@ -3806,12 +6161,22 @@ class Handler(BaseHTTPRequestHandler):
                         origin_url = (out or "").strip()
                 except Exception:
                     origin_url = ""
+                try:
+                    sf, err_sf = get_staged_files()
+                    if not err_sf and isinstance(sf, list):
+                        staged_count = len(sf)
+                        has_staged = staged_count > 0
+                except Exception:
+                    has_staged = False
+                    staged_count = 0
             self.send_json({
                 "repo":  REPO_PATH,
                 "valid": bool(REPO_PATH and
                               os.path.isdir(os.path.join(REPO_PATH, ".git"))),
                 "ws_port": WS_PORT if WEBSOCKET_AVAILABLE else None,
-                "origin_url": origin_url
+                "origin_url": origin_url,
+                "has_staged_changes": has_staged,
+                "staged_count": staged_count,
             })
 
         elif p == "/api/capabilities":
@@ -3838,6 +6203,16 @@ class Handler(BaseHTTPRequestHandler):
             if max_age > 10:
                 max_age = 10.0
             self.send_json({"files": get_changed_files_cached(max_age_sec=max_age)})
+
+        elif p == "/api/staged_files":
+            logger.debug("处理 /api/staged_files 请求")
+            if not self._require_repo():
+                return
+            files2, err2 = get_staged_files()
+            if err2:
+                self.send_json({"ok": False, "error": err2}, 400)
+                return
+            self.send_json({"ok": True, "files": files2})
 
         elif p == "/api/diff":
             logger.debug("处理 /api/diff 请求")
@@ -3973,7 +6348,17 @@ class Handler(BaseHTTPRequestHandler):
             logger.debug("处理 /api/log 请求")
             if not self._require_repo():
                 return
-            self.send_json({"log": get_log()})
+            self.send_json({"log": get_log(limit=50)})
+
+        elif p == "/api/commits":
+            logger.debug("处理 /api/commits 请求")
+            if not self._require_repo():
+                return
+            try:
+                limit = int(qget("limit") or "50")
+            except Exception:
+                limit = 50
+            self.send_json({"ok": True, "commits": get_log(limit=limit), "limit": limit})
 
         elif p == "/api/file_log":
             logger.debug("处理 /api/file_log 请求")
@@ -4192,9 +6577,81 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json({"error":"不是 git 仓库（未找到 .git 目录）"}, 400)
                     return
                 REPO_PATH = root
+                try:
+                    _undo_load_state()
+                except Exception:
+                    pass
                 _, cur = get_branches()
                 logger.info(f"成功打开仓库: {root} (分支: {cur})")
                 self.send_json({"ok": True, "repo": root, "branch": cur})
+
+            elif p == "/api/unstage_file":
+                logger.info("处理 /api/unstage_file 请求")
+                if not self._require_repo():
+                    return
+                fp = (data.get("path") or "").strip()
+                if not fp:
+                    self.send_json({"error": "缺少 path"}, 400)
+                    return
+                _, err, code = run_git(["restore", "--staged", "--", fp], timeout=120)
+                if code != 0:
+                    self.send_json({"ok": False, "error": err or "取消暂存失败"}, 400)
+                    return
+                try:
+                    invalidate_changed_files_cache()
+                    notify_files_updated()
+                except Exception:
+                    pass
+                self.send_json({"ok": True})
+
+            elif p == "/api/discard_staged_file":
+                logger.info("处理 /api/discard_staged_file 请求")
+                if not self._require_repo():
+                    return
+                fp = (data.get("path") or "").strip()
+                if not fp:
+                    self.send_json({"error": "缺少 path"}, 400)
+                    return
+                _, err, code = run_git(["restore", "--staged", "--worktree", "--source=HEAD", "--", fp], timeout=120)
+                if code != 0:
+                    self.send_json({"ok": False, "error": err or "丢弃暂存区失败"}, 400)
+                    return
+                try:
+                    invalidate_changed_files_cache()
+                    notify_files_updated()
+                except Exception:
+                    pass
+                self.send_json({"ok": True})
+
+            elif p == "/api/unstage_all_staged":
+                logger.info("处理 /api/unstage_all_staged 请求")
+                if not self._require_repo():
+                    return
+                _, err, code = run_git(["restore", "--staged", "."], timeout=180)
+                if code != 0:
+                    self.send_json({"ok": False, "error": err or "取消全部暂存失败"}, 400)
+                    return
+                try:
+                    invalidate_changed_files_cache()
+                    notify_files_updated()
+                except Exception:
+                    pass
+                self.send_json({"ok": True})
+
+            elif p == "/api/discard_all_staged":
+                logger.info("处理 /api/discard_all_staged 请求")
+                if not self._require_repo():
+                    return
+                _, err, code = run_git(["restore", "--staged", "--worktree", "--source=HEAD", "."], timeout=180)
+                if code != 0:
+                    self.send_json({"ok": False, "error": err or "丢弃全部暂存失败"}, 400)
+                    return
+                try:
+                    invalidate_changed_files_cache()
+                    notify_files_updated()
+                except Exception:
+                    pass
+                self.send_json({"ok": True})
 
             elif p == "/api/revert_hunk":
                 logger.info("处理 /api/revert_hunk 请求")
@@ -4363,6 +6820,16 @@ class Handler(BaseHTTPRequestHandler):
                 fp = data.get("path", "")
                 content = data.get("content", "")
                 undo_gid = (self.headers.get("X-Undo-Group") or "").strip()
+                try:
+                    cur = get_file_content(fp)
+                    if isinstance(cur, str) and isinstance(content, str) and cur == content:
+                        payload = {"ok": True, "msg": "", "path": str(fp or "").replace("\\", "/").lstrip("/"), "no_change": True}
+                        if idem_key:
+                            _idempotency_set(idem_key, payload, 200)
+                        self.send_json(payload)
+                        return
+                except Exception:
+                    pass
                 if undo_gid:
                     snap = _undo_capture_file_snapshot(fp)
                     if snap is not None:
@@ -4371,7 +6838,13 @@ class Handler(BaseHTTPRequestHandler):
                 if ok:
                     invalidate_changed_files_cache()
                     notify_files_updated()
-                payload = {"ok": ok, "msg": msg}
+                try:
+                    norm_path = str(fp or "").replace("\\", "/").lstrip("/")
+                    if norm_path.startswith("./"):
+                        norm_path = norm_path[2:]
+                except Exception:
+                    norm_path = str(fp or "")
+                payload = {"ok": ok, "msg": msg, "path": norm_path}
                 if idem_key:
                     _idempotency_set(idem_key, payload, 200)
                 self.send_json(payload)
@@ -4660,6 +7133,35 @@ class Handler(BaseHTTPRequestHandler):
                 temp = data.get("temperature") if isinstance(data, dict) else None
                 pid = data.get("profile_id") if isinstance(data, dict) else None
                 sid = data.get("session_id") if isinstance(data, dict) else None
+                env_obs = data.get("env_observation") if isinstance(data, dict) else None
+
+                try:
+                    env_obs_s = str(env_obs or "").strip()
+                except Exception:
+                    env_obs_s = ""
+                # Backend owns system-level context. Client-provided system messages are dropped.
+                # Keep only recent visible history so the system context is never squeezed out.
+                try:
+                    base_msgs = msgs if isinstance(msgs, list) else []
+                    visible = []
+                    for m in base_msgs:
+                        if not isinstance(m, dict):
+                            continue
+                        role = str(m.get("role") or "").strip()
+                        if role in ("user", "assistant"):
+                            content = str(m.get("content") or "")
+                            if content:
+                                visible.append({"role": role, "content": content})
+                    visible = visible[-80:]
+                except Exception:
+                    visible = []
+
+                sys0 = {"role": "system", "content": _ai_build_system_context_text()}
+                if env_obs_s:
+                    obs_msg = {"role": "system", "content": "【环境观察(自动获取)】\n" + env_obs_s}
+                    msgs = [sys0, obs_msg] + visible
+                else:
+                    msgs = [sys0] + visible
 
                 n_msgs = 0
                 try:
@@ -4785,6 +7287,109 @@ class Handler(BaseHTTPRequestHandler):
                         return
                     info = list_ai_sessions(pid) if pid else {"active_session_id": "", "sessions": []}
                 self.send_json({"ok": True, "active_session_id": info.get("active_session_id"), "sessions": info.get("sessions")})
+
+            elif p == "/api/ai_models":
+                logger.info("处理 /api/ai_models 请求")
+                base_url = str(data.get("base_url") or "") if isinstance(data, dict) else ""
+                api_key = str(data.get("api_key") or "") if isinstance(data, dict) else ""
+                ok, msg, models = ai_list_models(base_url, api_key)
+                self.send_json({"ok": ok, "msg": msg, "models": models})
+
+            elif p == "/api/hivo_agent":
+                logger.info("处理 /api/hivo_agent 请求")
+                pid = data.get("profile_id") if isinstance(data, dict) else None
+                sid = data.get("session_id") if isinstance(data, dict) else None
+                user_text = data.get("user_text") if isinstance(data, dict) else None
+                msgs0 = data.get("messages") if isinstance(data, dict) else None
+                dyn_ctx = data.get("dyn_context") if isinstance(data, dict) else ""
+                ctx_refs = data.get("context_refs") if isinstance(data, dict) else None
+                req_undo_gid = data.get("undo_gid") if isinstance(data, dict) else None
+                env_obs = data.get("env_observation") if isinstance(data, dict) else None
+                try:
+                    env_obs_s = str(env_obs or "").strip()
+                except Exception:
+                    env_obs_s = ""
+                if env_obs_s:
+                    dyn_ctx = "【环境观察(自动获取)】\n" + env_obs_s + ("\n\n" + str(dyn_ctx or "") if dyn_ctx else "")
+
+                try:
+                    cfg0 = _hivo_load_cfg()
+                    feat = cfg0.get("features") if isinstance(cfg0, dict) else None
+                    feat = feat if isinstance(feat, dict) else {}
+                    context_refs_enabled = bool(feat.get("context_refs_enabled", True))
+                except Exception:
+                    context_refs_enabled = True
+
+                if context_refs_enabled:
+                    try:
+                        refs_block, refs_meta = _hivo_parse_context_refs_structured(ctx_refs if isinstance(ctx_refs, list) else [])
+                    except Exception:
+                        refs_block, refs_meta = "", []
+                    if refs_block:
+                        dyn_ctx = (str(dyn_ctx or "") + "\n\n" + refs_block).strip()
+                    try:
+                        if refs_meta:
+                            st = _hivo_get_session_state(str(sid or "").strip())
+                            mc = _hivo_mem_conf(cfg0)
+                            tl = st.get("tool_log") if isinstance(st.get("tool_log"), list) else []
+                            tl.append({"ts": time.time(), "type": "context_ref", "ok": True, "msg": "@引用解析", "data": {"refs": refs_meta}})
+                            while len(tl) > int(mc.get("tool_log_items") or 80):
+                                tl.pop(0)
+                            st["tool_log"] = tl
+                    except Exception:
+                        pass
+                run_id = uuid.uuid4().hex
+
+                # ack immediately; stream progress via websocket
+                self.send_json({"ok": True, "run_id": run_id})
+
+                def _bg():
+                    try:
+                        ok2, final2, _rid2 = hivo_agent_run(
+                            run_id,
+                            str(pid or "").strip(),
+                            str(sid or "").strip(),
+                            str(user_text or ""),
+                            history_messages=msgs0,
+                            dyn_context=str(dyn_ctx or ""),
+                            undo_gid=str(req_undo_gid or "").strip(),
+                        )
+                        try:
+                            pid_s = str(pid or "").strip()
+                            sid_s = str(sid or "").strip()
+                            if pid_s and sid_s:
+                                visible = []
+                                base = msgs0 if isinstance(msgs0, list) else []
+                                for m in base:
+                                    if not isinstance(m, dict):
+                                        continue
+                                    role = str(m.get("role") or "").strip()
+                                    if role not in ("user", "assistant"):
+                                        continue
+                                    if bool(m.get("pending")) and role == "assistant":
+                                        continue
+                                    content0 = str(m.get("content") or "")
+                                    if not content0:
+                                        continue
+                                    visible.append({"role": role, "content": content0})
+                                if final2:
+                                    visible.append({"role": "assistant", "content": str(final2)})
+                                with ai_history_lock:
+                                    save_ai_chat_history(pid_s, visible, session_id=sid_s)
+                        except Exception:
+                            pass
+                    except Exception as e:
+                        try:
+                            _hivo_ws_emit(run_id, str(sid or "").strip(), "error", str(e))
+                            _hivo_ws_emit_final(run_id, str(sid or "").strip(), str(e), ok=False)
+                        except Exception:
+                            pass
+
+                try:
+                    th = threading.Thread(target=_bg, daemon=True)
+                    th.start()
+                except Exception:
+                    pass
 
             elif p == "/api/revert_all":
                 logger.info("处理 /api/revert_all 请求")
@@ -5198,7 +7803,7 @@ class Handler(BaseHTTPRequestHandler):
                     return
 
                 # 1. git stash
-                stash_out, stash_err, stash_code = run_git(["stash", "push", "-m", "Auto stash before pull"], timeout=60)
+                stash_out, stash_err, stash_code = run_git(["stash", "push", "-u", "-m", "Auto stash before pull"], timeout=60)
                 if stash_code != 0:
                     logger.error(f"暂存失败: {stash_err}")
                     self.send_json({"error": f"暂存失败: {stash_err}"}, 400)
@@ -5209,38 +7814,29 @@ class Handler(BaseHTTPRequestHandler):
                 
                 # 2. git pull
                 pull_out, pull_err, pull_code = run_git(["pull", "--no-edit"], timeout=300)
-                
-                # 3. git stash pop (只有在实际暂存了内容时才恢复)
-                pop_conflict = False
-                pop_err = ""
-                if stashed:
-                    pop_out, pop_err_raw, pop_code = run_git(["stash", "pop"], timeout=60)
-                    pop_err = pop_err_raw or ""
-                    # 检测stash pop是否产生冲突
-                    if pop_code != 0 or "CONFLICT" in (pop_out or "") or "CONFLICT" in pop_err:
-                        pop_conflict = True
-                
-                # 检查合并冲突
+ 
+                # stash pop 由前端在用户确认后触发（/api/stash_pop）
                 conflict_files, _ = get_unmerged_files()
-                has_conflicts = bool(conflict_files) or pop_conflict
-                
+                has_conflicts = bool(conflict_files)
                 ok = (pull_code == 0) and (not has_conflicts)
                 
                 response = {
                     "ok": ok,
                     "stashed": stashed,
+                    "pending_pop": bool(stashed),
                     "pull_output": (pull_out or "").strip(),
                     "pull_error": (pull_err or "").strip(),
                     "has_conflicts": has_conflicts,
                     "conflict_files": conflict_files,
                 }
                 
-                if pop_conflict:
-                    response["pop_conflict"] = True
-                    response["pop_error"] = pop_err.strip()
-                    response["message"] = "更新成功，但恢复暂存的修改时发生冲突，请手动解决冲突"
-                elif ok:
-                    response["message"] = "成功暂存修改、更新并恢复修改"
+                if ok:
+                    response["message"] = "成功暂存修改并更新"
+                else:
+                    if stashed:
+                        response["message"] = "更新未完成：你的本地修改已暂存（可稍后手动恢复）"
+                    else:
+                        response["message"] = "更新未完成"
                 
                 self.send_json(response)
 
@@ -5444,9 +8040,9 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json({"error": "未指定目标分支"}, 400)
                     return
 
-                # 1. git stash
+                # 1. git stash (include untracked to truly clean the working tree)
                 stash_out, stash_err, stash_code = run_git(
-                    ["stash", "push", "-m", f"Auto stash before switching to {target_branch}"], 
+                    ["stash", "push", "-u", "-m", f"Auto stash before switching to {target_branch}"],
                     timeout=60
                 )
                 if stash_code != 0:
@@ -5457,6 +8053,22 @@ class Handler(BaseHTTPRequestHandler):
                 # 检查是否真的有内容被暂存
                 stashed = "No local changes to save" not in (stash_out or "")
                 
+                # After stashing, ensure worktree is clean; otherwise switching will be refused by switch_branch.
+                dirty2, detail2 = _has_worktree_changes()
+                if dirty2:
+                    logger.warning("暂存后工作区仍有未提交更改，拒绝切换分支")
+                    if stashed:
+                        try:
+                            run_git(["stash", "pop"], timeout=60)
+                        except Exception:
+                            pass
+                    self.send_json({
+                        "ok": False,
+                        "error": "暂存后工作区仍存在未提交更改，无法安全切换分支（可能包含未被 stash 的变更）",
+                        "output": detail2 or "",
+                    })
+                    return
+
                 # 2. git checkout
                 ok, cur, err_msg, out_msg, safe_err = switch_branch(target_branch)
 
@@ -5624,7 +8236,6 @@ def main():
     finally:
         logger.info("Git Manager 后端已停止")
         print("已停止")
-
 
 if __name__ == "__main__":
     main()
