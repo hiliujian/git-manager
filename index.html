@@ -3378,6 +3378,18 @@ flex-shrink:0;cursor:pointer;
     window.__gmAiActiveRunId = String(res.run_id || '');
     pending.content = '思考中...';
     pending.stage = 'thinking';
+    try {
+      const rid0 = String(pending.run_id || '').trim();
+      if (rid0 && __gmAiRunStatusCache && __gmAiRunStatusCache.get) {
+        const st0 = __gmAiRunStatusCache.get(rid0);
+        if (st0 && typeof st0 === 'object') {
+          const stage0 = String(st0.stage || '').trim();
+          const msg0 = String(st0.message || '').trim();
+          if (stage0) pending.stage = stage0;
+          if (msg0) pending.content = __gmAiNormalizePendingStatusText(msg0);
+        }
+      }
+    } catch (eSt0) {}
     __gmAiRenderChat();
     try { __gmAiRefreshSendCounter(); } catch (eC1) {}
     try { await __gmAiSaveHistoryNow(); } catch (e1) {}
@@ -9178,6 +9190,7 @@ flex-shrink:0;cursor:pointer;
               break;
             }
           } catch (eARs0) {}
+          let applied = false;
           for (let i = __gmAiChatMessages.length - 1; i >= 0; i--) {
             const m = __gmAiChatMessages[i];
             if (m && m.role === 'assistant' && m.pending && String(m.run_id || '') === runId) {
@@ -9187,8 +9200,16 @@ flex-shrink:0;cursor:pointer;
               if (msg) m.content = __gmAiNormalizePendingStatusText(msg);
               __gmAiRenderChat();
               try { __gmAiRefreshSendCounter(); } catch (eC2) {}
+              applied = true;
               break;
             }
+          }
+          if (!applied) {
+            try {
+              if (__gmAiRunStatusCache && __gmAiRunStatusCache.set) {
+                __gmAiRunStatusCache.set(runId, { stage: String(data.stage || ''), message: String(data.message || '') });
+              }
+            } catch (eC0) {}
           }
         } catch (eS) {}
         break;
@@ -9223,6 +9244,9 @@ flex-shrink:0;cursor:pointer;
                   __gmAiSetContinueState(true, rr || 'server');
                 }
               } catch (eCt) {}
+              try {
+                if (__gmAiRunStatusCache && __gmAiRunStatusCache.delete) __gmAiRunStatusCache.delete(runId);
+              } catch (eC1) {}
               break;
             }
           }
@@ -9422,6 +9446,7 @@ flex-shrink:0;cursor:pointer;
   let __gmAiSelectedProfileId = '';
   let __gmAiEditingProfileId = '';
   let __gmAiActiveTurnUndoGroupId = '';
+  let __gmAiRunStatusCache = new Map();
   let __gmAiCapabilitiesText = '';
   let __gmAiCapabilitiesSpec = null;
   let __gmAiSessions = [];

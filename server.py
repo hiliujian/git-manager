@@ -6184,25 +6184,15 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
                 return False, final, run_id
 
         try:
-            has_net = False
-            ws_enabled = None
-            for c in (calls or []):
-                nm0 = str((c or {}).get("type") or "").strip()
-                if nm0 in ("web_search", "web_fetch"):
-                    if ws_enabled is None:
-                        try:
-                            ws_enabled, _sc0 = _ai_load_web_search_cfg()
-                        except Exception:
-                            ws_enabled = False
-                    if ws_enabled:
-                        has_net = True
-                    break
-            if has_net:
-                _hivo_ws_emit(run_id, session_id, "executing", "联网中...")
-            else:
-                _hivo_ws_emit(run_id, session_id, "executing", _hivo_status_message(cfg, "executing", tool_count=len(calls)))
-        except Exception:
             _hivo_ws_emit(run_id, session_id, "executing", _hivo_status_message(cfg, "executing", tool_count=len(calls)))
+        except Exception:
+            pass
+
+        ws_enabled = None
+        try:
+            ws_enabled, _sc0 = _ai_load_web_search_cfg()
+        except Exception:
+            ws_enabled = False
         receipts = []
         for i_tool, c in enumerate(calls or []):
             if _hivo_agent_is_cancelled(run_id):
@@ -6218,11 +6208,14 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
 
             name = str(c.get("type") or "")
             try:
+                msg0 = _hivo_status_message(cfg, "executing", tool_count=len(calls))
+                if ws_enabled and name in ("web_search", "web_fetch"):
+                    msg0 = "搜索中..."
                 _hivo_ws_emit(
                     run_id,
                     session_id,
                     "executing",
-                    _hivo_status_message(cfg, "executing", tool_count=len(calls)),
+                    msg0,
                     extra={"tool": name, "tool_i": i_tool + 1, "tool_n": len(calls), "can_cancel": True},
                 )
             except Exception:
