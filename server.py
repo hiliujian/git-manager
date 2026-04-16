@@ -159,14 +159,18 @@ def _undo_load_state():
         if not isinstance(order, list) or not isinstance(groups, dict):
             return
         with undo_lock:
-            _undo_group_order[:] = [str(x) for x in order if str(x).strip()]
-            _undo_groups.clear()
+            norm_groups = {}
             for k, v in groups.items():
-                if not str(k).strip():
+                kk = str(k).strip()
+                if not kk:
                     continue
                 if not isinstance(v, list):
                     continue
-                _undo_groups[str(k)] = v
+                norm_groups[kk] = v
+
+            _undo_groups.clear()
+            _undo_groups.update(norm_groups)
+            _undo_group_order[:] = [str(x) for x in order if str(x).strip() and (str(x).strip() in norm_groups)]
     except Exception:
         return
 
@@ -446,6 +450,34 @@ def _undo_get_steps_for_session(session_id: str):
             if str(gid).startswith(prefix):
                 n += 1
         return n
+
+
+def _undo_clear_for_session(session_id: str):
+    sid = str(session_id or "").strip()
+    if not sid:
+        return 0
+    prefix = "ai-" + sid + "-"
+    removed = 0
+    with undo_lock:
+        gids = [str(g) for g in list(_undo_group_order) if str(g).startswith(prefix)]
+        if not gids:
+            return 0
+        try:
+            _undo_group_order[:] = [g for g in _undo_group_order if not str(g).startswith(prefix)]
+        except Exception:
+            pass
+        for gid in gids:
+            if gid in _undo_groups:
+                try:
+                    del _undo_groups[gid]
+                except Exception:
+                    pass
+            removed += 1
+    try:
+        _undo_save_state()
+    except Exception:
+        pass
+    return removed
 
 
 def _undo_apply_actions(actions: list):
@@ -8075,6 +8107,20 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json({"ok": False, "msg": msg or "撤销失败", "group_id": gid}, 500)
                     return
                 self.send_json({"ok": True, "group_id": gid})
+
+            elif p == "/api/undo_clear":
+                logger.info("处理 /api/undo_clear 请求")
+                sid = ""
+                try:
+                    if isinstance(data, dict):
+                        sid = str(data.get("session_id") or "").strip()
+                except Exception:
+                    sid = ""
+                if not sid:
+                    self.send_json({"ok": False, "msg": "缺少 session_id"}, 400)
+                    return
+                removed = _undo_clear_for_session(sid)
+                self.send_json({"ok": True, "session_id": sid, "removed": int(removed), "session_undo_steps": _undo_get_steps_for_session(sid)})
 
             elif p == "/api/ai_chat":
                 t0 = time.time()

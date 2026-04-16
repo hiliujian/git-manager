@@ -9172,6 +9172,12 @@ flex-shrink:0;cursor:pointer;
         try {
           const runId = String(data.run_id || '');
           if (!runId) break;
+          try {
+            const activeRid = String(window.__gmAiActiveRunId || '').trim();
+            if (activeRid && activeRid !== runId) {
+              break;
+            }
+          } catch (eARs0) {}
           for (let i = __gmAiChatMessages.length - 1; i >= 0; i--) {
             const m = __gmAiChatMessages[i];
             if (m && m.role === 'assistant' && m.pending && String(m.run_id || '') === runId) {
@@ -9842,19 +9848,11 @@ flex-shrink:0;cursor:pointer;
     try {
       const base = Array.isArray(__gmAiChatMessages) ? __gmAiChatMessages : [];
       let userCount = 0;
-      const set = new Set();
-      let hasAnyGid = false;
       for (const m of base) {
         if (!m || String(m.role || '') !== 'user') continue;
         userCount++;
-        const gid = String(m.undo_gid || '').trim();
-        if (!gid) continue;
-        hasAnyGid = true;
-        set.add(gid);
       }
-      if (!hasAnyGid) return userCount;
-      const gidCount = set.size;
-      return Math.max(userCount, gidCount);
+      return userCount;
     } catch (e) {
       return 0;
     }
@@ -9900,6 +9898,20 @@ flex-shrink:0;cursor:pointer;
       __gmAiChatMessages.splice(i, 1);
       __gmAiRenderChat();
       __gmAiSaveHistoryNow();
+      try {
+        if (!__gmAiChatMessages.length) {
+          const sid = String(__gmAiActiveSessionId || '').trim();
+          if (sid) {
+            POST('/api/undo_clear', { session_id: sid }).then(() => {
+              try { __gmAiLastUndoSteps = 0; } catch (e0) {}
+              try { __gmAiRefreshSendCounter(); } catch (e1) {}
+            }).catch(()=>{});
+          } else {
+            try { __gmAiLastUndoSteps = 0; } catch (e0) {}
+            try { __gmAiRefreshSendCounter(); } catch (e1) {}
+          }
+        }
+      } catch (e2) {}
     } catch (e) {}
   }
 
