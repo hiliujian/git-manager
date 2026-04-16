@@ -500,7 +500,7 @@ def _hivo_get_session_state(session_id: str):
     with _hivo_mem_lock:
         st = _hivo_session_mem.get(sid)
         if not isinstance(st, dict):
-            st = {"summary": "", "chat": [], "tool_log": [], "tool_cache": {}}
+            st = {"summary": "", "chat": [], "tool_log": [], "tool_cache": {}, "topic_id": 1, "topic_archive": []}
             _hivo_session_mem[sid] = st
         if not isinstance(st.get("summary"), str):
             st["summary"] = ""
@@ -510,7 +510,77 @@ def _hivo_get_session_state(session_id: str):
             st["tool_log"] = []
         if not isinstance(st.get("tool_cache"), dict):
             st["tool_cache"] = {}
+        try:
+            if not isinstance(st.get("topic_id"), int) or int(st.get("topic_id") or 0) <= 0:
+                st["topic_id"] = 1
+        except Exception:
+            st["topic_id"] = 1
+        if not isinstance(st.get("topic_archive"), list):
+            st["topic_archive"] = []
         return st
+
+
+def _hivo_detect_topic_switch(user_text: str):
+    try:
+        t = str(user_text or "").strip()
+    except Exception:
+        t = ""
+    if not t:
+        return False
+    tl = t.lower()
+    if tl.startswith("/new_topic") or tl.startswith("/topic") or tl.startswith("/reset_topic"):
+        return True
+    # explicit intent only (avoid accidental resets)
+    kws = [
+        "换个话题",
+        "切换话题",
+        "新话题",
+        "另一个话题",
+        "另一个问题",
+        "换个问题",
+        "忽略以上",
+        "忽略之前",
+        "不相关了",
+        "重新开始",
+        "从头开始",
+        "reset context",
+        "new topic",
+    ]
+    for k in kws:
+        if k and k in t:
+            return True
+    return False
+
+
+def _hivo_start_new_topic(st: dict, reason: str = ""):
+    if not isinstance(st, dict):
+        return
+    try:
+        arc = st.get("topic_archive")
+        if not isinstance(arc, list):
+            arc = []
+            st["topic_archive"] = arc
+        entry = {
+            "ts": time.time(),
+            "topic_id": int(st.get("topic_id") or 1),
+            "reason": str(reason or ""),
+            "summary": str(st.get("summary") or ""),
+        }
+        # keep only a small archive to avoid unbounded growth
+        arc.append(entry)
+        while len(arc) > 12:
+            arc.pop(0)
+    except Exception:
+        pass
+    try:
+        st["topic_id"] = int(st.get("topic_id") or 1) + 1
+    except Exception:
+        st["topic_id"] = 2
+    # hard isolation: drop old topic memory/caches
+    st["summary"] = ""
+    st["chat"] = []
+    st["tool_log"] = []
+    st["tool_cache"] = OrderedDict()
 
 
 def _hivo_mem_conf(cfg: dict):
@@ -752,12 +822,16 @@ def _hivo_parse_context_refs_structured(context_refs: list, per_file_chars: int 
 
         status = "not_found"
         content = ""
+        parts = []
+        total_parts = 0
+        provided_parts = 0
+        complete = False
+        media_meta = {}
         if resolved:
             ok, msg, c0 = get_file_content(resolved)
             if ok and c0 is not None:
                 content = str(c0 or "")
             if content:
-                content = content[: max(0, int(per_file_chars))]
                 status = "resolved"
             else:
                 status = "unreadable"
@@ -770,6 +844,8 @@ def _hivo_parse_context_refs_structured(context_refs: list, per_file_chars: int 
             "用户输入名称": raw,
             "真实路径": resolved,
             "文件内容": "",
+            "文件内容分段": [],
+            "分段信息": {"strategy": "chunk", "chunk_type": "", "target_lines": 260, "max_lines": 400, "total_parts": 0, "provided_parts": 0, "complete": False},
             "候选列表": candidates[:8],
             "解析方式": parse_way,
             "置信度": conf,
@@ -784,11 +860,192 @@ def _hivo_parse_context_refs_structured(context_refs: list, per_file_chars: int 
             item["提示"] = "存在多个候选路径，当前真实路径为最佳猜测，可能不确定；请优先通过 find_files/search_code 进一步确认后再做修改。"
             item["建议工具调用"] = [{"type": "find_files", "name": bn}]
 
-        if content and used < int(total_chars):
-            room = int(total_chars) - used
-            chunk = content[:room]
-            used += len(chunk)
-            item["文件内容"] = chunk
+        if resolved:
+            try:
+                ext = resolved.replace("\\", "/").split("/")[-1].split(".")[-1].lower() if "." in resolved else ""
+            except Exception:
+                ext = ""
+            try:
+                full = _safe_repo_abspath(resolved)
+            except Exception:
+                full = ""
+            try:
+                if full:
+                    mime0, _enc0 = mimetypes.guess_type(full)
+                else:
+                    mime0, _enc0 = (None, None)
+            except Exception:
+                mime0 = None
+
+            is_media = False
+            try:
+                if mime0 and (mime0.startswith("image/") or mime0.startswith("audio/") or mime0.startswith("video/")):
+                    is_media = True
+            except Exception:
+                is_media = False
+            try:
+                if ext in ("png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "tiff", "mp3", "wav", "flac", "mp4", "mkv", "mov", "avi", "pdf"):
+                    is_media = True
+            except Exception:
+                pass
+            try:
+                if "\x00" in content:
+                    is_media = True
+            except Exception:
+                pass
+
+            if is_media:
+                item["资源类型"] = "媒体/二进制"
+                try:
+                    size0 = int(os.path.getsize(full)) if full and os.path.exists(full) else 0
+                except Exception:
+                    size0 = 0
+                media_meta = {
+                    "path": resolved,
+                    "mime": mime0 or "application/octet-stream",
+                    "size": size0,
+                    "raw_url_template": "/api/raw_file?path={path}",
+                }
+                item["媒体元信息"] = media_meta
+                item["提示"] = "媒体/二进制内容不进行文本分块传输；请使用 raw_file 返回的引用信息，并在需要理解时提供可解析文本（如 OCR/转写/关键帧描述等）。"
+            elif content and used < int(total_chars):
+                # Chunking (prefer semantic boundaries; fallback to fixed lines)
+                try:
+                    lines = str(content or "").splitlines(True)
+                except Exception:
+                    lines = []
+
+                target_lines = 260
+                max_lines = 400
+                try:
+                    if per_file_chars:
+                        # keep legacy knob but interpret as approx char budget -> line target
+                        pass
+                except Exception:
+                    pass
+
+                def _is_boundary(li: str):
+                    try:
+                        s = str(li or "")
+                    except Exception:
+                        return False
+                    if not s:
+                        return False
+                    if ext == "py":
+                        return bool(re.match(r"^(class|def)\\s+\\w+", s))
+                    if ext in ("js", "ts", "jsx", "tsx"):
+                        if re.match(r"^\s*(export\s+)?class\s+\w+", s):
+                            return True
+                        if re.match(r"^\s*(export\s+)?(async\s+)?function\s+\w+", s):
+                            return True
+                        if re.match(r"^\s*(export\s+)?(const|let|var)\s+\w+\s*=\s*\(.*=>", s):
+                            return True
+                        return False
+                    if ext in ("md", "markdown"):
+                        return bool(re.match(r"^#{1,6}\\s+", s))
+                    if ext in ("txt", "log"):
+                        return bool(re.match(r"^\s*\d+(\\.|\\))\s+", s))
+                    if ext in ("html", "htm"):
+                        return bool(re.match(r"^\s*<h[1-6][\s>]", s, flags=re.I))
+                    return False
+
+                # Build segments by boundary lines
+                segs = []
+                if lines:
+                    starts = [0]
+                    for i in range(1, len(lines)):
+                        if _is_boundary(lines[i]):
+                            starts.append(i)
+                    starts = sorted(list(dict.fromkeys(starts)))
+                    for si, st0 in enumerate(starts):
+                        ed0 = (starts[si + 1] if (si + 1) < len(starts) else len(lines))
+                        if ed0 > st0:
+                            segs.append((st0, ed0))
+
+                # Fallback: treat whole file as one segment
+                if not segs and lines:
+                    segs = [(0, len(lines))]
+
+                # Normalize segments into chunk-sized pieces
+                chunks_full = []
+                chunk_kind = "structured" if (len(segs) > 1 and any((b - a) > 0 for a, b in segs)) else "unstructured"
+                for (a, b) in segs:
+                    n = b - a
+                    if n <= 0:
+                        continue
+                    if n <= max_lines:
+                        chunks_full.append((a, b, chunk_kind))
+                    else:
+                        # split oversized structure by fixed lines
+                        i0 = a
+                        while i0 < b:
+                            j0 = min(b, i0 + max_lines)
+                            chunks_full.append((i0, j0, "split"))
+                            i0 = j0
+
+                total_parts = len(chunks_full)
+                room = int(total_chars) - used
+                if room < 0:
+                    room = 0
+
+                provided = []
+                room_left = room
+                for ci, (a, b, ck) in enumerate(chunks_full, start=1):
+                    txt = "".join(lines[a:b])
+                    if not txt:
+                        continue
+                    # do not cut a chunk in the middle; if doesn't fit, stop.
+                    if len(txt) > room_left:
+                        if (b - a) > 20:
+                            # try further split by smaller blocks to fit
+                            step = max(20, min(120, max_lines // 3))
+                            i0 = a
+                            while i0 < b:
+                                j0 = min(b, i0 + step)
+                                txt2 = "".join(lines[i0:j0])
+                                if txt2 and len(txt2) <= room_left:
+                                    provided.append({
+                                        "chunk_index": len(provided) + 1,
+                                        "chunk_total": 0,
+                                        "chunk_type": "unstructured" if ck == "split" else "structured",
+                                        "source": {"type": "file", "path": resolved, "ext": ext},
+                                        "range": {"start_line": int(i0 + 1), "end_line": int(j0)},
+                                        "content": txt2,
+                                    })
+                                    used += len(txt2)
+                                    room_left -= len(txt2)
+                                    i0 = j0
+                                    continue
+                                break
+                            # stop after attempting micro-split
+                        break
+                    provided.append({
+                        "chunk_index": len(provided) + 1,
+                        "chunk_total": 0,
+                        "chunk_type": "structured" if ck != "split" else "unstructured",
+                        "source": {"type": "file", "path": resolved, "ext": ext},
+                        "range": {"start_line": int(a + 1), "end_line": int(b)},
+                        "content": txt,
+                    })
+                    used += len(txt)
+                    room_left -= len(txt)
+
+                provided_parts = len(provided)
+                complete = bool(provided_parts >= total_parts and total_parts > 0)
+                for ch in provided:
+                    ch["chunk_total"] = int(total_parts)
+                item["文件内容分段"] = provided
+                item["分段信息"] = {
+                    "strategy": "semantic_chunk_first",
+                    "chunk_type": chunk_kind,
+                    "target_lines": target_lines,
+                    "max_lines": max_lines,
+                    "total_parts": int(total_parts),
+                    "provided_parts": int(provided_parts),
+                    "complete": bool(complete),
+                }
+                if not complete and total_parts > 0:
+                    item["提示"] = "内容过长，已按语义优先分块注入；但受单次上下文长度限制，本次仅提供前若干 Chunk。后续如需完整内容，请继续分批读取（建议用 read_file_range/file_content）。"
 
         out.append(item)
         if used >= int(total_chars):
@@ -796,7 +1053,7 @@ def _hivo_parse_context_refs_structured(context_refs: list, per_file_chars: int 
 
     if not out:
         return "", []
-    block = "【@引用解析结果（高优先级上下文，禁止忽略）】\n" + json.dumps({"refs": out}, ensure_ascii=False, indent=2)
+    block = "【@引用解析结果（高优先级上下文，禁止忽略）】\n【CHUNKS BEGIN】\n" + json.dumps({"refs": out}, ensure_ascii=False, indent=2) + "\n[END OF CHUNKS]"
     return block, out
 
 
@@ -5202,6 +5459,7 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
     memory_enabled = bool(feat.get("memory_enabled", True))
     tool_memory_enabled = bool(feat.get("tool_memory_enabled", True))
     tool_cache_enabled = bool(feat.get("tool_cache_enabled", True))
+    topic_iso_enabled = bool(feat.get("topic_isolation_enabled", True))
     max_rounds = int(cfg.get("max_rounds") or 12)
     max_calls = int(cfg.get("max_tool_calls_per_round") or 3)
     max_hist = int(cfg.get("max_visible_history") or 80)
@@ -5215,7 +5473,16 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
     if not undo_gid_eff:
         undo_gid_eff = f"ai-{session_id}-{run_id}" if session_id else f"ai-{run_id}"
 
-    st = _hivo_get_session_state(session_id) if memory_enabled else {"summary": "", "chat": [], "tool_log": [], "tool_cache": OrderedDict()}
+    st = _hivo_get_session_state(session_id) if memory_enabled else {"summary": "", "chat": [], "tool_log": [], "tool_cache": OrderedDict(), "topic_id": 1, "topic_archive": []}
+
+    # Topic isolation: if user explicitly switches topic, start a new scoped memory.
+    try:
+        if memory_enabled and topic_iso_enabled and _hivo_detect_topic_switch(user_text):
+            _hivo_start_new_topic(st, reason=str(user_text or "")[:200])
+            iso_note = "【话题已切换 / 上下文隔离】\n从这一轮开始，你必须将其视为一个全新的问题域：\n- 禁止引用上一话题的工具回执、推理结论或未相关上下文\n- 若需要旧信息，必须要求用户重新提供，或通过工具重新获取\n"
+            dyn_context = (iso_note + ("\n" + str(dyn_context or "") if dyn_context else "")).strip()
+    except Exception:
+        pass
     try:
         long_summary = str(st.get("summary") or "").strip()
     except Exception:
@@ -5468,7 +5735,8 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
                     if f0:
                         payload = json.dumps({"file": f0}, ensure_ascii=False, indent=2)
                 elif nm in ("run_cmd",):
-                    payload = str(data1.get("output") or "")
+                    res1 = data1.get("result") if isinstance(data1.get("result"), dict) else {}
+                    payload = str(res1.get("output") or data1.get("output") or "")
 
                 if payload:
                     if total_payload_chars >= max_total_payload_chars:
