@@ -12,6 +12,7 @@ import subprocess, os, sys, logging, threading, hashlib, difflib, shutil, mimety
 from pathlib import Path
 import urllib.request
 import urllib.error
+import urllib.parse
 import uuid
 import py_compile
 import ssl
@@ -95,6 +96,12 @@ _hivo_session_mem: dict = {}  # session_id -> {summary:str, chat:list[dict], too
 
 _hivo_cfg_lock = threading.Lock()
 _hivo_cfg_cache: dict = {}
+
+# Hivo agent run control (cancel / concurrency)
+_hivo_agent_run_lock = threading.Lock()
+_hivo_agent_run_state: dict = {}  # run_id -> {session_id:str, started_at:float, cancel:bool, done:bool}
+_hivo_agent_session_active: dict = {}  # session_id -> run_id
+_hivo_agent_run_proc: dict = {}  # run_id -> subprocess.Popen
 undo_lock = threading.Lock()
 _undo_groups = {}  # group_id -> list[entry]
 _undo_group_order = []  # stack of group_id in commit order
@@ -276,6 +283,87 @@ def _undo_record(group_id: str, entry: dict):
         pass
 
 
+def _hivo_agent_mark_started(run_id: str, session_id: str):
+    try:
+        rid = str(run_id or "").strip()
+        sid = str(session_id or "").strip()
+        if not rid:
+            return
+        with _hivo_agent_run_lock:
+            _hivo_agent_run_state[rid] = {"session_id": sid, "started_at": time.time(), "cancel": False, "done": False}
+            if sid:
+                _hivo_agent_session_active[sid] = rid
+    except Exception:
+        pass
+
+
+def _hivo_agent_mark_done(run_id: str):
+    try:
+        rid = str(run_id or "").strip()
+        if not rid:
+            return
+        with _hivo_agent_run_lock:
+            st = _hivo_agent_run_state.get(rid)
+            if isinstance(st, dict):
+                st["done"] = True
+            try:
+                sid = str(st.get("session_id") or "") if isinstance(st, dict) else ""
+            except Exception:
+                sid = ""
+            if sid and _hivo_agent_session_active.get(sid) == rid:
+                _hivo_agent_session_active.pop(sid, None)
+    except Exception:
+        pass
+
+
+def _hivo_agent_is_cancelled(run_id: str) -> bool:
+    try:
+        rid = str(run_id or "").strip()
+        if not rid:
+            return False
+        with _hivo_agent_run_lock:
+            st = _hivo_agent_run_state.get(rid)
+            if not isinstance(st, dict):
+                return False
+            return bool(st.get("cancel"))
+    except Exception:
+        return False
+
+
+def _hivo_agent_request_cancel(run_id: str) -> bool:
+    try:
+        rid = str(run_id or "").strip()
+        if not rid:
+            return False
+        with _hivo_agent_run_lock:
+            st = _hivo_agent_run_state.get(rid)
+            if not isinstance(st, dict):
+                return False
+            st["cancel"] = True
+        try:
+            proc = _hivo_agent_run_proc.get(rid)
+            if proc is not None:
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return True
+    except Exception:
+        return False
+
+
+def _hivo_agent_clear_proc(run_id: str):
+    try:
+        rid = str(run_id or "").strip()
+        if not rid:
+            return
+        _hivo_agent_run_proc.pop(rid, None)
+    except Exception:
+        pass
+
+
 def _undo_pop_latest_group():
     with undo_lock:
         while _undo_group_order:
@@ -292,14 +380,43 @@ def _undo_pop_latest_group():
     return gid, actions
 
 
+def _undo_pop_latest_group_for_session(session_id: str):
+    sid = str(session_id or "").strip()
+    if not sid:
+        return "", []
+    prefix = "ai-" + sid + "-"
+    with undo_lock:
+        gid = ""
+        actions = []
+        for i in range(len(_undo_group_order) - 1, -1, -1):
+            g = str(_undo_group_order[i] or "").strip()
+            if not g.startswith(prefix):
+                continue
+            gid = g
+            try:
+                _undo_group_order.pop(i)
+            except Exception:
+                try:
+                    _undo_group_order[:] = [x for x in _undo_group_order if str(x) != gid]
+                except Exception:
+                    pass
+            actions = _undo_groups.pop(gid, None)
+            break
+    try:
+        _undo_save_state()
+    except Exception:
+        pass
+    if not isinstance(actions, list):
+        actions = []
+    return gid, actions
+
+
 def _undo_pop_group_by_id(group_id: str):
     gid = str(group_id or "").strip()
     if not gid:
         return "", []
     with undo_lock:
         actions = _undo_groups.pop(gid, None)
-        if not actions:
-            return "", []
         try:
             _undo_group_order[:] = [x for x in _undo_group_order if str(x) != gid]
         except Exception:
@@ -308,6 +425,8 @@ def _undo_pop_group_by_id(group_id: str):
         _undo_save_state()
     except Exception:
         pass
+    if not isinstance(actions, list):
+        actions = []
     return gid, actions
 
 
@@ -349,9 +468,14 @@ def _undo_apply_actions(actions: list):
                     _undo_apply_file_snapshot(snap)
             elif tp == "ai_config":
                 prev = a.get("prev")
-                ok, msg = save_ai_config(prev)
+                ok, msg = save_hivo_ai_config(prev)
                 if not ok:
                     errs.append(msg or "恢复 AI 配置失败")
+            elif tp == "hivo_ai_config":
+                prev = a.get("prev")
+                ok, msg = _hivo_save_cfg(prev if isinstance(prev, dict) else {})
+                if not ok:
+                    errs.append(msg or "恢复 Hivo AI 配置失败")
         except Exception as e:
             errs.append(str(e))
     if errs:
@@ -421,9 +545,16 @@ def broadcast_to_clients(message):
 
 def _hivo_cfg_path():
     try:
-        return Path(__file__).resolve().parent / "hivo_ai_config.json"
+        return _hivo_ai_data_dir() / "hivo_ai_config.json"
     except Exception:
         return Path("hivo_ai_config.json")
+
+
+def _hivo_ai_data_dir() -> Path:
+    try:
+        return Path(__file__).resolve().parent / "hivo_ai_data"
+    except Exception:
+        return Path("hivo_ai_data")
 
 
 def _hivo_load_cfg():
@@ -451,6 +582,30 @@ def _hivo_load_cfg():
                     "executing": "执行中...",
                     "done": "完成",
                 },
+                "features": {
+                    "memory_enabled": True,
+                    "tool_memory_enabled": True,
+                    "tool_cache_enabled": True,
+                    "context_refs_enabled": True,
+                    "web_search_enabled": False,
+                    "topic_isolation_enabled": True,
+                },
+                "active_profile_id": "",
+                "profiles": [],
+                "web_search": {
+                    "active_profile_id": "default",
+                    "profiles": [
+                        {
+                            "id": "default",
+                            "name": "",
+                            "provider": "tavily",
+                            "api_key": "",
+                            "base_url": "https://api.tavily.com/search",
+                            "timeout": 20,
+                            "top_k": 5,
+                        }
+                    ],
+                },
                 "memory": {
                     "short_term_turns": 6,
                     "long_term_summary_chars": 3500,
@@ -463,7 +618,219 @@ def _hivo_load_cfg():
                     "tools": [],
                 },
             })
+        else:
+            # Fill required keys for unified config without overwriting existing values.
+            try:
+                if "features" not in _hivo_cfg_cache or not isinstance(_hivo_cfg_cache.get("features"), dict):
+                    _hivo_cfg_cache["features"] = {}
+                if "web_search_enabled" not in _hivo_cfg_cache["features"]:
+                    _hivo_cfg_cache["features"]["web_search_enabled"] = False
+            except Exception:
+                pass
+            try:
+                if "profiles" not in _hivo_cfg_cache or not isinstance(_hivo_cfg_cache.get("profiles"), list):
+                    _hivo_cfg_cache["profiles"] = []
+                if "active_profile_id" not in _hivo_cfg_cache:
+                    _hivo_cfg_cache["active_profile_id"] = ""
+            except Exception:
+                pass
+            try:
+                ws = _hivo_cfg_cache.get("web_search")
+                if not isinstance(ws, dict):
+                    ws = {}
+                # If old scalar format exists, lift it to list-based format.
+                if "profiles" not in ws or not isinstance(ws.get("profiles"), list):
+                    prov = str(ws.get("provider") or "").strip()
+                    ws_profiles = [{
+                        "id": "default",
+                        "name": "",
+                        "provider": prov,
+                        "api_key": str(ws.get("api_key") or ""),
+                        "base_url": str(ws.get("base_url") or "").strip(),
+                        "timeout": int(ws.get("timeout") or 20),
+                        "top_k": int(ws.get("top_k") or 5),
+                    }]
+                    ws = {"active_profile_id": "default", "profiles": ws_profiles}
+                if "active_profile_id" not in ws:
+                    ws["active_profile_id"] = str((ws.get("profiles") or [{}])[0].get("id") or "").strip() if isinstance(ws.get("profiles"), list) and ws.get("profiles") else ""
+                _hivo_cfg_cache["web_search"] = ws
+            except Exception:
+                pass
         return dict(_hivo_cfg_cache)
+
+
+def _hivo_save_cfg(cfg: dict):
+    if not isinstance(cfg, dict):
+        return False, "config 必须是对象"
+    with _hivo_cfg_lock:
+        try:
+            p = _hivo_cfg_path()
+            try:
+                p.parent.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                pass
+            p.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+            _hivo_cfg_cache.clear()
+            _hivo_cfg_cache.update(cfg)
+            return True, "保存成功"
+        except Exception as e:
+            return False, str(e)
+
+
+def _hivo_web_search(query: str, top_k: int = 5, timeout: int = 20):
+    enabled, sc0 = _ai_load_web_search_cfg()
+    if not enabled:
+        return False, "web_search 未启用", {"result": {"query": str(query or ""), "items": []}}
+
+    sc0 = sc0 if isinstance(sc0, dict) else {}
+
+    sc = sc0
+    profiles = sc0.get("profiles")
+    if isinstance(profiles, list) and profiles:
+        active_id = str(sc0.get("active_profile_id") or "").strip()
+        pick = None
+        for p in profiles:
+            if not isinstance(p, dict):
+                continue
+            if active_id and str(p.get("id") or "").strip() == active_id:
+                pick = p
+                break
+        if pick is None:
+            for p in profiles:
+                if isinstance(p, dict):
+                    pick = p
+                    break
+        if isinstance(pick, dict):
+            sc = pick
+
+    provider = str(sc.get("provider") or "").strip().lower()
+    api_key = str(sc.get("api_key") or "").strip()
+    base_url = str(sc.get("base_url") or "").strip().rstrip("/")
+    try:
+        k = int(top_k or sc.get("top_k") or 5)
+    except Exception:
+        k = 5
+    k = max(1, min(10, k))
+    try:
+        to = int(timeout or sc.get("timeout") or 20)
+    except Exception:
+        to = 20
+    to = max(3, min(60, to))
+
+    q = str(query or "").strip()
+    if not q:
+        return False, "缺少 query", {"result": {"query": "", "items": []}}
+
+    if provider in ("serper", "google_serper", "serper_dev"):
+        if not api_key:
+            return False, "Serper 缺少 api_key", {"result": {"query": q, "provider": provider, "items": []}}
+        url = "https://google.serper.dev/search"
+        body = {"q": q, "num": k}
+        headers = {"Content-Type": "application/json", "X-API-KEY": api_key, "Connection": "close"}
+        req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=to) as resp:
+                raw = resp.read().decode("utf-8", errors="replace")
+                data = json.loads(raw or "{}")
+        except Exception as e:
+            return False, str(e), {"result": {"query": q, "provider": provider, "items": []}}
+        items = []
+        for it in (data.get("organic") or [])[:k]:
+            if not isinstance(it, dict):
+                continue
+            items.append({
+                "title": str(it.get("title") or "").strip(),
+                "url": str(it.get("link") or "").strip(),
+                "snippet": str(it.get("snippet") or "").strip(),
+                "source": "serper",
+            })
+        return True, "", {"result": {"query": q, "provider": provider, "items": items}}
+
+    if provider in ("tavily",):
+        if not api_key:
+            return False, "Tavily 缺少 api_key", {"result": {"query": q, "provider": provider, "items": []}}
+        url = "https://api.tavily.com/search"
+        body = {"api_key": api_key, "query": q, "max_results": k, "search_depth": "basic"}
+        headers = {"Content-Type": "application/json", "Connection": "close"}
+        req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=to) as resp:
+                raw = resp.read().decode("utf-8", errors="replace")
+                data = json.loads(raw or "{}")
+        except Exception as e:
+            return False, str(e), {"result": {"query": q, "provider": provider, "items": []}}
+        items = []
+        for it in (data.get("results") or [])[:k]:
+            if not isinstance(it, dict):
+                continue
+            items.append({
+                "title": str(it.get("title") or "").strip(),
+                "url": str(it.get("url") or "").strip(),
+                "snippet": str(it.get("content") or "").strip(),
+                "source": "tavily",
+            })
+        return True, "", {"result": {"query": q, "provider": provider, "items": items}}
+
+    if provider in ("searxng", "searx"):
+        if not base_url:
+            return False, "SearxNG 缺少 base_url", {"result": {"query": q, "provider": provider, "items": []}}
+        url = base_url + "/search?" + urllib.parse.urlencode({"q": q, "format": "json"})
+        req = urllib.request.Request(url, headers={"Connection": "close"}, method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=to) as resp:
+                raw = resp.read().decode("utf-8", errors="replace")
+                data = json.loads(raw or "{}")
+        except Exception as e:
+            return False, str(e), {"result": {"query": q, "provider": provider, "items": []}}
+        items = []
+        for it in (data.get("results") or [])[:k]:
+            if not isinstance(it, dict):
+                continue
+            items.append({
+                "title": str(it.get("title") or "").strip(),
+                "url": str(it.get("url") or "").strip(),
+                "snippet": str(it.get("content") or it.get("snippet") or "").strip(),
+                "source": "searxng",
+            })
+        return True, "", {"result": {"query": q, "provider": provider, "items": items}}
+
+    return False, "未配置可用 provider（支持：searxng/serper/tavily）", {"result": {"query": q, "provider": provider, "items": []}}
+
+
+def _hivo_web_fetch(url: str, timeout: int = 20):
+    enabled, _sc0 = _ai_load_web_search_cfg()
+    if not enabled:
+        return False, "web_fetch 未启用", {"result": {"url": str(url or ""), "text": ""}}
+
+    u = str(url or "").strip()
+    if not u:
+        return False, "缺少 url", {"result": {"url": "", "text": ""}}
+    if not (u.startswith("http://") or u.startswith("https://")):
+        return False, "仅支持 http/https", {"result": {"url": u, "text": ""}}
+    try:
+        to = int(timeout or 20)
+    except Exception:
+        to = 20
+    to = max(3, min(60, to))
+    req = urllib.request.Request(u, headers={"User-Agent": "Mozilla/5.0", "Connection": "close"}, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=to) as resp:
+            raw = resp.read(1024 * 512)
+            txt = raw.decode("utf-8", errors="replace")
+    except Exception as e:
+        return False, str(e), {"result": {"url": u, "text": ""}}
+    try:
+        txt = re.sub(r"<script[\s\S]*?</script>", " ", txt, flags=re.IGNORECASE)
+        txt = re.sub(r"<style[\s\S]*?</style>", " ", txt, flags=re.IGNORECASE)
+        txt = re.sub(r"<[^>]+>", " ", txt)
+        txt = re.sub(r"[ \t\x0b\x0c\r]+", " ", txt)
+        txt = re.sub(r"\n{3,}", "\n\n", txt)
+        txt = txt.strip()
+    except Exception:
+        txt = (txt or "").strip()
+    if len(txt) > 12000:
+        txt = txt[:12000]
+    return True, "", {"result": {"url": u, "text": txt}}
 
 
 def _hivo_status_message(cfg: dict, stage: str, **kwargs):
@@ -714,6 +1081,17 @@ def _hivo_tool_call_sig(call: dict):
     try:
         if not isinstance(call, dict):
             return ""
+        try:
+            nm0 = str((call or {}).get("type") or "").strip()
+        except Exception:
+            nm0 = ""
+        if nm0 in ("web_search", "web_fetch"):
+            try:
+                enabled0, _sc0 = _ai_load_web_search_cfg()
+            except Exception:
+                enabled0 = False
+            payload = {"call": call, "web_search_enabled": bool(enabled0)}
+            return json.dumps(payload, ensure_ascii=False, sort_keys=True)
         return json.dumps(call, ensure_ascii=False, sort_keys=True)
     except Exception:
         return ""
@@ -3335,17 +3713,15 @@ def get_log(limit: int = 50):
 
 
 def _ai_config_path():
-    appdata = os.environ.get("APPDATA")
-    if appdata:
-        return Path(appdata) / "git-manager" / "ai_config.json"
-    return Path.home() / ".git-manager" / "ai_config.json"
+    # Backward-compatible alias: we now use a single unified config file.
+    return _hivo_cfg_path()
 
 
-def _ai_pick_latest_history_path(base_dir: Path) -> Path | None:
+def _hivo_ai_pick_latest_history_path(base_dir: Path) -> Path | None:
     try:
         if not base_dir or not base_dir.exists() or not base_dir.is_dir():
             return None
-        items = list(base_dir.glob("ai_chat_history_*.json"))
+        items = list(base_dir.glob("hivo_ai_chat_history_*.json"))
         if not items:
             return None
         items.sort(key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True)
@@ -3354,7 +3730,7 @@ def _ai_pick_latest_history_path(base_dir: Path) -> Path | None:
         return None
 
 
-def _ai_history_path():
+def _hivo_ai_history_path():
     repo = (REPO_PATH or "")
     repo_key = "global"
     try:
@@ -3362,31 +3738,16 @@ def _ai_history_path():
             repo_key = hashlib.sha1(repo.encode("utf-8", errors="ignore")).hexdigest()[:10]
     except Exception:
         repo_key = "global"
-    appdata = os.environ.get("APPDATA")
-    if appdata:
-        base = Path(appdata) / "git-manager"
-        p0 = base / f"ai_chat_history_{repo_key}.json"
-        if not repo:
-            try:
-                if not (p0.exists() and p0.is_file() and p0.stat().st_size > 0):
-                    p1 = _ai_pick_latest_history_path(base)
-                    if p1:
-                        return p1
-            except Exception:
-                p1 = _ai_pick_latest_history_path(base)
-                if p1:
-                    return p1
-        return p0
-    base2 = Path.home() / ".git-manager"
-    p0 = base2 / f"ai_chat_history_{repo_key}.json"
+    base = _hivo_ai_data_dir()
+    p0 = base / f"hivo_ai_chat_history_{repo_key}.json"
     if not repo:
         try:
             if not (p0.exists() and p0.is_file() and p0.stat().st_size > 0):
-                p1 = _ai_pick_latest_history_path(base2)
+                p1 = _hivo_ai_pick_latest_history_path(base)
                 if p1:
                     return p1
         except Exception:
-            p1 = _ai_pick_latest_history_path(base2)
+            p1 = _hivo_ai_pick_latest_history_path(base)
             if p1:
                 return p1
     return p0
@@ -3395,7 +3756,7 @@ def _ai_history_path():
 _AI_GLOBAL_PROFILE_ID = "__global__"
 
 
-def _ai_clean_messages(messages: list, limit: int):
+def _hivo_ai_clean_messages(messages: list, limit: int):
     if not isinstance(messages, list):
         return []
     cleaned = []
@@ -3422,7 +3783,7 @@ def _ai_clean_messages(messages: list, limit: int):
     return cleaned[-lim:]
 
 
-def _ai_guess_session_title(messages: list):
+def _hivo_ai_guess_session_title(messages: list):
     try:
         if not isinstance(messages, list):
             return ""
@@ -3443,8 +3804,8 @@ def _ai_guess_session_title(messages: list):
         return ""
 
 
-def _ai_load_history_data():
-    p = _ai_history_path()
+def _hivo_ai_load_history_data():
+    p = _hivo_ai_history_path()
     try:
         if not p.exists():
             return {}
@@ -3454,13 +3815,13 @@ def _ai_load_history_data():
         return {}
 
 
-def _ai_write_history_data(data: dict):
-    p = _ai_history_path()
+def _hivo_ai_write_history_data(data: dict):
+    p = _hivo_ai_history_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def _ai_ensure_profile_node(data: dict, profile_id: str):
+def _hivo_ai_ensure_profile_node(data: dict, profile_id: str):
     byp = data.get("by_profile")
     if not isinstance(byp, dict):
         byp = {}
@@ -3543,8 +3904,8 @@ def _ai_ensure_profile_node(data: dict, profile_id: str):
 
 def list_ai_sessions(profile_id: str):
     pid = _AI_GLOBAL_PROFILE_ID
-    data = _ai_load_history_data()
-    node = _ai_ensure_profile_node(data, pid)
+    data = _hivo_ai_load_history_data()
+    node = _hivo_ai_ensure_profile_node(data, pid)
     sessions = []
     by_id = {}
     for s in (node.get("sessions") or []):
@@ -3580,8 +3941,8 @@ def list_ai_sessions(profile_id: str):
 
 def reorder_ai_sessions(profile_id: str, session_ids: list[str]):
     pid = _AI_GLOBAL_PROFILE_ID
-    data = _ai_load_history_data()
-    node = _ai_ensure_profile_node(data, pid)
+    data = _hivo_ai_load_history_data()
+    node = _hivo_ai_ensure_profile_node(data, pid)
     sess = node.get("sessions")
     if not isinstance(sess, list):
         return False, "会话数据异常"
@@ -3599,7 +3960,7 @@ def reorder_ai_sessions(profile_id: str, session_ids: list[str]):
         if sid not in final_order:
             final_order.append(sid)
     node["session_order"] = final_order
-    _ai_write_history_data(data)
+    _hivo_ai_write_history_data(data)
     return True, ""
 
 
@@ -3609,20 +3970,20 @@ def set_ai_active_session(profile_id: str, session_id: str):
     if not sid:
         return False, "缺少参数"
 
-    data = _ai_load_history_data()
-    node = _ai_ensure_profile_node(data, pid)
+    data = _hivo_ai_load_history_data()
+    node = _hivo_ai_ensure_profile_node(data, pid)
     sess = node.get("sessions") or []
     if not any(isinstance(x, dict) and str(x.get("id") or "").strip() == sid for x in sess):
         return False, "会话不存在"
     node["active_session_id"] = sid
-    _ai_write_history_data(data)
+    _hivo_ai_write_history_data(data)
     return True, ""
 
 
 def create_ai_session(profile_id: str, title: str | None = None):
     pid = _AI_GLOBAL_PROFILE_ID
-    data = _ai_load_history_data()
-    node = _ai_ensure_profile_node(data, pid)
+    data = _hivo_ai_load_history_data()
+    node = _hivo_ai_ensure_profile_node(data, pid)
     sid = uuid.uuid4().hex
     t = str(title or "会话").strip() or "会话"
     sess = node.get("sessions")
@@ -3639,7 +4000,7 @@ def create_ai_session(profile_id: str, title: str | None = None):
     if sid_s and sid_s not in [str(x).strip() for x in order if str(x).strip()]:
         order.append(sid_s)
     node["session_order"] = order
-    _ai_write_history_data(data)
+    _hivo_ai_write_history_data(data)
     return True, "", sid
 
 
@@ -3649,8 +4010,8 @@ def delete_ai_session(profile_id: str, session_id: str):
     if not sid:
         return False, "缺少参数"
 
-    data = _ai_load_history_data()
-    node = _ai_ensure_profile_node(data, pid)
+    data = _hivo_ai_load_history_data()
+    node = _hivo_ai_ensure_profile_node(data, pid)
     sess = node.get("sessions")
     if not isinstance(sess, list):
         return False, "会话不存在"
@@ -3703,14 +4064,14 @@ def delete_ai_session(profile_id: str, session_id: str):
     except Exception:
         if str(node.get("active_session_id") or "").strip() == sid:
             node["active_session_id"] = str(new_sess[0].get("id") or "").strip() if new_sess else ""
-    _ai_write_history_data(data)
+    _hivo_ai_write_history_data(data)
     return True, ""
 
 
 def load_ai_chat_history(profile_id: str, limit: int = 40, session_id: str | None = None):
     pid = _AI_GLOBAL_PROFILE_ID
-    data = _ai_load_history_data()
-    node = _ai_ensure_profile_node(data, pid)
+    data = _hivo_ai_load_history_data()
+    node = _hivo_ai_ensure_profile_node(data, pid)
     sid = str(session_id or "").strip() or str(node.get("active_session_id") or "").strip()
     if not sid:
         return []
@@ -3740,17 +4101,17 @@ def load_ai_chat_history(profile_id: str, limit: int = 40, session_id: str | Non
 
 def save_ai_chat_history(profile_id: str, messages: list, limit: int = 80, session_id: str | None = None):
     pid = _AI_GLOBAL_PROFILE_ID
-    cleaned = _ai_clean_messages(messages, limit)
+    cleaned = _hivo_ai_clean_messages(messages, limit)
 
-    data = _ai_load_history_data()
-    node = _ai_ensure_profile_node(data, pid)
+    data = _hivo_ai_load_history_data()
+    node = _hivo_ai_ensure_profile_node(data, pid)
     sid = str(session_id or "").strip() or str(node.get("active_session_id") or "").strip()
     if not sid:
         ok, msg, sid = create_ai_session(pid, title="会话")
         if not ok:
             return False, msg
-        data = _ai_load_history_data()
-        node = _ai_ensure_profile_node(data, pid)
+        data = _hivo_ai_load_history_data()
+        node = _hivo_ai_ensure_profile_node(data, pid)
 
     sess = node.get("sessions")
     if not isinstance(sess, list):
@@ -3767,8 +4128,8 @@ def save_ai_chat_history(profile_id: str, messages: list, limit: int = 80, sessi
                 if not ok:
                     return False, msg
                 sid = str(new_sid or "").strip()
-                data = _ai_load_history_data()
-                node = _ai_ensure_profile_node(data, pid)
+                data = _hivo_ai_load_history_data()
+                node = _hivo_ai_ensure_profile_node(data, pid)
                 sess = node.get("sessions")
                 if not isinstance(sess, list):
                     return False, "会话数据异常"
@@ -3781,28 +4142,30 @@ def save_ai_chat_history(profile_id: str, messages: list, limit: int = 80, sessi
             title = str(s.get("title") or "").strip()
             auto_titled = bool(s.get("auto_titled"))
             if (not auto_titled) and title == "会话":
-                t = _ai_guess_session_title(cleaned)
+                t = _hivo_ai_guess_session_title(cleaned)
                 if t:
                     s["title"] = t
                     s["auto_titled"] = True
             node["active_session_id"] = sid
-            _ai_write_history_data(data)
+            _hivo_ai_write_history_data(data)
             return True, ""
     return False, "会话不存在"
 
 
-def load_ai_config():
-    p = _ai_config_path()
+def load_hivo_ai_config():
     try:
-        if not p.exists():
-            return {"active_profile_id": "", "profiles": []}
-        data = json.loads(p.read_text(encoding="utf-8") or "{}")
+        data = _hivo_load_cfg()
         if not isinstance(data, dict):
-            return {"active_profile_id": "", "profiles": []}
+            data = {}
         if "profiles" not in data or not isinstance(data.get("profiles"), list):
             data["profiles"] = []
         if "active_profile_id" not in data:
             data["active_profile_id"] = ""
+        if "features" not in data or not isinstance(data.get("features"), dict):
+            data["features"] = {"web_search_enabled": False}
+        if "web_search" not in data or not isinstance(data.get("web_search"), dict):
+            data["web_search"] = {"active_profile_id": "", "profiles": []}
+
         # Normalize active_profile_id to a valid profile id when possible.
         active = str(data.get("active_profile_id") or "").strip()
         profiles = data.get("profiles") if isinstance(data.get("profiles"), list) else []
@@ -3814,7 +4177,7 @@ def load_ai_config():
         data["active_profile_id"] = ""
         return data
     except Exception:
-        return {"active_profile_id": "", "profiles": []}
+        return {"active_profile_id": "", "profiles": [], "features": {"web_search_enabled": False}, "web_search": {"active_profile_id": "", "profiles": []}}
 
 
 def get_workspace_context(max_entries: int = 80):
@@ -3887,10 +4250,16 @@ def find_files_by_name(name: str, max_results: int = 20):
     return out
 
 
-def save_ai_config(cfg: dict):
-    p = _ai_config_path()
+def save_hivo_ai_config(cfg: dict):
     if not isinstance(cfg, dict):
         return False, "配置格式非法"
+
+    features_in = cfg.get("features") if isinstance(cfg.get("features"), dict) else {}
+    web_search_in = cfg.get("web_search") if isinstance(cfg.get("web_search"), dict) else {}
+
+    base_cfg = _hivo_load_cfg()
+    if not isinstance(base_cfg, dict):
+        base_cfg = {}
 
     # Accept both new and legacy formats.
     profiles_in = cfg.get("profiles")
@@ -3921,28 +4290,75 @@ def save_ai_config(cfg: dict):
             active_id = active
         else:
             active_id = profiles[0]["id"] if profiles else ""
-        data = {"active_profile_id": active_id, "profiles": profiles}
+        base_cfg["active_profile_id"] = active_id
+        base_cfg["profiles"] = profiles
     else:
         base_url = str(cfg.get("base_url") or cfg.get("endpoint") or "").strip()
         api_key = str(cfg.get("api_key") or "")
         model = str(cfg.get("model") or "").strip()
         pid = str(cfg.get("id") or "").strip() or uuid.uuid4().hex
-        data = {
-            "active_profile_id": pid,
-            "profiles": [{
-                "id": pid,
-                "name": str(cfg.get("name") or model or "Default"),
-                "base_url": base_url,
-                "api_key": api_key,
-                "model": model,
-            }],
-        }
+        base_cfg["active_profile_id"] = pid
+        base_cfg["profiles"] = [{
+            "id": pid,
+            "name": str(cfg.get("name") or model or "Default"),
+            "base_url": base_url,
+            "api_key": api_key,
+            "model": model,
+        }]
+
+    # Persist web search config together with ai config (same file).
+    # IMPORTANT: merge-only behavior to avoid resetting settings when client submits partial config.
     try:
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        return True, ""
-    except Exception as e:
-        return False, str(e)
+        if "features" not in base_cfg or not isinstance(base_cfg.get("features"), dict):
+            base_cfg["features"] = {}
+        if isinstance(features_in, dict) and "web_search_enabled" in features_in:
+            base_cfg["features"]["web_search_enabled"] = bool(features_in.get("web_search_enabled"))
+    except Exception:
+        pass
+
+    try:
+        # Only overwrite web_search when client provided it.
+        if isinstance(cfg.get("web_search"), dict):
+            ws_profiles = web_search_in.get("profiles") if isinstance(web_search_in.get("profiles"), list) else []
+            ws_profiles2 = []
+            for p0 in ws_profiles:
+                if not isinstance(p0, dict):
+                    continue
+                ws_profiles2.append({
+                    "id": str(p0.get("id") or "").strip(),
+                    "provider": str(p0.get("provider") or "").strip(),
+                    "api_key": str(p0.get("api_key") or ""),
+                    "base_url": str(p0.get("base_url") or "").strip(),
+                    "timeout": int(p0.get("timeout") or 20),
+                    "top_k": int(p0.get("top_k") or 5),
+                })
+            ws_active = str(web_search_in.get("active_profile_id") or "").strip()
+            if ws_active and any(x.get("id") == ws_active for x in ws_profiles2):
+                active2 = ws_active
+            else:
+                active2 = str(ws_profiles2[0].get("id") or "").strip() if ws_profiles2 else ""
+            base_cfg["web_search"] = {"active_profile_id": active2, "profiles": ws_profiles2}
+    except Exception:
+        pass
+
+    ok, msg = _hivo_save_cfg(base_cfg)
+    if not ok:
+        return False, msg
+    return True, ""
+
+
+def _ai_load_web_search_cfg():
+    """Return (enabled, web_search_dict) from unified hivo_ai_config.json."""
+    try:
+        aic = load_hivo_ai_config()
+        if isinstance(aic, dict):
+            feat = aic.get("features") if isinstance(aic.get("features"), dict) else {}
+            ws = aic.get("web_search") if isinstance(aic.get("web_search"), dict) else None
+            if ws is not None:
+                return bool(feat.get("web_search_enabled", False)), ws
+    except Exception:
+        return False, {}
+    return False, {}
 
 
 def _ai_build_chat_url(base_url: str):
@@ -4116,6 +4532,8 @@ def get_capabilities_spec():
         # AI
         {"method": "GET", "path": "/api/ai_config"},
         {"method": "POST", "path": "/api/ai_config", "body": {"config": {"active_profile_id": "", "profiles": []}}},
+        {"method": "GET", "path": "/api/hivo_ai_config"},
+        {"method": "POST", "path": "/api/hivo_ai_config", "body": {"config": {}}},
         {"method": "GET", "path": "/api/ai_models", "query": {"base_url": "<url>", "api_key": "<key>"}},
         {"method": "POST", "path": "/api/ai_chat", "body": {"messages": [], "profile_id": "<id>", "session_id": "<id>"}},
         {"method": "GET", "path": "/api/ai_chat_history", "query": {"profile_id": "<id>", "session_id": "<id>", "limit": "1-200"}},
@@ -4435,11 +4853,32 @@ def get_capabilities_spec():
             "example": {"type": "run_cmd", "cmd": "git status", "timeout": 30},
         },
         {
-            "type": "search_code",
-            "desc": "搜索代码。",
+            "type": "web_search",
+            "desc": "联网搜索（RAG 检索入口）。当问题需要最新信息/外部资料时先调用此工具；基于返回的 items 生成答案并给出 URL 引用。若不可用/失败需降级：明确说明无法联网并改用本地上下文回答。",
             "required": ["query"],
             "properties": {
-                "query": {"type": "string", "desc": "关键字/正则"},
+                "query": {"type": "string", "desc": "搜索关键词/问题"},
+                "top_k": {"type": "number", "desc": "可选，返回条数 1-10（默认 5）"},
+                "timeout": {"type": "number", "desc": "可选，超时秒数（默认 20）"},
+            },
+            "example": {"type": "web_search", "query": "Python 3.13 release date", "top_k": 5},
+        },
+        {
+            "type": "web_fetch",
+            "desc": "抓取网页正文（与 web_search 配合的 RAG 阅读器）。只用于从已知 URL 获取内容；返回纯文本（会做基础去标签，且有长度上限）。不可用时必须降级说明。",
+            "required": ["url"],
+            "properties": {
+                "url": {"type": "string", "desc": "http/https URL"},
+                "timeout": {"type": "number", "desc": "可选，超时秒数（默认 20）"},
+            },
+            "example": {"type": "web_fetch", "url": "https://example.com"},
+        },
+        {
+            "type": "search_code",
+            "desc": "在仓库代码中搜索（只读）。",
+            "required": ["query"],
+            "properties": {
+                "query": {"type": "string", "desc": "搜索关键词/正则"},
                 "case_sensitive": {"type": "boolean", "desc": "可选"},
                 "max_results": {"type": "number", "desc": "可选"},
             },
@@ -4659,7 +5098,7 @@ def _ai_pick_profile(cfg: dict, profile_id: str | None):
 
 def ai_chat(messages: list, temperature: float | None = None, profile_id: str | None = None):
     with ai_config_lock:
-        cfg = load_ai_config()
+        cfg = load_hivo_ai_config()
     prof = _ai_pick_profile(cfg, profile_id)
     if not prof:
         return False, "未配置可用模型", None
@@ -5015,7 +5454,7 @@ def _hivo_tool_receipt_line(name: str, ok: bool, detail: str = ""):
     return s
 
 
-def _hivo_exec_tool(tool: dict, undo_gid: str = ""):
+def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_deadline: float = 0.0):
     t = str((tool or {}).get("type") or "").strip()
     if not t:
         return False, "missing type", {}
@@ -5442,10 +5881,36 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = ""):
         cmd = str(tool.get("cmd") or "").strip()
         timeout = int(tool.get("timeout") or 30)
         cwd = str(tool.get("cwd") or "").strip()
-        ok1, msg1, out1 = _run_cmd_simple(cmd, timeout=timeout, cwd=cwd)
+        ok1, msg1, out1 = _run_cmd_simple(cmd, timeout=timeout, cwd=cwd, run_id=run_id, agent_deadline=agent_deadline)
         if not ok1:
             return False, msg1 or "run_cmd failed", {"result": {"cmd": cmd, "timeout": timeout, "cwd": cwd, "output": out1}}
         return True, "", {"result": {"cmd": cmd, "timeout": timeout, "cwd": cwd, "output": out1}}
+
+    if t == "web_search":
+        q = str(tool.get("query") or "").strip()
+        try:
+            top_k = int(tool.get("top_k") or 5)
+        except Exception:
+            top_k = 5
+        try:
+            timeout = int(tool.get("timeout") or 20)
+        except Exception:
+            timeout = 20
+        ok1, msg1, data1 = _hivo_web_search(q, top_k=top_k, timeout=timeout)
+        if not ok1:
+            return False, msg1 or "web_search failed", data1 if isinstance(data1, dict) else {"result": {"query": q, "items": []}}
+        return True, "", data1 if isinstance(data1, dict) else {"result": {"query": q, "items": []}}
+
+    if t == "web_fetch":
+        u = str(tool.get("url") or "").strip()
+        try:
+            timeout = int(tool.get("timeout") or 20)
+        except Exception:
+            timeout = 20
+        ok1, msg1, data1 = _hivo_web_fetch(u, timeout=timeout)
+        if not ok1:
+            return False, msg1 or "web_fetch failed", data1 if isinstance(data1, dict) else {"result": {"url": u, "text": ""}}
+        return True, "", data1 if isinstance(data1, dict) else {"result": {"url": u, "text": ""}}
 
     return False, f"unsupported tool: {t}", {}
 
@@ -5463,6 +5928,14 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
     max_rounds = int(cfg.get("max_rounds") or 12)
     max_calls = int(cfg.get("max_tool_calls_per_round") or 3)
     max_hist = int(cfg.get("max_visible_history") or 80)
+
+    try:
+        agent_timeout_s = int(cfg.get("agent_timeout_s") or 0)
+    except Exception:
+        agent_timeout_s = 0
+    if agent_timeout_s <= 0:
+        agent_timeout_s = 300
+    agent_deadline = time.time() + max(30, min(1800, agent_timeout_s))
     repeat_conf = cfg.get("repeat_block") if isinstance(cfg.get("repeat_block"), dict) else {}
     rep_window = int(repeat_conf.get("window") or 3)
     rep_max_same = int(repeat_conf.get("max_same") or 2)
@@ -5607,7 +6080,23 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
     tool_sig_hist = []
     rep_escalations = 0
     for round_i in range(max(1, max_rounds)):
+        if _hivo_agent_is_cancelled(run_id):
+            final = "已取消执行。"
+            _hivo_ws_emit(run_id, session_id, "error", "用户取消")
+            _hivo_ws_emit_final(run_id, session_id, final, ok=False, extra={"rounds": round_i, "can_continue": True, "continue_reason": "cancelled"})
+            return False, final, run_id
+        if time.time() > agent_deadline:
+            final = "执行超时，已中止。"
+            _hivo_ws_emit(run_id, session_id, "error", "执行超时")
+            _hivo_ws_emit_final(run_id, session_id, final, ok=False, extra={"rounds": round_i, "can_continue": True, "continue_reason": "timeout"})
+            return False, final, run_id
+
         _hivo_ws_emit(run_id, session_id, "thinking", _hivo_status_message(cfg, "thinking", round_i=round_i + 1, max_rounds=max_rounds))
+        if _hivo_agent_is_cancelled(run_id):
+            final = "已取消执行。"
+            _hivo_ws_emit(run_id, session_id, "error", "用户取消")
+            _hivo_ws_emit_final(run_id, session_id, final, ok=False, extra={"rounds": round_i + 1, "can_continue": True, "continue_reason": "cancelled"})
+            return False, final, run_id
         ok, msg, result = ai_chat(msgs, temperature=None, profile_id=profile_id)
         if not ok:
             err = msg or "对话失败"
@@ -5662,10 +6151,71 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
                 _hivo_ws_emit_final(run_id, session_id, final, ok=False, extra={"rounds": round_i + 1, "can_continue": True, "continue_reason": "repeat"})
                 return False, final, run_id
 
-        _hivo_ws_emit(run_id, session_id, "executing", _hivo_status_message(cfg, "executing", tool_count=len(calls)))
+        try:
+            has_net = False
+            ws_enabled = None
+            for c in (calls or []):
+                nm0 = str((c or {}).get("type") or "").strip()
+                if nm0 in ("web_search", "web_fetch"):
+                    if ws_enabled is None:
+                        try:
+                            ws_enabled, _sc0 = _ai_load_web_search_cfg()
+                        except Exception:
+                            ws_enabled = False
+                    if ws_enabled:
+                        has_net = True
+                    break
+            if has_net:
+                _hivo_ws_emit(run_id, session_id, "executing", "联网中...")
+            else:
+                _hivo_ws_emit(run_id, session_id, "executing", _hivo_status_message(cfg, "executing", tool_count=len(calls)))
+        except Exception:
+            _hivo_ws_emit(run_id, session_id, "executing", _hivo_status_message(cfg, "executing", tool_count=len(calls)))
         receipts = []
-        for c in calls:
+        for i_tool, c in enumerate(calls or []):
+            if _hivo_agent_is_cancelled(run_id):
+                final = "已取消执行。"
+                _hivo_ws_emit(run_id, session_id, "error", "用户取消")
+                _hivo_ws_emit_final(run_id, session_id, final, ok=False, extra={"rounds": round_i + 1, "can_continue": True, "continue_reason": "cancelled"})
+                return False, final, run_id
+            if time.time() > agent_deadline:
+                final = "执行超时，已中止。"
+                _hivo_ws_emit(run_id, session_id, "error", "执行超时")
+                _hivo_ws_emit_final(run_id, session_id, final, ok=False, extra={"rounds": round_i + 1, "can_continue": True, "continue_reason": "timeout"})
+                return False, final, run_id
+
             name = str(c.get("type") or "")
+            try:
+                _hivo_ws_emit(
+                    run_id,
+                    session_id,
+                    "executing",
+                    _hivo_status_message(cfg, "executing", tool_count=len(calls)),
+                    extra={"tool": name, "tool_i": i_tool + 1, "tool_n": len(calls), "can_cancel": True},
+                )
+            except Exception:
+                pass
+
+            c2 = c
+            try:
+                remain_s = int(max(1, agent_deadline - time.time()))
+            except Exception:
+                remain_s = 1
+            try:
+                if isinstance(c, dict):
+                    c2 = dict(c)
+                    tt = str(c2.get("type") or "")
+                    if tt in ("run_cmd", "web_search", "web_fetch"):
+                        if "timeout" in c2:
+                            try:
+                                t0 = int(c2.get("timeout") or 0)
+                            except Exception:
+                                t0 = 0
+                            if t0 <= 0:
+                                t0 = 30
+                            c2["timeout"] = int(max(1, min(t0, remain_s)))
+            except Exception:
+                c2 = c
             cache_key = _hivo_tool_call_sig(c)
             cached = None
             try:
@@ -5685,7 +6235,7 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
                 except Exception:
                     pass
             else:
-                ok1, msg1, data1 = _hivo_exec_tool(c, undo_gid=undo_gid_eff)
+                ok1, msg1, data1 = _hivo_exec_tool(c2, undo_gid=undo_gid_eff, run_id=run_id, agent_deadline=agent_deadline)
                 try:
                     if tool_cache_enabled and cache_key and isinstance(tool_cache, OrderedDict):
                         tool_cache[cache_key] = {"ok": bool(ok1), "msg": str(msg1 or ""), "data": data1 if isinstance(data1, dict) else {}}
@@ -5737,6 +6287,13 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
                 elif nm in ("run_cmd",):
                     res1 = data1.get("result") if isinstance(data1.get("result"), dict) else {}
                     payload = str(res1.get("output") or data1.get("output") or "")
+                elif nm in ("web_search",):
+                    res1 = data1.get("result") if isinstance(data1.get("result"), dict) else {}
+                    if res1:
+                        payload = json.dumps(res1, ensure_ascii=False, indent=2)
+                elif nm in ("web_fetch",):
+                    res1 = data1.get("result") if isinstance(data1.get("result"), dict) else {}
+                    payload = str(res1.get("text") or "")
 
                 if payload:
                     if total_payload_chars >= max_total_payload_chars:
@@ -5766,7 +6323,7 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
     return False, final, run_id
 
 
-def _run_cmd_simple(cmd: str, timeout: int = 30, cwd: str = ""):
+def _run_cmd_simple(cmd: str, timeout: int = 30, cwd: str = "", run_id: str = "", agent_deadline: float = 0.0):
     if not REPO_PATH:
         return False, "未打开仓库", ""
     c = str(cmd or "").strip()
@@ -5774,30 +6331,85 @@ def _run_cmd_simple(cmd: str, timeout: int = 30, cwd: str = ""):
         return False, "缺少 cmd", ""
     if "\n" in c or "\r" in c:
         return False, "cmd 必须是单行命令", ""
+    rid = str(run_id or "").strip()
     try:
         workdir = REPO_PATH
         if cwd:
             safe = _safe_repo_abspath(cwd)
             if safe and os.path.isdir(safe):
                 workdir = safe
-        proc = subprocess.run(
+
+        to_s = int(timeout or 30)
+        to_s = max(1, min(3600, to_s))
+        if agent_deadline and agent_deadline > 0:
+            try:
+                remain = int(max(1, agent_deadline - time.time()))
+                to_s = max(1, min(to_s, remain))
+            except Exception:
+                pass
+
+        start_t = time.time()
+        p = subprocess.Popen(
             c,
             cwd=workdir,
             shell=True,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=int(timeout or 30),
             encoding="utf-8",
             errors="replace",
         )
-        out = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
-        if proc.returncode != 0:
-            return False, f"exit={proc.returncode}", out.strip()
-        return True, "", out.strip()
-    except subprocess.TimeoutExpired:
-        return False, "命令超时", ""
+        if rid:
+            try:
+                _hivo_agent_run_proc[rid] = p
+            except Exception:
+                pass
+
+        out_chunks = []
+        err_chunks = []
+        while True:
+            if rid and _hivo_agent_is_cancelled(rid):
+                try:
+                    p.terminate()
+                except Exception:
+                    pass
+                return False, "已取消", ""
+            if agent_deadline and agent_deadline > 0 and time.time() > agent_deadline:
+                try:
+                    p.terminate()
+                except Exception:
+                    pass
+                return False, "执行超时", ""
+            if (time.time() - start_t) > to_s:
+                try:
+                    p.terminate()
+                except Exception:
+                    pass
+                return False, "命令超时", ""
+
+            rc = p.poll()
+            if rc is not None:
+                try:
+                    o, e = p.communicate(timeout=1)
+                except Exception:
+                    o, e = "", ""
+                if o:
+                    out_chunks.append(o)
+                if e:
+                    err_chunks.append(e)
+                out = ("".join(out_chunks) + ("\n" + "".join(err_chunks) if err_chunks else "")).strip()
+                if rc != 0:
+                    return False, f"exit={rc}", out
+                return True, "", out
+            time.sleep(0.2)
     except Exception as e:
         return False, str(e), ""
+    finally:
+        try:
+            if rid:
+                _hivo_agent_clear_proc(rid)
+        except Exception:
+            pass
 
 
 _rl_lock = threading.Lock()
@@ -6690,7 +7302,12 @@ class Handler(BaseHTTPRequestHandler):
         elif p == "/api/ai_config":
             logger.debug("处理 /api/ai_config 请求")
             with ai_config_lock:
-                self.send_json({"config": load_ai_config()})
+                self.send_json({"config": load_hivo_ai_config()})
+
+        elif p == "/api/hivo_ai_config":
+            logger.debug("处理 /api/hivo_ai_config 请求")
+            cfg0 = _hivo_load_cfg()
+            self.send_json({"ok": True, "config": cfg0})
 
         elif p == "/api/workspace_context":
             logger.debug("处理 /api/workspace_context 请求")
@@ -7163,7 +7780,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json(payload, 500)
 
             elif p == "/api/run_cmd":
-                logger.warning("处理 /api/run_cmd 请求")
+                logger.info("处理 /api/run_cmd 请求")
                 if not self._require_repo():
                     return
                 cmd = (data.get("cmd") or "").strip()
@@ -7200,6 +7817,18 @@ class Handler(BaseHTTPRequestHandler):
                         return {}
 
                 pre_map = _status_map() if undo_gid else {}
+                pre_snaps = {}
+                if undo_gid:
+                    try:
+                        for rp in pre_map.keys():
+                            try:
+                                snap0 = _undo_capture_file_snapshot(rp)
+                            except Exception:
+                                snap0 = None
+                            if snap0 is not None:
+                                pre_snaps[str(rp)] = snap0
+                    except Exception:
+                        pre_snaps = {}
                 try:
                     timeout = int(data.get("timeout") or 30)
                 except Exception:
@@ -7236,18 +7865,21 @@ class Handler(BaseHTTPRequestHandler):
 
                     if undo_gid:
                         post_map = _status_map()
-                        for rp, post_xy in post_map.items():
+                        keys = set(pre_map.keys()) | set(post_map.keys())
+                        for rp in keys:
                             pre_xy = pre_map.get(rp)
-                            if pre_xy is None:
+                            post_xy = post_map.get(rp)
+                            if pre_xy is None and post_xy is not None:
                                 # New path in status after cmd: treat as created/first-time-changed; undo deletes it.
                                 _undo_record(undo_gid, {"type": "file_snapshot", "snapshot": {"path": rp, "exists": False, "content": ""}})
                                 continue
-                            # Only record if status code changed; do NOT snapshot pre-existing dirty file when unchanged.
-                            if str(pre_xy) != str(post_xy):
-                                try:
-                                    snap = _undo_capture_file_snapshot(rp)
-                                except Exception:
-                                    snap = None
+                            if pre_xy is not None and post_xy is None:
+                                snap = pre_snaps.get(rp)
+                                if snap is not None:
+                                    _undo_record(undo_gid, {"type": "file_snapshot", "snapshot": snap})
+                                continue
+                            if pre_xy is not None and post_xy is not None and str(pre_xy) != str(post_xy):
+                                snap = pre_snaps.get(rp)
                                 if snap is not None:
                                     _undo_record(undo_gid, {"type": "file_snapshot", "snapshot": snap})
                         # If nothing recorded, this cmd does not affect undo_steps/counter.
@@ -7372,22 +8004,71 @@ class Handler(BaseHTTPRequestHandler):
                 undo_gid = (self.headers.get("X-Undo-Group") or "").strip()
                 with ai_config_lock:
                     if undo_gid:
-                        prev_cfg = load_ai_config()
+                        prev_cfg = load_hivo_ai_config()
                         _undo_record(undo_gid, {"type": "ai_config", "prev": prev_cfg})
-                    ok, msg = save_ai_config(cfg)
+                    ok, msg = save_hivo_ai_config(cfg)
+                self.send_json({"ok": ok, "msg": msg})
+
+            elif p == "/api/hivo_ai_config":
+                logger.info("处理 /api/hivo_ai_config 请求")
+                cfg = data.get("config") if isinstance(data, dict) else None
+                if cfg is None and isinstance(data, dict):
+                    cfg = data
+                if not isinstance(cfg, dict):
+                    self.send_json({"ok": False, "msg": "config 必须是对象"}, 400)
+                    return
+                undo_gid = (self.headers.get("X-Undo-Group") or "").strip()
+                if undo_gid:
+                    prev_cfg = _hivo_load_cfg()
+                    _undo_record(undo_gid, {"type": "hivo_ai_config", "prev": prev_cfg})
+                ok, msg = _hivo_save_cfg(cfg)
+                self.send_json({"ok": ok, "msg": msg})
+
+            elif p == "/api/ai_feature":
+                logger.info("处理 /api/ai_feature 请求")
+                try:
+                    enabled_in = None
+                    if isinstance(data, dict):
+                        enabled_in = data.get("web_search_enabled")
+                    enabled = bool(enabled_in)
+                except Exception:
+                    enabled = False
+                undo_gid = (self.headers.get("X-Undo-Group") or "").strip()
+                with ai_config_lock:
+                    if undo_gid:
+                        prev_cfg = load_hivo_ai_config()
+                        _undo_record(undo_gid, {"type": "ai_config", "prev": prev_cfg})
+                    cur = _hivo_load_cfg()
+                    if not isinstance(cur, dict):
+                        cur = {}
+                    feat = cur.get("features") if isinstance(cur.get("features"), dict) else {}
+                    feat = dict(feat)
+                    feat["web_search_enabled"] = bool(enabled)
+                    cur["features"] = feat
+                    ok, msg = _hivo_save_cfg(cur)
                 self.send_json({"ok": ok, "msg": msg})
 
             elif p == "/api/undo":
                 logger.info("处理 /api/undo 请求")
                 req_gid = ""
+                req_sid = ""
                 try:
                     if isinstance(data, dict):
                         req_gid = str(data.get("group_id") or "").strip()
+                        req_sid = str(data.get("session_id") or "").strip()
                 except Exception:
                     req_gid = ""
-                gid, actions = _undo_pop_group_by_id(req_gid) if req_gid else _undo_pop_latest_group()
+                if req_gid:
+                    gid, actions = _undo_pop_group_by_id(req_gid)
+                elif req_sid:
+                    gid, actions = _undo_pop_latest_group_for_session(req_sid)
+                else:
+                    gid, actions = _undo_pop_latest_group()
                 if not actions:
-                    self.send_json({"ok": False, "msg": "无可撤销操作"}, 400)
+                    if gid:
+                        self.send_json({"ok": True, "group_id": gid, "msg": "无可撤销操作"})
+                    else:
+                        self.send_json({"ok": False, "msg": "无可撤销操作"}, 400)
                     return
                 ok, msg = _undo_apply_actions(actions)
                 if not ok:
@@ -7492,6 +8173,20 @@ class Handler(BaseHTTPRequestHandler):
                         cost_ms = -1
                     logger.info(f"/api/ai_chat 完成 (ok=0, profile_id={pid or ''}, session_id={sid or ''}, cost_ms={cost_ms}, msg={str(msg or '')[:200]})")
                     self.send_json({"ok": False, "msg": msg}, 400)
+
+            elif p == "/api/hivo_agent_cancel":
+                logger.info("处理 /api/hivo_agent_cancel 请求")
+                rid = ""
+                try:
+                    if isinstance(data, dict):
+                        rid = str(data.get("run_id") or "").strip()
+                except Exception:
+                    rid = ""
+                if not rid:
+                    self.send_json({"ok": False, "msg": "缺少 run_id"}, 400)
+                    return
+                okc = _hivo_agent_request_cancel(rid)
+                self.send_json({"ok": bool(okc), "msg": "已请求取消" if okc else "run_id 不存在"})
 
             elif p == "/api/ai_cache_clear":
                 logger.info("处理 /api/ai_cache_clear 请求")
@@ -7606,7 +8301,23 @@ class Handler(BaseHTTPRequestHandler):
                             st["tool_log"] = tl
                     except Exception:
                         pass
+
+                sid_s0 = str(sid or "").strip()
+                if sid_s0:
+                    try:
+                        with _hivo_agent_run_lock:
+                            active = str(_hivo_agent_session_active.get(sid_s0) or "").strip()
+                            if active and (active in _hivo_agent_run_state) and (not bool((_hivo_agent_run_state.get(active) or {}).get("done"))):
+                                self.send_json({"ok": False, "msg": "已有任务执行中，请先取消或等待完成", "run_id": active}, 409)
+                                return
+                    except Exception:
+                        pass
+
                 run_id = uuid.uuid4().hex
+                try:
+                    _hivo_agent_mark_started(run_id, sid_s0)
+                except Exception:
+                    pass
 
                 # ack immediately; stream progress via websocket
                 self.send_json({"ok": True, "run_id": run_id})
@@ -7616,7 +8327,7 @@ class Handler(BaseHTTPRequestHandler):
                         ok2, final2, _rid2 = hivo_agent_run(
                             run_id,
                             str(pid or "").strip(),
-                            str(sid or "").strip(),
+                            sid_s0,
                             str(user_text or ""),
                             history_messages=msgs0,
                             dyn_context=str(dyn_ctx or ""),
@@ -7639,7 +8350,12 @@ class Handler(BaseHTTPRequestHandler):
                                     content0 = str(m.get("content") or "")
                                     if not content0:
                                         continue
-                                    visible.append({"role": role, "content": content0})
+                                    item0 = {"role": role, "content": content0}
+                                    if role == "user":
+                                        ug0 = str(m.get("undo_gid") or "").strip()
+                                        if ug0:
+                                            item0["undo_gid"] = ug0
+                                    visible.append(item0)
                                 if final2:
                                     visible.append({"role": "assistant", "content": str(final2)})
                                 with ai_history_lock:
@@ -7648,8 +8364,13 @@ class Handler(BaseHTTPRequestHandler):
                             pass
                     except Exception as e:
                         try:
-                            _hivo_ws_emit(run_id, str(sid or "").strip(), "error", str(e))
-                            _hivo_ws_emit_final(run_id, str(sid or "").strip(), str(e), ok=False)
+                            _hivo_ws_emit(run_id, sid_s0, "error", str(e))
+                            _hivo_ws_emit_final(run_id, sid_s0, str(e), ok=False)
+                        except Exception:
+                            pass
+                    finally:
+                        try:
+                            _hivo_agent_mark_done(run_id)
                         except Exception:
                             pass
 

@@ -1683,6 +1683,13 @@ flex-shrink:0;cursor:pointer;
     .ai-form input{width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:8px;
       padding:8px 10px;color:var(--text);font-family:inherit;font-size:13px;outline:none;}
     .ai-form input:focus{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent);}
+    .ai-form select{width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:8px;
+      padding:8px 10px;color:var(--text);font-family:inherit;font-size:13px;outline:none;}
+    .ai-form select:focus{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent);}
+    .ai-seg{display:flex;align-items:center;gap:6px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);padding:3px;border-radius:999px;}
+    [data-theme="light"] .ai-seg{background:rgba(0,0,0,0.03);border:1px solid rgba(0,0,0,0.10);}
+    .ai-seg .seg{padding:2px 10px;border-radius:999px;cursor:pointer;font-size:12px;color:var(--text2);user-select:none;}
+    .ai-seg .seg.active{background:rgba(110,180,247,.16);border:1px solid rgba(110,180,247,.24);color:var(--text);}
     .ai-grid{display:flex;flex-direction:column;gap:12px;}
     @media (max-width: 980px){ .ai-grid{flex-direction:column;} }
     .ai-card{border-radius:12px;padding:12px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.08);
@@ -1696,16 +1703,6 @@ flex-shrink:0;cursor:pointer;
     .ai-item{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:12px;cursor:pointer;
       border:1px solid transparent;background:transparent;}
     .ai-item:hover{background:rgba(255,255,255,0.04);border-color:rgba(255,255,255,0.08);}
-    .ai-li{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:12px;cursor:pointer;
-      border:1px solid transparent;background:transparent;transition:background .14s,border-color .14s,transform .12s;}
-    .ai-li:hover{background:var(--bg4);border-color:rgba(255,255,255,0.08);transform:translateY(-1px);}
-    .ai-li.editing{background:rgba(110,168,254,0.12);border-color:rgba(110,168,254,0.28);box-shadow:none;transform:none;}
-    [data-theme="light"] .ai-li.editing{background:rgba(76,166,255,0.10);border-color:rgba(76,166,255,0.20);}
-    .ai-li.active{}
-    .ai-li .t{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-    .ai-li .tag{margin-left:auto;font-size:10px;color:var(--text3);padding:1px 6px;border-radius:999px;
-      border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.03);}
-    [data-theme="light"] .ai-li .tag{border:1px solid rgba(0,0,0,0.10);background:rgba(0,0,0,0.02);}
     [data-theme="light"] .ai-item:hover{background:rgba(0,0,0,0.03);border-color:rgba(0,0,0,0.08);}
     .ai-item.active{background:rgba(110,168,254,0.12);border-color:rgba(110,168,254,0.28);}
     [data-theme="light"] .ai-item.active{background:rgba(76,166,255,0.10);border-color:rgba(76,166,255,0.20);}
@@ -2428,7 +2425,10 @@ flex-shrink:0;cursor:pointer;
         <div id="aiConfigView" style="display:none;flex:1;min-height:0;flex-direction:column;">
           <div class="ai-config">
             <div class="ai-config-top">
-              <div class="t">模型配置</div>
+              <div class="ai-seg" style="margin-right:2px;">
+                <div id="aiCfgSegModel" class="seg active" onclick="showAiConfigPanel()">模型配置</div>
+                <div id="aiCfgSegSearch" class="seg" onclick="showAiSearchPanel()">搜索引擎</div>
+              </div>
               <div class="sp"></div>
               <button class="btn" title="返回" aria-label="返回" style="width:22px;height:22px;padding:0;display:inline-flex;align-items:center;justify-content:center" onclick="showAiChatPanel()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></button>
             </div>
@@ -2442,7 +2442,7 @@ flex-shrink:0;cursor:pointer;
                 <div id="aiProfileList" class="ai-list"></div>
               </div>
 
-              <div class="ai-card">
+              <div class="ai-card" id="aiProfileEditorCard" style="display:none">
                 <div class="ai-card-hd">
                   <div class="ai-card-title">编辑配置</div>
                   <div style="margin-left:auto"></div>
@@ -2470,6 +2470,75 @@ flex-shrink:0;cursor:pointer;
                     <button class="btn green" style="flex:1;justify-content:center" onclick="saveAiProfiles()">保存</button>
                   </div>
                   <div id="aiConfigMeta" style="font-size:11px;color:var(--text3);"></div>
+                </form>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 搜索引擎配置 -->
+        <div id="aiSearchView" style="display:none;flex:1;min-height:0;flex-direction:column;">
+          <div class="ai-config">
+            <div class="ai-config-top">
+              <div class="ai-seg" style="margin-right:2px;">
+                <div id="aiCfgSegModel2" class="seg" onclick="showAiConfigPanel()">模型配置</div>
+                <div id="aiCfgSegSearch2" class="seg active" onclick="showAiSearchPanel()">搜索引擎</div>
+              </div>
+              <div class="sp"></div>
+              <button class="btn" title="返回" aria-label="返回" style="width:22px;height:22px;padding:0;display:inline-flex;align-items:center;justify-content:center" onclick="showAiChatPanel()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></button>
+            </div>
+            <div class="ai-grid">
+              <div class="ai-card">
+                <div class="ai-card-hd">
+                  <div class="ai-card-title">搜索引擎</div>
+                  <div style="margin-left:auto"></div>
+                  <div style="display:flex;align-items:center;gap:8px;color:var(--text3);font-size:11px;">
+                    <div>联网搜索</div>
+                    <label class="autosave-switch" title="联网搜索" style="width:30px;height:16px;">
+                      <input id="aiSearchEnabled" type="checkbox" />
+                      <span class="autosave-slider"></span>
+                    </label>
+                  </div>
+                  <button class="btn" style="padding:2px 10px" onclick="addAiSearchProfile()">新增</button>
+                </div>
+                <div id="aiSearchProfileList" class="ai-list"></div>
+              </div>
+
+              <div class="ai-card" id="aiSearchEditorCard" style="display:none">
+                <div class="ai-card-hd">
+                  <div class="ai-card-title">编辑配置</div>
+                  <div style="margin-left:auto"></div>
+                  <button class="btn red" id="aiDeleteSearchProfileBtn" style="padding:2px 10px;display:none" onclick="deleteAiSearchProfile()">删除</button>
+                </div>
+                <form class="ai-form" onsubmit="return false;">
+                  <div>
+                    <label>Provider</label>
+                    <input id="aiSearchProvider" type="text" placeholder="searxng / serper / tavily" />
+                  </div>
+                  <div id="aiSearchProviderSuggest" class="ai-model-suggest"></div>
+                  <div>
+                    <label>Base URL</label>
+                    <input id="aiSearchBaseUrl" type="text" placeholder="https://searx.example.com" />
+                  </div>
+                  <div>
+                    <label>API Key</label>
+                    <input id="aiSearchApiKey" type="password" placeholder="sk-..." autocomplete="off" />
+                  </div>
+                  <div class="ai-row">
+                    <div style="flex:1;min-width:0;">
+                      <label>Top K</label>
+                      <input id="aiSearchTopK" type="number" min="1" max="10" placeholder="5" />
+                    </div>
+                    <div style="flex:1;min-width:0;">
+                      <label>Timeout (s)</label>
+                      <input id="aiSearchTimeout" type="number" min="3" max="60" placeholder="20" />
+                    </div>
+                  </div>
+                  <div class="ai-row">
+                    <button class="btn" style="flex:1;justify-content:center" onclick="setAiSearchProfileActive()">设为当前</button>
+                    <button class="btn green" style="flex:1;justify-content:center" onclick="saveAiSearchProfiles()">保存</button>
+                  </div>
+                  <div id="aiSearchMeta" style="font-size:11px;color:var(--text3);"></div>
                 </form>
               </div>
             </div>
@@ -2832,6 +2901,361 @@ flex-shrink:0;cursor:pointer;
     } catch (e) {}
   }
 
+  function __gmAiSetSearchMeta(text) {
+    try {
+      const el = document.getElementById('aiSearchMeta');
+      if (el) el.textContent = String(text || '');
+    } catch (e) {}
+  }
+
+  function showAiSearchPanel() {
+    try {
+      __gmAiPanel = 'search';
+      const c = document.getElementById('aiChatView');
+      const p = document.getElementById('aiConfigView');
+      const s = document.getElementById('aiSearchView');
+      if (c) c.style.display = 'none';
+      if (p) p.style.display = 'none';
+      if (s) s.style.display = 'flex';
+      try { __gmAiUpdateCfgSeg(); } catch (e1) {}
+      try { __gmAiBindSearchEnabledToggle(); } catch (eB0) {}
+      try {
+        const cfg = (__gmAiConfig && typeof __gmAiConfig === 'object') ? __gmAiConfig : null;
+        const ws = (cfg && cfg.web_search && typeof cfg.web_search === 'object') ? cfg.web_search : null;
+        if (!cfg || !ws) {
+          loadAiSearchProfiles().catch(()=>{});
+        } else {
+          __gmAiRenderSearchProfileList();
+          const sel = String(window.__gmAiEditingSearchProfileId || '').trim();
+          const profiles = Array.isArray(ws.profiles) ? ws.profiles : [];
+          const p0 = sel ? (profiles.find(x => x && String(x.id || '') === sel) || null) : null;
+          __gmAiFillSearchEditorByProfile(p0);
+        }
+      } catch (e0) {}
+    } catch (e) {}
+  }
+
+  function __gmAiUpdateCfgSeg() {
+    try {
+      const m = document.getElementById('aiCfgSegModel');
+      const s = document.getElementById('aiCfgSegSearch');
+      if (m) m.classList.toggle('active', __gmAiPanel === 'config');
+      if (s) s.classList.toggle('active', __gmAiPanel === 'search');
+      const m2 = document.getElementById('aiCfgSegModel2');
+      const s2 = document.getElementById('aiCfgSegSearch2');
+      if (m2) m2.classList.toggle('active', __gmAiPanel === 'config');
+      if (s2) s2.classList.toggle('active', __gmAiPanel === 'search');
+    } catch (e) {}
+  }
+
+  function __gmAiRenderSearchProfileList() {
+    try {
+      const box = document.getElementById('aiSearchProfileList');
+      if (!box) return;
+      const c = (__gmAiConfig && typeof __gmAiConfig === 'object') ? __gmAiConfig : {};
+      const ws = (c.web_search && typeof c.web_search === 'object') ? c.web_search : {};
+      const profiles = Array.isArray(ws.profiles) ? ws.profiles : [];
+      const act = String(ws.active_profile_id || '');
+      const selected = String(window.__gmAiEditingSearchProfileId || '');
+      const items = [];
+      profiles.forEach(p => {
+        const id = String(p && p.id || '');
+        const prov = String(p && p.provider || '');
+        const nm = prov ? prov : '未命名';
+        const cls = 'ai-item' + (id && id === selected ? ' active' : '');
+        items.push(`<div class="${cls}" onclick="editAiSearchProfile('${esc(id)}')"><div class="nm">${esc(nm)}</div><div class="tag">${id===act?'当前':''}</div></div>`);
+      });
+      box.innerHTML = items.join('') || '<div style="padding:12px;color:var(--text3);font-size:12px">暂无配置</div>';
+    } catch (e) {}
+  }
+
+  function __gmAiFillSearchEditorByProfile(p) {
+    try {
+      try {
+        const card = document.getElementById('aiSearchEditorCard');
+        if (card) card.style.display = (p && typeof p === 'object' && (p.id || window.__gmAiEditingSearchProfileId)) ? '' : 'none';
+      } catch (eC0) {}
+      const obj = (p && typeof p === 'object') ? p : {};
+      const elPv = document.getElementById('aiSearchProvider');
+      const elBu = document.getElementById('aiSearchBaseUrl');
+      const elAk = document.getElementById('aiSearchApiKey');
+      const elK  = document.getElementById('aiSearchTopK');
+      const elTo = document.getElementById('aiSearchTimeout');
+      if (elPv) elPv.value = String(obj.provider || '');
+      if (elBu) elBu.value = String(obj.base_url || '');
+      if (elAk) elAk.value = String(obj.api_key || '');
+      if (elK) elK.value = String(obj.top_k || '');
+      if (elTo) elTo.value = String(obj.timeout || '');
+      const delBtn = document.getElementById('aiDeleteSearchProfileBtn');
+      if (delBtn) delBtn.style.display = obj && obj.id ? '' : 'none';
+      try {
+        const pid = String(window.__gmAiEditingSearchProfileId || (p && p.id) || '').trim();
+        const m = window.__gmAiSearchProfileDrafts;
+        const d = (m && pid && typeof m === 'object') ? m[pid] : null;
+        if (d && typeof d === 'object') {
+          if (elPv && d.provider !== undefined) elPv.value = String(d.provider || '');
+          if (elBu && d.base_url !== undefined) elBu.value = String(d.base_url || '');
+          if (elAk && d.api_key !== undefined) elAk.value = String(d.api_key || '');
+          if (elK && d.top_k !== undefined) elK.value = String(d.top_k || '');
+          if (elTo && d.timeout !== undefined) elTo.value = String(d.timeout || '');
+        }
+      } catch (eD0) {}
+    } catch (e) {}
+  }
+
+  function __gmAiCaptureSearchProfileDraft() {
+    try {
+      const pid = String(window.__gmAiEditingSearchProfileId || '').trim();
+      if (!pid) return;
+      if (!window.__gmAiSearchProfileDrafts || typeof window.__gmAiSearchProfileDrafts !== 'object') window.__gmAiSearchProfileDrafts = {};
+      const elPv = document.getElementById('aiSearchProvider');
+      const elBu = document.getElementById('aiSearchBaseUrl');
+      const elAk = document.getElementById('aiSearchApiKey');
+      const elK  = document.getElementById('aiSearchTopK');
+      const elTo = document.getElementById('aiSearchTimeout');
+      window.__gmAiSearchProfileDrafts[pid] = {
+        provider: elPv ? String(elPv.value || '') : '',
+        base_url: elBu ? String(elBu.value || '') : '',
+        api_key: elAk ? String(elAk.value || '') : '',
+        top_k: elK ? String(elK.value || '') : '',
+        timeout: elTo ? String(elTo.value || '') : '',
+      };
+    } catch (e) {}
+  }
+
+  function __gmAiSyncEditingSearchProfileFromEditor() {
+    try {
+      const pid = String(window.__gmAiEditingSearchProfileId || '');
+      if (!pid) return;
+      const c = (__gmAiConfig && typeof __gmAiConfig === 'object') ? __gmAiConfig : null;
+      if (!c) return;
+      if (!c.web_search || typeof c.web_search !== 'object') c.web_search = { active_profile_id: '', profiles: [] };
+      const ws = c.web_search;
+      if (!Array.isArray(ws.profiles)) ws.profiles = [];
+      const idx = ws.profiles.findIndex(x => x && String(x.id||'') === pid);
+      if (idx < 0) return;
+      const p = ws.profiles[idx];
+      p.provider = String((document.getElementById('aiSearchProvider') && document.getElementById('aiSearchProvider').value) || '').trim();
+      p.base_url = String((document.getElementById('aiSearchBaseUrl') && document.getElementById('aiSearchBaseUrl').value) || '').trim();
+      p.api_key = String((document.getElementById('aiSearchApiKey') && document.getElementById('aiSearchApiKey').value) || '').trim();
+      const topK = Number((document.getElementById('aiSearchTopK') && document.getElementById('aiSearchTopK').value) || 5);
+      const timeout = Number((document.getElementById('aiSearchTimeout') && document.getElementById('aiSearchTimeout').value) || 20);
+      p.top_k = (isFinite(topK) ? Math.max(1, Math.min(10, Math.floor(topK))) : 5);
+      p.timeout = (isFinite(timeout) ? Math.max(3, Math.min(60, Math.floor(timeout))) : 20);
+    } catch (e) {}
+  }
+
+  async function loadAiSearchProfiles() {
+    try {
+      const res = await GET('/api/ai_config');
+      if (!(res && res.config && typeof res.config === 'object')) {
+        __gmAiSetSearchMeta(String((res && (res.msg || res.error)) || '加载失败'));
+        return;
+      }
+      __gmAiConfig = res.config;
+      const c = (__gmAiConfig && typeof __gmAiConfig === 'object') ? __gmAiConfig : {};
+      if (!c.features || typeof c.features !== 'object') c.features = {};
+      if (!c.web_search || typeof c.web_search !== 'object') c.web_search = { active_profile_id: '', profiles: [] };
+      const ws = c.web_search;
+      if (!Array.isArray(ws.profiles)) ws.profiles = [];
+      if (!ws.active_profile_id) ws.active_profile_id = String((ws.profiles[0] && ws.profiles[0].id) || '');
+      try {
+        const elEn = document.getElementById('aiSearchEnabled');
+        if (elEn) {
+          elEn.checked = Boolean(c.features.web_search_enabled);
+          try {
+            const v0 = localStorage.getItem('gm_ai_web_search_enabled');
+            if (v0 === '0' || v0 === '1') {
+              const want = (v0 === '1');
+              if (elEn.checked !== want) {
+                elEn.checked = want;
+                try {
+                  if (__gmAiConfig && typeof __gmAiConfig === 'object') {
+                    if (!__gmAiConfig.features || typeof __gmAiConfig.features !== 'object') __gmAiConfig.features = {};
+                    __gmAiConfig.features.web_search_enabled = want;
+                  }
+                } catch (eL0) {}
+                try { saveAiSearchProfiles().catch(()=>{}); } catch (eL1) {}
+              }
+            }
+          } catch (eLS0) {}
+        }
+      } catch (eE0) {}
+
+      try { __gmAiBindSearchEnabledToggle(); } catch (eE1) {}
+      try {
+        const profiles = Array.isArray(ws.profiles) ? ws.profiles : [];
+        const keep = String(window.__gmAiEditingSearchProfileId || '').trim();
+        const nextSel = (keep && profiles.find(x => x && String(x.id || '') === keep)) ? keep : '';
+        window.__gmAiEditingSearchProfileId = nextSel;
+        __gmAiRenderSearchProfileList();
+        const p0 = nextSel ? (profiles.find(x => x && String(x.id || '') === nextSel) || null) : null;
+        __gmAiFillSearchEditorByProfile(p0);
+      } catch (eS2) {
+        window.__gmAiEditingSearchProfileId = '';
+        __gmAiRenderSearchProfileList();
+        __gmAiFillSearchEditorByProfile(null);
+      }
+      try {
+        if (!window.__gmAiSuggestProvider) {
+          const st = __gmAiSuggestEnsureState('provider', 'aiSearchProviderSuggest', 'aiSearchProvider');
+          if (st) {
+            st.getItems = () => {
+              try {
+                const el = document.getElementById('aiSearchProvider');
+                const q = String((el && el.value) || '').trim().toLowerCase();
+                const arr = ['searxng', 'serper', 'tavily'];
+                const out = [];
+                for (let i = 0; i < arr.length; i++) {
+                  const s = String(arr[i] || '').trim();
+                  if (!s) continue;
+                  if (!q || s.toLowerCase().includes(q)) out.push(s);
+                }
+                return out;
+              } catch (e) {
+                return [];
+              }
+            };
+            st.onPick = (pick) => {
+              try {
+                const el = document.getElementById('aiSearchProvider');
+                if (el) el.value = String(pick || '');
+              } catch (e) {}
+            };
+            st.onAfterPick = () => {
+              try { __gmAiSyncEditingSearchProfileFromEditor(); } catch (e1) {}
+              try { __gmAiCaptureSearchProfileDraft(); } catch (e0) {}
+              try { __gmAiRenderSearchProfileList(); } catch (e2) {}
+            };
+            window.__gmAiSuggestProvider = st;
+          }
+        }
+        __gmAiSuggestBind(window.__gmAiSuggestProvider);
+      } catch (eB0) {}
+
+      try {
+        const elPv = document.getElementById('aiSearchProvider');
+        const elBu = document.getElementById('aiSearchBaseUrl');
+        const elAk = document.getElementById('aiSearchApiKey');
+        const elK  = document.getElementById('aiSearchTopK');
+        const elTo = document.getElementById('aiSearchTimeout');
+        const bind = (el) => {
+          if (!el || el.__gmAiDraftBound) return;
+          el.__gmAiDraftBound = true;
+          el.addEventListener('input', () => { try { __gmAiCaptureSearchProfileDraft(); } catch (e) {} });
+          el.addEventListener('change', () => { try { __gmAiCaptureSearchProfileDraft(); } catch (e) {} });
+        };
+        bind(elPv);
+        bind(elBu);
+        bind(elAk);
+        bind(elK);
+        bind(elTo);
+      } catch (eD0) {}
+      __gmAiSetSearchMeta('已加载本地配置');
+    } catch (e) {
+      __gmAiSetSearchMeta('加载失败');
+    }
+  }
+
+  function editAiSearchProfile(id) {
+    try {
+      try { __gmAiCaptureSearchProfileDraft(); } catch (e0) {}
+      const c = (__gmAiConfig && typeof __gmAiConfig === 'object') ? __gmAiConfig : {};
+      const ws = (c.web_search && typeof c.web_search === 'object') ? c.web_search : {};
+      const profiles = Array.isArray(ws.profiles) ? ws.profiles : [];
+      const pid = String(id || '');
+      if (!pid) return;
+      window.__gmAiEditingSearchProfileId = pid;
+      const p = profiles.find(x => x && String(x.id||'') === pid) || null;
+      __gmAiFillSearchEditorByProfile(p);
+      __gmAiRenderSearchProfileList();
+    } catch (e) {}
+  }
+
+  function addAiSearchProfile() {
+    try {
+      if (!__gmAiConfig || typeof __gmAiConfig !== 'object') __gmAiConfig = {};
+      if (!__gmAiConfig.web_search || typeof __gmAiConfig.web_search !== 'object') __gmAiConfig.web_search = { active_profile_id: '', profiles: [] };
+      const ws = __gmAiConfig.web_search;
+      if (!Array.isArray(ws.profiles)) ws.profiles = [];
+      const id = (Date.now().toString(16) + Math.random().toString(16).slice(2));
+      ws.profiles.unshift({ id, provider: '', api_key: '', base_url: '', timeout: 20, top_k: 5 });
+      if (!ws.active_profile_id) ws.active_profile_id = id;
+      window.__gmAiEditingSearchProfileId = id;
+      __gmAiRenderSearchProfileList();
+      __gmAiFillSearchEditorByProfile(ws.profiles[0]);
+    } catch (e) {}
+  }
+
+  function deleteAiSearchProfile() {
+    try {
+      const pid = String(window.__gmAiEditingSearchProfileId || '');
+      if (!pid) return;
+      try {
+        const pid0 = String(window.__gmAiEditingSearchProfileId || '').trim();
+        if (pid0 && window.__gmAiSearchProfileDrafts && typeof window.__gmAiSearchProfileDrafts === 'object') {
+          delete window.__gmAiSearchProfileDrafts[pid0];
+        }
+      } catch (eD0) {}
+      const c = (__gmAiConfig && typeof __gmAiConfig === 'object') ? __gmAiConfig : {};
+      const ws = (c.web_search && typeof c.web_search === 'object') ? c.web_search : {};
+      if (!Array.isArray(ws.profiles)) ws.profiles = [];
+      ws.profiles = ws.profiles.filter(x => String(x && x.id || '') !== pid);
+      if (ws.active_profile_id === pid) ws.active_profile_id = ws.profiles[0] ? String(ws.profiles[0].id || '') : '';
+      window.__gmAiEditingSearchProfileId = ws.active_profile_id;
+      __gmAiRenderSearchProfileList();
+      const p0 = ws.profiles[0] || null;
+      __gmAiFillSearchEditorByProfile(p0);
+    } catch (e) {}
+  }
+
+  async function saveAiSearchProfiles() {
+    try {
+      __gmAiSyncEditingSearchProfileFromEditor();
+      const cur = (__gmAiConfig && typeof __gmAiConfig === 'object') ? JSON.parse(JSON.stringify(__gmAiConfig)) : {};
+      if (!cur.features || typeof cur.features !== 'object') cur.features = {};
+      if (!cur.web_search || typeof cur.web_search !== 'object') cur.web_search = { active_profile_id: '', profiles: [] };
+      const ws = cur.web_search;
+      if (!Array.isArray(ws.profiles)) ws.profiles = [];
+      cur.features.web_search_enabled = !!(document.getElementById('aiSearchEnabled') && document.getElementById('aiSearchEnabled').checked);
+      const res = await POST('/api/ai_config', { config: cur });
+      if (res && res.ok) {
+        try {
+          localStorage.setItem('gm_ai_web_search_enabled', (cur.features && cur.features.web_search_enabled) ? '1' : '0');
+        } catch (eLS0) {}
+        try {
+          const pid0 = String(window.__gmAiEditingSearchProfileId || '').trim();
+          if (pid0 && window.__gmAiSearchProfileDrafts && typeof window.__gmAiSearchProfileDrafts === 'object') {
+            delete window.__gmAiSearchProfileDrafts[pid0];
+          }
+        } catch (eD0) {}
+        __gmAiConfig = cur;
+        __gmAiSetSearchMeta('已保存到本地配置文件');
+        toast('✓ 搜索配置已保存', 'ok');
+        __gmAiRenderSearchProfileList();
+        return;
+      }
+      __gmAiSetSearchMeta(String((res && (res.msg || res.error)) || '保存失败'));
+      toast('保存失败', 'err');
+    } catch (e) {
+      __gmAiSetSearchMeta('保存失败');
+      toast('保存失败', 'err');
+    }
+  }
+
+  function setAiSearchProfileActive() {
+    try {
+      __gmAiSyncEditingSearchProfileFromEditor();
+      const c = (__gmAiConfig && typeof __gmAiConfig === 'object') ? __gmAiConfig : {};
+      if (!c.web_search || typeof c.web_search !== 'object') c.web_search = { active_profile_id: '', profiles: [] };
+      const ws = c.web_search;
+      const pid = String(window.__gmAiEditingSearchProfileId || '');
+      if (!pid) return;
+      ws.active_profile_id = pid;
+      __gmAiRenderSearchProfileList();
+    } catch (e) {}
+  }
+
   function sendAiChat() {
     try {
       if (__gmAiIsResponding) {
@@ -2915,8 +3339,29 @@ flex-shrink:0;cursor:pointer;
       }),
     });
 
-    if (!res || !res.ok || !res.run_id) {
+    if (!res || !res.run_id) {
       const msg = (res && (res.msg || res.error)) ? String(res.msg || res.error) : '对话失败';
+      pending.pending = false;
+      pending.stage = 'error';
+      pending.content = msg;
+      __gmAiRenderChat();
+      __gmAiIsResponding = false;
+      try { __gmAiSetSendButtonState(false); } catch (eB2) {}
+      __gmAiActiveTurnUndoGroupId = '';
+      __gmToastApiError('对话失败', res, msg);
+      return;
+    }
+    if (res.ok === false) {
+      // If backend reports an active run (409), bind to that run_id so websocket can keep updating.
+      const msg = (res && (res.msg || res.error)) ? String(res.msg || res.error) : '对话失败';
+      pending.run_id = String(res.run_id || '');
+      if (pending.run_id) {
+        window.__gmAiActiveRunId = pending.run_id;
+        pending.content = msg;
+        pending.stage = 'executing';
+        __gmAiRenderChat();
+        return;
+      }
       pending.pending = false;
       pending.stage = 'error';
       pending.content = msg;
@@ -2930,6 +3375,7 @@ flex-shrink:0;cursor:pointer;
 
     // tag pending bubble with run_id so websocket can update it
     pending.run_id = String(res.run_id || '');
+    window.__gmAiActiveRunId = String(res.run_id || '');
     pending.content = '思考中...';
     pending.stage = 'thinking';
     __gmAiRenderChat();
@@ -8745,6 +9191,13 @@ flex-shrink:0;cursor:pointer;
         try {
           const runId = String(data.run_id || '');
           if (!runId) break;
+          try {
+            const activeRid = String(window.__gmAiActiveRunId || '').trim();
+            if (activeRid && activeRid !== runId) {
+              // Ignore stale final events from older runs so UI state (e.g. Continue) won't be re-enabled unexpectedly.
+              break;
+            }
+          } catch (eAR0) {}
           for (let i = __gmAiChatMessages.length - 1; i >= 0; i--) {
             const m = __gmAiChatMessages[i];
             if (m && m.role === 'assistant' && m.pending && String(m.run_id || '') === runId) {
@@ -8755,6 +9208,7 @@ flex-shrink:0;cursor:pointer;
               try { __gmAiRefreshSendCounter(); } catch (eC3) {}
               __gmAiIsResponding = false;
               try { __gmAiSetSendButtonState(false); } catch (eB3) {}
+              try { if (String(window.__gmAiActiveRunId || '') === runId) window.__gmAiActiveRunId = ''; } catch (eAR1) {}
               __gmAiActiveTurnUndoGroupId = '';
               try { __gmAiSaveHistoryNow(); } catch (eH2) {}
               try {
@@ -8970,11 +9424,9 @@ flex-shrink:0;cursor:pointer;
   let __gmAiModels = [];
   let __gmAiModelsMeta = { base_url: '', api_key: '' };
   let __gmAiModelRefreshTimer = 0;
-  let __gmAiModelSuggestVisible = false;
-  let __gmAiModelSuggestIndex = -1;
-  let __gmAiModelSuggestCloseTimer = 0;
   let __gmAiIsResponding = false;
   let __gmAiLastUndoSteps = 0;
+  let __gmAiUndoStatsReqSeq = 0;
   let __gmAiContinueState = { on: false, reason: '' };
   let __gmAiNextSendIsContinue = false;
   let __gmAiDraftPersistTimer = 0;
@@ -9123,18 +9575,25 @@ flex-shrink:0;cursor:pointer;
       if (!__gmAiIsResponding) return;
       __gmAiIsResponding = false;
       try { __gmAiSetSendButtonState(false); } catch (e0) {}
+
+      try {
+        const rid = String(window.__gmAiActiveRunId || '').trim();
+        if (rid) {
+          POST('/api/hivo_agent_cancel', { run_id: rid }).catch(()=>{});
+        }
+      } catch (eC0) {}
       try {
         const msgs = Array.isArray(__gmAiChatMessages) ? __gmAiChatMessages : [];
         const last = msgs.length ? msgs[msgs.length - 1] : null;
         if (last && String(last.role || '') === 'assistant' && last.pending) {
           last.pending = false;
           last.stage = 'error';
-          last.content = '已中断（后台任务仍可能继续执行；可等待完成或重新发起）';
+          last.content = '已请求取消（后台将尽快中止）。';
           __gmAiRenderChat();
         }
       } catch (e1) {}
       try { __gmAiSetContinueState(true, 'aborted'); } catch (eC0) {}
-      try { toast('已中断（仅停止前端等待）', 'ok'); } catch (e2) {}
+      try { toast('已请求取消', 'ok'); } catch (e2) {}
     } catch (e) {}
   }
 
@@ -9407,23 +9866,25 @@ flex-shrink:0;cursor:pointer;
       if (!el) return;
       const steps0 = Number(__gmAiLastUndoSteps) || 0;
       const turns0 = __gmAiCountTurnsFromMessages();
-      const turnsShown0 = Math.max(turns0, steps0);
-      el.textContent = `${steps0}/${turnsShown0}`;
+      el.textContent = `${steps0}/${turns0}`;
       el.title = 'UndoSteps/Turns';
       el.style.display = 'inline-flex';
 
       try {
         const sid = String(__gmAiActiveSessionId || '').trim();
         const url = '/api/undo_stats' + (sid ? ('?session_id=' + encodeURIComponent(sid)) : '');
+        const seq = (++__gmAiUndoStatsReqSeq);
+        const sid0 = sid;
         GET(url).then((res) => {
           try {
+            if (seq !== __gmAiUndoStatsReqSeq) return;
+            if (sid0 !== String(__gmAiActiveSessionId || '').trim()) return;
             const steps = Number(res && (res.session_undo_steps !== undefined ? res.session_undo_steps : 0)) || 0;
             __gmAiLastUndoSteps = steps;
             const el2 = document.getElementById('aiSendCounter');
             if (!el2) return;
             const turns2 = __gmAiCountTurnsFromMessages();
-            const turnsShown2 = Math.max(turns2, steps);
-            el2.textContent = `${steps}/${turnsShown2}`;
+            el2.textContent = `${steps}/${turns2}`;
           } catch (e3) {}
         }).catch(()=>{});
       } catch (e1) {}
@@ -9450,6 +9911,11 @@ flex-shrink:0;cursor:pointer;
           __gmAiStopResponding();
         }
       } catch (eS0) {}
+
+      try {
+        window.__gmAiActiveRunId = '';
+        __gmAiNextSendIsContinue = false;
+      } catch (eS1) {}
 
       if (!Array.isArray(__gmAiChatMessages) || !__gmAiChatMessages.length) return;
       const msgs = __gmAiChatMessages;
@@ -9479,14 +9945,28 @@ flex-shrink:0;cursor:pointer;
           if (!undoOk && !undoNoop) {
             toast('撤销失败：' + (m || '撤销失败'), 'err');
           }
+        } else {
+          const sid = String(__gmAiActiveSessionId || '').trim();
+          if (sid) {
+            const u = await POST('/api/undo', { session_id: sid });
+            const m = String((u && (u.msg || u.error)) || '');
+            undoOk = Boolean(u && u.ok);
+            undoNoop = (!undoOk) && (m.indexOf('无可撤销') >= 0);
+            if (!undoOk && !undoNoop) {
+              toast('撤销失败：' + (m || '撤销失败'), 'err');
+            }
+          }
         }
       } catch (eU) {}
 
       // Even if there is no data undo available, still allow reverting the chat turn.
       if (!undoGidForTurn) {
-        undoOk = true;
+        const sid = String(__gmAiActiveSessionId || '').trim();
+        if (!sid) undoOk = true;
       }
       if (undoOk || undoNoop) {
+        try { __gmAiSetContinueState(false, ''); } catch (eC0) {}
+        try { __gmAiClearPersistedContinueState(); } catch (eC1) {}
         try {
           const next = msgs[lastUser + 1] || null;
           if (next && String(next.role || '') === 'assistant' && next.pending) {
@@ -10159,6 +10639,13 @@ flex-shrink:0;cursor:pointer;
       const sessions = Array.isArray(__gmAiSessions) ? __gmAiSessions : [];
       const active = String(__gmAiActiveSessionId || '');
       const chips = [];
+
+      if (!sessions.length) {
+        chips.push(`<div class="ai-session-chip active" data-sid="" draggable="true" onclick="onAiHistoryChipClick('')">
+          <span class="t">会话</span>
+          <span class="x" onclick="onAiHistoryChipDelete(event,'')">×</span>
+        </div>`);
+      }
       
       sessions.forEach((s, idx) => {
         const sid = String(s.id || '');
@@ -10404,19 +10891,23 @@ flex-shrink:0;cursor:pointer;
       if (!el) return;
       const profiles = Array.isArray(__gmAiConfig.profiles) ? __gmAiConfig.profiles : [];
       const active = String(__gmAiConfig.active_profile_id || '');
-      const editing = String(__gmAiEditingProfileId || '');
+      const selected = String(__gmAiEditingProfileId || '');
       el.innerHTML = profiles.map(p => {
-        const id = String(p.id || '');
-        const nm = __gmAiPrettyModelName(String(p.model || '')) || '未命名';
-        const cls = 'ai-li' + (id === active ? ' active' : '') + (id === editing ? ' editing' : '');
-        const tag = (id === active) ? '<div class="tag">当前</div>' : '';
-        return `<div class="${cls}" onclick="editAiProfile('${esc(id)}')"><div class="t">${esc(nm)}</div>${tag}</div>`;
-      }).join('');
+        const id = String(p && p.id || '');
+        const nm = __gmAiPrettyModelName(String((p && p.model) || '')) || '未命名';
+        const cls = 'ai-item' + (id && id === selected ? ' active' : '');
+        const tag = (id === active) ? '<div class="tag">当前</div>' : '<div class="tag"></div>';
+        return `<div class="${cls}" onclick="editAiProfile('${esc(id)}')"><div class="nm">${esc(nm)}</div>${tag}</div>`;
+      }).join('') || '<div style="padding:12px;color:var(--text3);font-size:12px">暂无配置</div>';
     } catch (e) {}
   }
 
   function __gmAiFillEditor(p) {
     try {
+      try {
+        const card = document.getElementById('aiProfileEditorCard');
+        if (card) card.style.display = (p && typeof p === 'object' && (p.id || __gmAiEditingProfileId)) ? '' : 'none';
+      } catch (eC0) {}
       const base = document.getElementById('aiProfBaseUrl');
       const key = document.getElementById('aiApiKey');
       const model = document.getElementById('aiModel');
@@ -10425,7 +10916,33 @@ flex-shrink:0;cursor:pointer;
       if (key) key.value = String((p && p.api_key) || '');
       if (model) model.value = String((p && p.model) || '');
       if (del) del.style.display = (__gmAiEditingProfileId ? 'inline-flex' : 'none');
+      try {
+        const pid = String(__gmAiEditingProfileId || (p && p.id) || '').trim();
+        const m = window.__gmAiProfileDrafts;
+        const d = (m && pid && typeof m === 'object') ? m[pid] : null;
+        if (d && typeof d === 'object') {
+          if (base && d.base_url !== undefined) base.value = String(d.base_url || '');
+          if (key && d.api_key !== undefined) key.value = String(d.api_key || '');
+          if (model && d.model !== undefined) model.value = String(d.model || '');
+        }
+      } catch (eD0) {}
       try { __gmAiScheduleRefreshModels(); } catch (e3) {}
+    } catch (e) {}
+  }
+
+  function __gmAiCaptureProfileDraft() {
+    try {
+      const pid = String(__gmAiEditingProfileId || '').trim();
+      if (!pid) return;
+      if (!window.__gmAiProfileDrafts || typeof window.__gmAiProfileDrafts !== 'object') window.__gmAiProfileDrafts = {};
+      const base = document.getElementById('aiProfBaseUrl');
+      const key = document.getElementById('aiApiKey');
+      const model = document.getElementById('aiModel');
+      window.__gmAiProfileDrafts[pid] = {
+        base_url: base ? String(base.value || '') : '',
+        api_key: key ? String(key.value || '') : '',
+        model: model ? String(model.value || '') : '',
+      };
     } catch (e) {}
   }
 
@@ -10441,63 +10958,79 @@ flex-shrink:0;cursor:pointer;
     }
   }
 
-  function __gmAiModelSuggestHide() {
+  function __gmAiSuggestEnsureState(id, boxId, inputId) {
     try {
-      const el = document.getElementById('aiModelSuggest');
+      if (!window.__gmAiSuggestStates) window.__gmAiSuggestStates = {};
+      const m = window.__gmAiSuggestStates;
+      if (m[id]) return m[id];
+      m[id] = {
+        id,
+        boxId,
+        inputId,
+        visible: false,
+        index: -1,
+        closeTimer: 0,
+        boundInput: false,
+        boundGlobals: false,
+        getItems: null,
+        onPick: null,
+        onAfterPick: null,
+      };
+      return m[id];
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function __gmAiSuggestHide(st) {
+    try {
+      if (!st) return;
+      const el = document.getElementById(st.boxId);
       if (!el) return;
       el.style.display = 'none';
       el.innerHTML = '';
-      __gmAiModelSuggestVisible = false;
-      __gmAiModelSuggestIndex = -1;
+      st.visible = false;
+      st.index = -1;
     } catch (e) {}
   }
 
-  function __gmAiModelSuggestGetFilteredItems() {
+  function __gmAiSuggestGetFilteredItems(st) {
     try {
-      const modelEl = document.getElementById('aiModel');
-      const q = String((modelEl && modelEl.value) || '').trim().toLowerCase();
-      const items = Array.isArray(__gmAiModels) ? __gmAiModels : [];
-      if (!items.length) return [];
-      if (!q) return items.slice(0, 80);
-      const out = [];
-      for (let i = 0; i < items.length; i++) {
-        const v = String(items[i] || '').trim();
-        if (!v) continue;
-        if (v.toLowerCase().includes(q)) out.push(v);
-        if (out.length >= 80) break;
-      }
-      return out;
+      if (!st || typeof st.getItems !== 'function') return [];
+      return st.getItems() || [];
     } catch (e) {
       return [];
     }
   }
 
-  function __gmAiModelSuggestReposition() {
+  function __gmAiSuggestReposition(st) {
     try {
-      if (!__gmAiModelSuggestVisible) return;
-      const el = document.getElementById('aiModelSuggest');
-      const modelEl = document.getElementById('aiModel');
-      if (!el || !modelEl) return;
-      const r = modelEl.getBoundingClientRect();
+      if (!st || !st.visible) return;
+      const el = document.getElementById(st.boxId);
+      const inp = document.getElementById(st.inputId);
+      if (!el || !inp) return;
+      const r = inp.getBoundingClientRect();
       el.style.left = Math.round(r.left) + 'px';
       el.style.top = Math.round(r.bottom + 6) + 'px';
       el.style.width = Math.round(r.width) + 'px';
     } catch (e) {}
   }
 
-  function __gmAiModelSuggestRender(forceOpen=false) {
+  function __gmAiSuggestRender(st, forceOpen=false) {
     try {
-      const el = document.getElementById('aiModelSuggest');
-      const modelEl = document.getElementById('aiModel');
-      if (!el || !modelEl) return;
-      const items = __gmAiModelSuggestGetFilteredItems();
+      if (!st) return;
+      const el = document.getElementById(st.boxId);
+      const inp = document.getElementById(st.inputId);
+      if (!el || !inp) return;
+
+      const items = __gmAiSuggestGetFilteredItems(st);
       if (!items.length) {
-        __gmAiModelSuggestHide();
+        __gmAiSuggestHide(st);
         return;
       }
-      let idx = Number(__gmAiModelSuggestIndex || 0);
+      let idx = Number(st.index || 0);
       if (!(idx >= 0 && idx < items.length)) idx = 0;
-      __gmAiModelSuggestIndex = idx;
+      st.index = idx;
 
       const rows = [];
       for (let i = 0; i < items.length; i++) {
@@ -10517,26 +11050,105 @@ flex-shrink:0;cursor:pointer;
           const it = t && t.closest ? t.closest('.it') : null;
           if (!it) return;
           const i = Number(it.getAttribute('data-idx') || -1);
-          const arr = __gmAiModelSuggestGetFilteredItems();
+          const arr = __gmAiSuggestGetFilteredItems(st);
           const pick = (i >= 0 && i < arr.length) ? String(arr[i] || '').trim() : '';
           if (!pick) return;
-          modelEl.value = pick;
-          __gmAiModelSuggestHide();
-          try { __gmAiSyncEditingProfileFromEditor(); } catch (e1) {}
+          if (typeof st.onPick === 'function') st.onPick(pick);
+          __gmAiSuggestHide(st);
+          if (typeof st.onAfterPick === 'function') st.onAfterPick(pick);
         } catch (e2) {}
       };
 
-      if (forceOpen || !__gmAiModelSuggestVisible) {
+      if (forceOpen || !st.visible) {
         el.style.display = 'block';
-        __gmAiModelSuggestVisible = true;
+        st.visible = true;
       }
-      __gmAiModelSuggestReposition();
+      __gmAiSuggestReposition(st);
     } catch (e) {}
   }
 
+  function __gmAiSuggestBind(st) {
+    try {
+      if (!st) return;
+      const inp = document.getElementById(st.inputId);
+      if (!inp) return;
+      if (!st.boundInput) {
+        st.boundInput = true;
+        inp.addEventListener('focus', () => { try { __gmAiSuggestRender(st, true); } catch (e) {} });
+        inp.addEventListener('click', () => { try { __gmAiSuggestRender(st, true); } catch (e) {} });
+        inp.addEventListener('input', () => { try { __gmAiSuggestRender(st, true); } catch (e) {} });
+        inp.addEventListener('keydown', (e) => {
+          try {
+            if (!st.visible) return;
+            const arr = __gmAiSuggestGetFilteredItems(st);
+            if (!arr.length) { __gmAiSuggestHide(st); return; }
+            if (e.key === 'ArrowDown') {
+              e.preventDefault();
+              st.index = Math.min(arr.length - 1, (st.index || 0) + 1);
+              __gmAiSuggestRender(st, false);
+              return;
+            }
+            if (e.key === 'ArrowUp') {
+              e.preventDefault();
+              st.index = Math.max(0, (st.index || 0) - 1);
+              __gmAiSuggestRender(st, false);
+              return;
+            }
+            if (e.key === 'Enter') {
+              const i = Number(st.index || 0);
+              const pick = (i >= 0 && i < arr.length) ? String(arr[i] || '').trim() : '';
+              if (pick) {
+                e.preventDefault();
+                if (typeof st.onPick === 'function') st.onPick(pick);
+                __gmAiSuggestHide(st);
+                if (typeof st.onAfterPick === 'function') st.onAfterPick(pick);
+              }
+              return;
+            }
+            if (e.key === 'Escape') {
+              e.preventDefault();
+              __gmAiSuggestHide(st);
+              return;
+            }
+          } catch (e2) {}
+        });
+        inp.addEventListener('blur', () => {
+          try {
+            if (st.closeTimer) clearTimeout(st.closeTimer);
+            st.closeTimer = setTimeout(() => {
+              st.closeTimer = 0;
+              __gmAiSuggestHide(st);
+            }, 120);
+          } catch (e) {}
+        });
+      }
+
+      if (!st.boundGlobals) {
+        st.boundGlobals = true;
+        window.addEventListener('resize', () => { try { __gmAiSuggestReposition(st); } catch (e) {} });
+        window.addEventListener('scroll', () => { try { __gmAiSuggestReposition(st); } catch (e) {} }, true);
+        document.addEventListener('mousedown', (ev) => {
+          try {
+            if (!st.visible) return;
+            const box = document.getElementById(st.boxId);
+            const t = ev && ev.target;
+            if (box && (t === box || (box.contains && box.contains(t)))) return;
+            if (t === inp || (inp.contains && inp.contains(t))) return;
+            __gmAiSuggestHide(st);
+          } catch (e) {}
+        });
+      }
+    } catch (e) {}
+  }
+
+  function __gmAiModelSuggestHide() { try { __gmAiSuggestHide(window.__gmAiSuggestModel); } catch (e) {} }
+  function __gmAiModelSuggestRender(forceOpen=false) { try { __gmAiSuggestRender(window.__gmAiSuggestModel, forceOpen); } catch (e) {} }
+  function __gmAiSearchProviderSuggestHide() { try { __gmAiSuggestHide(window.__gmAiSuggestProvider); } catch (e) {} }
+  function __gmAiSearchProviderSuggestRender(forceOpen=false) { try { __gmAiSuggestRender(window.__gmAiSuggestProvider, forceOpen); } catch (e) {} }
+
   function __gmAiRenderModelSelect() {
     try {
-      if (__gmAiModelSuggestVisible) __gmAiModelSuggestRender(false);
+      if (window.__gmAiSuggestModel && window.__gmAiSuggestModel.visible) __gmAiModelSuggestRender(false);
     } catch (e) {}
   }
 
@@ -10582,14 +11194,17 @@ flex-shrink:0;cursor:pointer;
 
   function showAiChatPanel() {
     try {
-      __gmAiCleanupTempProfiles();
       __gmAiPanel = 'chat';
       const c = document.getElementById('aiChatView');
       const p = document.getElementById('aiConfigView');
+      const s = document.getElementById('aiSearchView');
       if (c) c.style.display = 'flex';
       if (p) p.style.display = 'none';
+      if (s) s.style.display = 'none';
       const btn = document.getElementById('aiPlusBtn');
       if (btn) btn.textContent = '+';
+      try { __gmAiModelSuggestHide(); } catch (e0) {}
+      try { __gmAiSearchProviderSuggestHide(); } catch (e00) {}
       __gmAiEnsureSessionsWheelScroll();
       __gmAiBindMentionInput();
       __gmAiRenderProfileModelName();
@@ -10603,20 +11218,18 @@ flex-shrink:0;cursor:pointer;
       __gmAiPanel = 'config';
       const c = document.getElementById('aiChatView');
       const p = document.getElementById('aiConfigView');
+      const s = document.getElementById('aiSearchView');
       if (c) c.style.display = 'none';
       if (p) p.style.display = 'flex';
+      if (s) s.style.display = 'none';
       const btn = document.getElementById('aiPlusBtn');
       if (btn) btn.textContent = '×';
       __gmAiRenderProfileList();
       try { __gmAiBindModelConfigEvents(); } catch (eB0) {}
+      try { __gmAiUpdateCfgSeg(); } catch (eS1) {}
+      try { __gmAiSearchProviderSuggestHide(); } catch (e00) {}
       if (!__gmAiEditingProfileId) {
-        const profiles = Array.isArray(__gmAiConfig.profiles) ? __gmAiConfig.profiles : [];
-        if (profiles.length) {
-          __gmAiEditingProfileId = String(profiles[0].id || '');
-          __gmAiFillEditor(profiles[0]);
-        } else {
-          __gmAiFillEditor(null);
-        }
+        __gmAiFillEditor(null);
       }
     } catch (e) {}
   }
@@ -10630,79 +11243,60 @@ flex-shrink:0;cursor:pointer;
         base.__gmAiModelBound = true;
         base.addEventListener('input', () => { try { __gmAiScheduleRefreshModels(); } catch (e) {} });
         base.addEventListener('change', () => { try { __gmAiScheduleRefreshModels(); } catch (e) {} });
+        base.addEventListener('input', () => { try { __gmAiCaptureProfileDraft(); } catch (e) {} });
+        base.addEventListener('change', () => { try { __gmAiCaptureProfileDraft(); } catch (e) {} });
       }
       if (key && !key.__gmAiModelBound) {
         key.__gmAiModelBound = true;
         key.addEventListener('input', () => { try { __gmAiScheduleRefreshModels(); } catch (e) {} });
         key.addEventListener('change', () => { try { __gmAiScheduleRefreshModels(); } catch (e) {} });
+        key.addEventListener('input', () => { try { __gmAiCaptureProfileDraft(); } catch (e) {} });
+        key.addEventListener('change', () => { try { __gmAiCaptureProfileDraft(); } catch (e) {} });
       }
-      if (model && !model.__gmAiModelBound) {
-        model.__gmAiModelBound = true;
-        model.addEventListener('focus', () => { try { __gmAiModelSuggestRender(true); } catch (e) {} });
-        model.addEventListener('click', () => { try { __gmAiModelSuggestRender(true); } catch (e) {} });
-        model.addEventListener('input', () => { try { __gmAiModelSuggestRender(true); } catch (e) {} });
-        model.addEventListener('keydown', (e) => {
-          try {
-            if (!__gmAiModelSuggestVisible) return;
-            const arr = __gmAiModelSuggestGetFilteredItems();
-            if (!arr.length) { __gmAiModelSuggestHide(); return; }
-            if (e.key === 'ArrowDown') {
-              e.preventDefault();
-              __gmAiModelSuggestIndex = Math.min(arr.length - 1, (__gmAiModelSuggestIndex || 0) + 1);
-              __gmAiModelSuggestRender(false);
-              return;
-            }
-            if (e.key === 'ArrowUp') {
-              e.preventDefault();
-              __gmAiModelSuggestIndex = Math.max(0, (__gmAiModelSuggestIndex || 0) - 1);
-              __gmAiModelSuggestRender(false);
-              return;
-            }
-            if (e.key === 'Enter') {
-              const i = Number(__gmAiModelSuggestIndex || 0);
-              const pick = (i >= 0 && i < arr.length) ? String(arr[i] || '').trim() : '';
-              if (pick) {
-                e.preventDefault();
-                model.value = pick;
-                __gmAiModelSuggestHide();
-                try { __gmAiSyncEditingProfileFromEditor(); } catch (e1) {}
+      if (model) {
+        if (!model.__gmAiDraftBound) {
+          model.__gmAiDraftBound = true;
+          model.addEventListener('input', () => { try { __gmAiCaptureProfileDraft(); } catch (e) {} });
+          model.addEventListener('change', () => { try { __gmAiCaptureProfileDraft(); } catch (e) {} });
+        }
+        if (!window.__gmAiSuggestModel) {
+          const st = __gmAiSuggestEnsureState('model', 'aiModelSuggest', 'aiModel');
+          if (st) {
+            st.getItems = () => {
+              try {
+                const modelEl = document.getElementById('aiModel');
+                const q = String((modelEl && modelEl.value) || '').trim().toLowerCase();
+                const arr = Array.isArray(__gmAiModels) ? __gmAiModels : [];
+                const out = [];
+                for (let i = 0; i < arr.length; i++) {
+                  const s = String(arr[i] || '').trim();
+                  if (!s) continue;
+                  if (!q || s.toLowerCase().includes(q)) out.push(s);
+                }
+                return out.slice(0, 80);
+              } catch (e) {
+                return [];
               }
-              return;
-            }
-            if (e.key === 'Escape') {
-              e.preventDefault();
-              __gmAiModelSuggestHide();
-              return;
-            }
-          } catch (e2) {}
-        });
-        model.addEventListener('blur', () => {
-          try {
-            if (__gmAiModelSuggestCloseTimer) clearTimeout(__gmAiModelSuggestCloseTimer);
-            __gmAiModelSuggestCloseTimer = setTimeout(() => {
-              __gmAiModelSuggestCloseTimer = 0;
-              __gmAiModelSuggestHide();
-            }, 120);
-          } catch (e) {}
-        });
-        window.addEventListener('resize', () => { try { __gmAiModelSuggestReposition(); } catch (e) {} });
-        window.addEventListener('scroll', () => { try { __gmAiModelSuggestReposition(); } catch (e) {} }, true);
-        document.addEventListener('mousedown', (ev) => {
-          try {
-            if (!__gmAiModelSuggestVisible) return;
-            const el = document.getElementById('aiModelSuggest');
-            const t = ev && ev.target;
-            if (el && (t === el || (el.contains && el.contains(t)))) return;
-            if (t === model || (model.contains && model.contains(t))) return;
-            __gmAiModelSuggestHide();
-          } catch (e) {}
-        });
+            };
+            st.onPick = (pick) => {
+              try {
+                const el = document.getElementById('aiModel');
+                if (el) el.value = String(pick || '');
+              } catch (e) {}
+            };
+            st.onAfterPick = () => {
+              try { __gmAiSyncEditingProfileFromEditor(); } catch (e) {}
+            };
+            window.__gmAiSuggestModel = st;
+          }
+        }
+        try { __gmAiSuggestBind(window.__gmAiSuggestModel); } catch (e) {}
       }
     } catch (e) {}
   }
 
   function toggleAiPanel() {
-    if (__gmAiPanel === 'config') showAiChatPanel();
+    if (__gmAiPanel === 'config' || __gmAiPanel === 'search') showAiChatPanel();
     else showAiConfigPanel();
   }
 
@@ -10795,18 +11389,100 @@ flex-shrink:0;cursor:pointer;
 
       __gmAiRenderProfileList();
 
-      const prof = (__gmAiConfig.profiles || []).find(p => p && String(p.id || '') === String(__gmAiSelectedProfileId || '')) || (__gmAiConfig.profiles || [])[0] || null;
-      __gmAiEditingProfileId = prof ? String(prof.id || '') : '';
-      __gmAiFillEditor(prof);
+      __gmAiEditingProfileId = '';
+      __gmAiFillEditor(null);
 
       __gmAiRenderProfileModelName();
       __gmAiRenderHistoryChips();
+
+      try {
+        const elEn = document.getElementById('aiSearchEnabled');
+        if (elEn) {
+          const cur = (__gmAiConfig && __gmAiConfig.features && typeof __gmAiConfig.features === 'object')
+            ? Boolean(__gmAiConfig.features.web_search_enabled)
+            : false;
+          elEn.checked = cur;
+          try {
+            const v0 = localStorage.getItem('gm_ai_web_search_enabled');
+            if (v0 === '0' || v0 === '1') {
+              const want = (v0 === '1');
+              if (want !== cur) {
+                elEn.checked = want;
+                try {
+                  if (__gmAiConfig && typeof __gmAiConfig === 'object') {
+                    if (!__gmAiConfig.features || typeof __gmAiConfig.features !== 'object') __gmAiConfig.features = {};
+                    __gmAiConfig.features.web_search_enabled = want;
+                  }
+                } catch (eL0) {}
+                try { saveAiSearchProfiles().catch(()=>{}); } catch (eL1) {}
+              }
+            }
+          } catch (eLS0) {}
+        }
+      } catch (eW0) {}
+
+      try { __gmAiBindSearchEnabledToggle(); } catch (eB0) {}
 
       __gmAiSetMeta('已加载本地配置');
       toast('✓ AI 配置已加载', 'ok');
     } catch (e) {
       toast('加载失败', 'err');
     }
+  }
+
+  function __gmAiBindSearchEnabledToggle() {
+    try {
+      const elEn = document.getElementById('aiSearchEnabled');
+      if (!elEn) return;
+      if (elEn.__gmAiSearchEnabledBound) return;
+      elEn.__gmAiSearchEnabledBound = true;
+      elEn.addEventListener('change', async () => {
+        try {
+          if (window.__gmAiSearchEnabledSaving) return;
+          window.__gmAiSearchEnabledSaving = true;
+
+          try { localStorage.setItem('gm_ai_web_search_enabled', elEn.checked ? '1' : '0'); } catch (eLS0) {}
+
+          try {
+            const okCfg = (__gmAiConfig && typeof __gmAiConfig === 'object' && Array.isArray(__gmAiConfig.profiles));
+            if (!okCfg) {
+              const latest = await GET('/api/ai_config');
+              if (latest && latest.config && typeof latest.config === 'object') {
+                __gmAiConfig = latest.config;
+              }
+            }
+          } catch (eLC0) {}
+
+          try {
+            if (__gmAiConfig && typeof __gmAiConfig === 'object') {
+              if (!__gmAiConfig.features || typeof __gmAiConfig.features !== 'object') __gmAiConfig.features = {};
+              __gmAiConfig.features.web_search_enabled = !!elEn.checked;
+            }
+          } catch (eS0) {}
+
+          try {
+            await POST('/api/ai_feature', { web_search_enabled: !!elEn.checked });
+          } catch (eF0) {}
+
+          try {
+            if (navigator && typeof navigator.sendBeacon === 'function') {
+              const okCfg = (__gmAiConfig && typeof __gmAiConfig === 'object' && Array.isArray(__gmAiConfig.profiles));
+              if (okCfg) {
+                const cur0 = JSON.parse(JSON.stringify(__gmAiConfig));
+                if (!cur0.features || typeof cur0.features !== 'object') cur0.features = {};
+                cur0.features.web_search_enabled = !!elEn.checked;
+                const blob = new Blob([JSON.stringify({ config: cur0 })], { type: 'application/json' });
+                navigator.sendBeacon('/api/ai_config', blob);
+              }
+            }
+          } catch (eB0) {}
+
+          try { await saveAiSearchProfiles(); } catch (eS1) {}
+        } finally {
+          window.__gmAiSearchEnabledSaving = false;
+        }
+      });
+    } catch (e) {}
   }
 
   async function saveAiProfiles() {
@@ -10821,8 +11497,28 @@ flex-shrink:0;cursor:pointer;
         }
       }
 
+      try {
+        if (!__gmAiConfig.features || typeof __gmAiConfig.features !== 'object' || !__gmAiConfig.web_search || typeof __gmAiConfig.web_search !== 'object') {
+          const latest = await GET('/api/ai_config');
+          if (latest && latest.config && typeof latest.config === 'object') {
+            if ((!__gmAiConfig.features || typeof __gmAiConfig.features !== 'object') && latest.config.features && typeof latest.config.features === 'object') {
+              __gmAiConfig.features = JSON.parse(JSON.stringify(latest.config.features));
+            }
+            if ((!__gmAiConfig.web_search || typeof __gmAiConfig.web_search !== 'object') && latest.config.web_search && typeof latest.config.web_search === 'object') {
+              __gmAiConfig.web_search = JSON.parse(JSON.stringify(latest.config.web_search));
+            }
+          }
+        }
+      } catch (eM0) {}
+
       const res = await POST('/api/ai_config', { config: __gmAiConfig });
       if (res && res.ok) {
+        try {
+          const pid0 = String(__gmAiEditingProfileId || '').trim();
+          if (pid0 && window.__gmAiProfileDrafts && typeof window.__gmAiProfileDrafts === 'object') {
+            delete window.__gmAiProfileDrafts[pid0];
+          }
+        } catch (eD0) {}
         __gmAiSetMeta('已保存到本地配置文件');
         toast('✓ AI 配置已保存', 'ok');
         try { __gmAiRenderProfileList(); } catch (eR0) {}
@@ -11144,6 +11840,7 @@ flex-shrink:0;cursor:pointer;
   }
 
   function editAiProfile(id) {
+    try { __gmAiCaptureProfileDraft(); } catch (e0) {}
     __gmAiEditingProfileId = String(id || '');
     const prof = (__gmAiConfig.profiles || []).find(p => p && String(p.id || '') === __gmAiEditingProfileId) || null;
     __gmAiFillEditor(prof);
@@ -11181,6 +11878,12 @@ flex-shrink:0;cursor:pointer;
       danger: true,
     }).then(async (ok) => {
       if (!ok) return;
+      try {
+        const pid0 = String(pid || '').trim();
+        if (pid0 && window.__gmAiProfileDrafts && typeof window.__gmAiProfileDrafts === 'object') {
+          delete window.__gmAiProfileDrafts[pid0];
+        }
+      } catch (eD0) {}
       __gmAiConfig.profiles = (__gmAiConfig.profiles || []).filter(p => String(p && p.id || '') !== pid);
       if (__gmAiConfig.active_profile_id === pid) {
         __gmAiConfig.active_profile_id = (__gmAiConfig.profiles[0] && __gmAiConfig.profiles[0].id) ? String(__gmAiConfig.profiles[0].id) : '';
