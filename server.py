@@ -265,22 +265,144 @@ def _undo_apply_file_snapshot(snapshot: dict):
         return False, str(e)
 
 
+def _undo_git_status_map():
+    """Return {path: info} based on git status porcelain (-z).
+
+    info schema:
+    - {"xy": "XY"} for normal entries
+    - For renames/copies (R/C), both src and dst paths are included:
+      src: {"xy": "R ", "kind": "R", "role": "src", "dst": "new"}
+      dst: {"xy": "R ", "kind": "R", "role": "dst", "src": "old"}
+    """
+    try:
+        out, _err, code = run_git(["status", "--porcelain=v1", "-u", "-z"], timeout=30)
+        if code != 0:
+            return {}
+        m = {}
+        entries = (out or "").split("\x00")
+        i = 0
+        while i < len(entries):
+            ent = entries[i]
+            if not ent or len(ent) < 4:
+                i += 1
+                continue
+            xy = ent[:2]
+            name0 = ent[3:]
+            kind = xy[0] if xy else ""
+            if name0:
+                p0 = str(name0).replace("\\", "/")
+                if kind in ("R", "C"):
+                    name1 = entries[i + 1] if (i + 1) < len(entries) else ""
+                    p1 = str(name1).replace("\\", "/") if name1 else ""
+                    m[p0] = {"xy": xy, "kind": kind, "role": "src", "dst": p1}
+                    if p1:
+                        m[p1] = {"xy": xy, "kind": kind, "role": "dst", "src": p0}
+                else:
+                    m[p0] = {"xy": xy}
+            if kind in ("R", "C"):
+                i += 1
+            i += 1
+        return m
+    except Exception:
+        return {}
+
+
+def _undo_capture_head_file_snapshot(rel_path: str):
+    rp = (rel_path or "").replace("\\", "/").lstrip("/")
+    if not rp:
+        return None
+    try:
+        content = get_head_file_content(rp)
+    except Exception:
+        content = None
+    if content is None:
+        return None
+    return {"path": rp, "exists": True, "content": str(content)}
+
+
+def _undo_prepare_cmd_snapshots(undo_gid: str):
+    gid = str(undo_gid or "").strip()
+    if not gid:
+        return {}, {}
+    pre_map = _undo_git_status_map()
+    pre_snaps = {}
+    try:
+        for rp in pre_map.keys():
+            try:
+                snap0 = _undo_capture_file_snapshot(rp)
+            except Exception:
+                snap0 = None
+            if snap0 is not None:
+                pre_snaps[str(rp)] = snap0
+    except Exception:
+        pre_snaps = {}
+    return pre_map, pre_snaps
+
+
+def _undo_finalize_cmd_snapshots(undo_gid: str, pre_map: dict, pre_snaps: dict):
+    gid = str(undo_gid or "").strip()
+    if not gid:
+        return
+    post_map = _undo_git_status_map()
+
+    # If cmd performed rename/copy on a previously clean tracked file, pre_map/pre_snaps may not include it.
+    # For such sources, capture snapshot from HEAD so undo can restore it.
+    try:
+        for rp, info in (post_map or {}).items():
+            if not isinstance(info, dict):
+                continue
+            kind = str(info.get("kind") or "").strip()
+            role = str(info.get("role") or "").strip()
+            if kind != "R" or role != "src":
+                continue
+            if (pre_snaps or {}).get(rp) is not None:
+                continue
+            snap_h = _undo_capture_head_file_snapshot(rp)
+            if snap_h is not None:
+                _undo_record(gid, {"type": "file_snapshot", "op": "delete", "snapshot": snap_h})
+    except Exception:
+        pass
+
+    keys = set((pre_map or {}).keys()) | set((post_map or {}).keys())
+    for rp in keys:
+        pre_xy = (pre_map or {}).get(rp)
+        post_xy = (post_map or {}).get(rp)
+        pre_xy_s = str(pre_xy.get("xy") if isinstance(pre_xy, dict) else (pre_xy or ""))
+        post_xy_s = str(post_xy.get("xy") if isinstance(post_xy, dict) else (post_xy or ""))
+        if pre_xy is None and post_xy is not None:
+            _undo_record(gid, {"type": "file_snapshot", "op": "add", "snapshot": {"path": rp, "exists": False, "content": ""}})
+            continue
+        if pre_xy is not None and post_xy is None:
+            snap = (pre_snaps or {}).get(rp)
+            if snap is not None:
+                _undo_record(gid, {"type": "file_snapshot", "op": "delete", "snapshot": snap})
+            continue
+        if pre_xy is not None and post_xy is not None and pre_xy_s != post_xy_s:
+            snap = (pre_snaps or {}).get(rp)
+            if snap is not None:
+                _undo_record(gid, {"type": "file_snapshot", "op": "modify", "snapshot": snap})
+
+
 def _undo_record(group_id: str, entry: dict):
     gid = str(group_id or "").strip()
     if not gid:
         return
     if not isinstance(entry, dict):
         return
+    try:
+        if "ts" not in entry:
+            entry["ts"] = time.time()
+    except Exception:
+        pass
     with undo_lock:
-        if gid not in _undo_groups:
-            _undo_groups[gid] = []
+        _undo_groups.setdefault(gid, []).append(entry)
+        if gid not in _undo_group_order:
             _undo_group_order.append(gid)
             try:
                 tp = str(entry.get("type") or "")
                 logger.warning(f"undo_steps+1 (group_id={gid}, first_type={tp}, undo_steps={len(_undo_group_order)})")
             except Exception:
                 pass
-        _undo_groups[gid].append(entry)
     try:
         _undo_save_state()
     except Exception:
@@ -1172,63 +1294,329 @@ def _hivo_parse_context_refs_structured(context_refs: list, per_file_chars: int 
     out = []
     used = 0
     for ref0 in context_refs[:8]:
+        if used >= int(total_chars):
+            break
         raw = str(ref0 or "").strip().lstrip("@")
         if not raw:
             continue
 
         rp = raw.replace("\\", "/").lstrip("/")
+
+        def _resolve_file_ref(rp_in: str):
+            try:
+                rp2 = str(rp_in or "").replace("\\", "/").lstrip("/")
+            except Exception:
+                rp2 = ""
+            candidates2 = []
+            resolved2 = ""
+            parse_way2 = ""
+            conf2 = 0.0
+
+            def _score_candidate2(rel: str):
+                try:
+                    p = str(rel or "")
+                    if not p:
+                        return 0
+                    bn_in = rp2.split("/")[-1].lower()
+                    bn = p.split("/")[-1].lower()
+                    score = 10
+                    if bn == bn_in:
+                        score += 50
+                    depth = p.count("/")
+                    score += max(0, 12 - depth)
+                    if "/" in rp2:
+                        pref = "/".join(rp2.split("/")[:-1]).lower()
+                        if pref and p.lower().startswith(pref + "/"):
+                            score += 8
+                    return score
+                except Exception:
+                    return 0
+
+            if "/" in rp2:
+                safe2 = _safe_repo_abspath(rp2)
+                if safe2 and os.path.isfile(safe2):
+                    resolved2 = rp2
+                    candidates2 = [rp2]
+                    parse_way2 = "精确匹配"
+                    conf2 = 0.99
+
+            if not resolved2:
+                bn2 = rp2.split("/")[-1] if rp2 else ""
+                cands2 = find_files_by_name(bn2, max_results=20) or []
+                candidates2 = [str(x) for x in cands2 if x is not None and str(x).strip()]
+                if candidates2:
+                    try:
+                        candidates2.sort(key=lambda x: _score_candidate2(x), reverse=True)
+                    except Exception:
+                        pass
+                if len(candidates2) == 1:
+                    resolved2 = candidates2[0]
+                    parse_way2 = "搜索匹配"
+                    conf2 = 0.92
+                elif len(candidates2) > 1:
+                    resolved2 = candidates2[0]
+                    parse_way2 = "搜索匹配(多候选)"
+                    conf2 = 0.72
+
+            return resolved2, candidates2, parse_way2, conf2
+
+        try:
+            if re.match(r"^https?://", str(raw or "").strip(), flags=re.I):
+                url0 = str(raw or "").strip()
+                item = {
+                    "解析结果": "resolved",
+                    "资源类型": "链接",
+                    "用户输入名称": raw,
+                    "真实路径": url0,
+                    "文件内容": "",
+                    "文件内容分段": [],
+                    "分段信息": {"strategy": "none", "chunk_type": "", "target_lines": 0, "max_lines": 0, "total_parts": 0, "provided_parts": 0, "complete": True},
+                    "候选列表": [],
+                    "解析方式": "URL 识别",
+                    "置信度": 0.99,
+                    "是否需要工具调用": True,
+                    "提示": "这是一个 URL 链接；如需读取网页正文，请使用 web_fetch。",
+                    "建议工具调用": [{"type": "web_fetch", "url": url0}],
+                }
+                out.append(item)
+                continue
+        except Exception:
+            pass
+
+        try:
+            rp_dir = rp
+            if rp_dir.endswith("/"):
+                rp_dir = rp_dir.rstrip("/")
+            safe_dir = _safe_repo_abspath(rp_dir) if rp_dir else None
+            if safe_dir and os.path.isdir(safe_dir):
+                tree, err = list_dir_tree(rp_dir, max_depth=3, max_entries=260)
+                room = int(total_chars) - used
+                if room < 0:
+                    room = 0
+                tree_txt = str(tree or "")
+                complete0 = True
+                if tree_txt and len(tree_txt) > room:
+                    tree_txt = tree_txt[:room]
+                    complete0 = False
+                if tree_txt:
+                    used += len(tree_txt)
+                item = {
+                    "解析结果": "resolved" if tree else "unreadable",
+                    "资源类型": "目录",
+                    "用户输入名称": raw,
+                    "真实路径": rp_dir,
+                    "文件内容": tree_txt,
+                    "文件内容分段": [],
+                    "分段信息": {"strategy": "dir_tree", "chunk_type": "", "target_lines": 0, "max_lines": 0, "total_parts": 1 if tree else 0, "provided_parts": 1 if tree_txt else 0, "complete": bool(complete0)},
+                    "候选列表": [],
+                    "解析方式": "目录匹配",
+                    "置信度": 0.95,
+                    "是否需要工具调用": True,
+                }
+                if not tree:
+                    item["提示"] = str(err or "目录内容不可读取")
+                else:
+                    item["提示"] = "已注入目录树摘要；如需进一步确认文件位置/文件名，可用 find_files 或 search_code。"
+                    item["建议工具调用"] = [{"type": "list_dir_tree", "path": rp_dir, "max_depth": 4, "max_entries": 600}]
+                    if tree_txt and (not complete0):
+                        item["提示"] = "目录树摘要过长，受上下文长度限制已截断；如需完整目录树，请使用 list_dir_tree 继续查看。"
+                out.append(item)
+                continue
+        except Exception:
+            pass
+
+        try:
+            is_drive_path = bool(re.match(r"^[A-Za-z]:/", rp))
+        except Exception:
+            is_drive_path = False
+
+        # File range reference: path:line[-end] or path#Lx-Ly
+        try:
+            path_part = ""
+            s0 = 0
+            e0 = 0
+            m1 = re.match(r"^(.+?)#L(\d+)(?:-L?(\d+))?$", raw)
+            if m1:
+                path_part = str(m1.group(1) or "").strip().replace("\\", "/").lstrip("/")
+                s0 = int(m1.group(2) or 0)
+                e0 = int(m1.group(3) or 0) if m1.group(3) else s0
+            else:
+                m2 = re.match(r"^(.+?):(\d+)(?:-(\d+))?$", raw)
+                if m2 and (not is_drive_path):
+                    path_part = str(m2.group(1) or "").strip().replace("\\", "/").lstrip("/")
+                    s0 = int(m2.group(2) or 0)
+                    e0 = int(m2.group(3) or 0) if m2.group(3) else s0
+
+            if path_part and s0 > 0:
+                if e0 <= 0:
+                    e0 = s0
+                if e0 < s0:
+                    s0, e0 = e0, s0
+                if (e0 - s0) > 500:
+                    e0 = s0 + 500
+
+                resolved2, candidates2, parse_way2, conf2 = _resolve_file_ref(path_part)
+
+                status2 = "not_found"
+                body2 = ""
+                if resolved2:
+                    data2, _err2 = read_file_range(resolved2, start=int(s0), end=int(e0))
+                    if data2 is not None and isinstance(data2, dict):
+                        lines2 = data2.get("lines") if isinstance(data2.get("lines"), list) else []
+                        body2 = "\n".join([str(x or "") for x in lines2])
+                        status2 = "resolved" if body2 else "unreadable"
+                    else:
+                        status2 = "unreadable"
+                else:
+                    status2 = "ambiguous" if candidates2 else "not_found"
+
+                room = int(total_chars) - used
+                if room < 0:
+                    room = 0
+                complete2 = True
+                if body2 and len(body2) > room:
+                    body2 = body2[:room]
+                    complete2 = False
+                if body2:
+                    used += len(body2)
+
+                item = {
+                    "解析结果": status2,
+                    "资源类型": "文件片段",
+                    "用户输入名称": raw,
+                    "真实路径": resolved2,
+                    "文件内容": body2,
+                    "文件内容分段": ([{
+                        "chunk_index": 1,
+                        "chunk_total": 1,
+                        "chunk_type": "unstructured",
+                        "source": {"type": "file", "path": resolved2, "ext": resolved2.split(".")[-1].lower() if resolved2 and ("." in resolved2) else ""},
+                        "range": {"start_line": int(s0), "end_line": int(e0)},
+                        "content": body2,
+                    }] if body2 else []),
+                    "分段信息": {"strategy": "read_file_range", "chunk_type": "", "target_lines": 0, "max_lines": 0, "total_parts": 1 if body2 else 0, "provided_parts": 1 if body2 else 0, "complete": bool(complete2)},
+                    "候选列表": candidates2[:8],
+                    "解析方式": parse_way2,
+                    "置信度": conf2,
+                    "是否需要工具调用": True,
+                }
+                if status2 == "ambiguous":
+                    item["提示"] = "存在多个候选路径，当前真实路径为最佳猜测，可能不确定；建议先确认真实路径再读取行范围。"
+                    item["建议工具调用"] = [{"type": "find_files", "name": path_part.split("/")[-1]}]
+                elif status2 == "not_found":
+                    item["提示"] = "未找到对应文件；请确认路径或文件名。"
+                    item["建议工具调用"] = [{"type": "find_files", "name": path_part.split("/")[-1]}]
+                elif resolved2 and body2 and (not complete2):
+                    item["提示"] = "文件片段过长，受上下文长度限制已截断；如需完整范围，请继续分批读取。"
+                    item["建议工具调用"] = [{"type": "read_file_range", "path": resolved2, "start": int(s0), "end": int(e0)}]
+                elif resolved2 and status2 == "unreadable":
+                    item["提示"] = "文件片段读取失败或为空；请检查路径，或改用 file_content/read_file_range 进一步读取。"
+                    item["建议工具调用"] = [{"type": "read_file_range", "path": resolved2, "start": int(s0), "end": int(e0)}]
+
+                out.append(item)
+                continue
+        except Exception:
+            pass
+
+        # Git reference: HEAD/branch/tag/commit-ish
+        try:
+            git_ref = str(raw or "").strip()
+        except Exception:
+            git_ref = ""
+        if git_ref and (not is_drive_path) and ("/" not in rp):
+            try:
+                ext0 = rp.split("/")[-1].split(".")[-1].lower() if ("." in rp) else ""
+            except Exception:
+                ext0 = ""
+            try:
+                is_common_file = bool(ext0 and ext0 in ("py", "js", "ts", "jsx", "tsx", "html", "htm", "css", "md", "markdown", "json", "yml", "yaml", "txt", "ini", "toml", "xml", "csv"))
+            except Exception:
+                is_common_file = False
+            if is_common_file:
+                git_ref = ""
+
+        if git_ref and (not is_drive_path) and ("/" not in rp):
+            try:
+                out0, err0, code0 = run_git(["rev-parse", "--verify", f"{git_ref}^{{commit}}"], timeout=15)
+            except Exception:
+                out0, err0, code0 = "", "", 1
+            if code0 == 0 and out0:
+                full_hash = str(out0 or "").strip().splitlines()[0].strip()
+                short_hash = full_hash[:8] if full_hash else ""
+                detail = {}
+                try:
+                    detail = get_commit_detail(full_hash) if full_hash else {}
+                except Exception:
+                    detail = {}
+
+                lines = []
+                try:
+                    if isinstance(detail, dict) and ("error" not in detail):
+                        h1 = str(detail.get("full_hash") or detail.get("hash") or full_hash)
+                        subj = str(detail.get("subject") or detail.get("message") or "").strip()
+                        author = str(detail.get("author_name") or detail.get("author") or "").strip()
+                        date1 = str(detail.get("author_date") or detail.get("date") or "").strip()
+                        if h1:
+                            lines.append(f"commit {h1}")
+                        if author or date1:
+                            lines.append(f"Author: {author}  Date: {date1}".strip())
+                        if subj:
+                            lines.append(f"Subject: {subj}")
+                        files0 = detail.get("files")
+                        if isinstance(files0, list) and files0:
+                            lines.append("Files:")
+                            for f0 in files0[:40]:
+                                if not isinstance(f0, dict):
+                                    continue
+                                p0 = str(f0.get("path") or "")
+                                st0 = str(f0.get("status") or "")
+                                if p0:
+                                    lines.append(f"  {st0}  {p0}".rstrip())
+                except Exception:
+                    lines = []
+
+                body0 = "\n".join(lines).strip() if lines else f"commit {full_hash}".strip()
+                room = int(total_chars) - used
+                if room < 0:
+                    room = 0
+                complete0 = True
+                if body0 and len(body0) > room:
+                    body0 = body0[:room]
+                    complete0 = False
+                if body0:
+                    used += len(body0)
+
+                item = {
+                    "解析结果": "resolved",
+                    "资源类型": "Git引用",
+                    "用户输入名称": raw,
+                    "真实路径": full_hash,
+                    "文件内容": body0,
+                    "文件内容分段": ([{
+                        "chunk_index": 1,
+                        "chunk_total": 1,
+                        "chunk_type": "unstructured",
+                        "source": {"type": "git", "ref": git_ref, "hash": full_hash},
+                        "range": {"start_line": 1, "end_line": max(1, len(body0.splitlines())) if body0 else 1},
+                        "content": body0,
+                    }] if body0 else []),
+                    "分段信息": {"strategy": "git_resolve", "chunk_type": "", "target_lines": 0, "max_lines": 0, "total_parts": 1 if body0 else 0, "provided_parts": 1 if body0 else 0, "complete": bool(complete0)},
+                    "候选列表": [],
+                    "解析方式": "git rev-parse",
+                    "置信度": 0.95,
+                    "是否需要工具调用": True,
+                    "提示": "这是 Git 引用解析结果；如需更完整信息，请使用 commit_detail/commit_file_diff。" + ("（内容过长，已截断）" if (body0 and (not complete0)) else ""),
+                    "建议工具调用": ([{"type": "commit_detail", "hash": short_hash or full_hash}] if (short_hash or full_hash) else []),
+                }
+                out.append(item)
+                continue
+
         candidates = []
         resolved = ""
         parse_way = ""
         conf = 0.0
 
-        def _score_candidate(rel: str):
-            try:
-                p = str(rel or "")
-                if not p:
-                    return 0
-                bn_in = rp.split("/")[-1].lower()
-                bn = p.split("/")[-1].lower()
-                score = 10
-                if bn == bn_in:
-                    score += 50
-                # prefer shallower path (likely primary)
-                depth = p.count("/")
-                score += max(0, 12 - depth)
-                # slight preference if user typed a dir prefix and candidate matches it
-                if "/" in rp:
-                    pref = "/".join(rp.split("/")[:-1]).lower()
-                    if pref and p.lower().startswith(pref + "/"):
-                        score += 8
-                return score
-            except Exception:
-                return 0
-
-        if "/" in rp:
-            safe = _safe_repo_abspath(rp)
-            if safe and os.path.isfile(safe):
-                resolved = rp
-                candidates = [rp]
-                parse_way = "精确匹配"
-                conf = 0.99
-        if not resolved:
-            bn = rp.split("/")[-1]
-            cands = find_files_by_name(bn, max_results=20) or []
-            candidates = [str(x) for x in cands if x is not None and str(x).strip()]
-            if candidates:
-                try:
-                    candidates.sort(key=lambda x: _score_candidate(x), reverse=True)
-                except Exception:
-                    pass
-            if len(candidates) == 1:
-                resolved = candidates[0]
-                parse_way = "搜索匹配"
-                conf = 0.92
-            elif len(candidates) > 1:
-                # pick a best-effort default while still reporting ambiguity
-                resolved = candidates[0]
-                parse_way = "搜索匹配(多候选)"
-                conf = 0.72
+        resolved, candidates, parse_way, conf = _resolve_file_ref(rp)
 
         status = "not_found"
         content = ""
@@ -1238,8 +1626,8 @@ def _hivo_parse_context_refs_structured(context_refs: list, per_file_chars: int 
         complete = False
         media_meta = {}
         if resolved:
-            ok, msg, c0 = get_file_content(resolved)
-            if ok and c0 is not None:
+            c0 = get_file_content(resolved)
+            if c0 is not None:
                 content = str(c0 or "")
             if content:
                 status = "resolved"
@@ -1247,6 +1635,79 @@ def _hivo_parse_context_refs_structured(context_refs: list, per_file_chars: int 
                 status = "unreadable"
         else:
             status = "ambiguous" if candidates else "not_found"
+
+        if status == "not_found":
+            try:
+                q0 = str(raw or "").strip()
+            except Exception:
+                q0 = ""
+            if q0 and len(q0) >= 2:
+                hits, err = search_code(q0, case_sensitive=False, max_results=18)
+                if isinstance(hits, list) and hits:
+                    room = int(total_chars) - used
+                    if room < 0:
+                        room = 0
+                    lines = []
+                    for h in hits[:18]:
+                        if not isinstance(h, dict):
+                            continue
+                        p1 = str(h.get("path") or "")
+                        ln1 = int(h.get("line") or 0) if str(h.get("line") or "").strip() else 0
+                        tx1 = str(h.get("text") or "")
+                        if ln1 > 0:
+                            lines.append(f"{p1}:{ln1}  {tx1}")
+                        else:
+                            lines.append(f"{p1}  {tx1}")
+                    body0 = "\n".join(lines).strip()
+                    complete0 = True
+                    if body0 and len(body0) > room:
+                        body0 = body0[:room]
+                        complete0 = False
+                    if body0:
+                        used += len(body0)
+                    item = {
+                        "解析结果": "resolved",
+                        "资源类型": "关键词",
+                        "用户输入名称": raw,
+                        "真实路径": "",
+                        "文件内容": body0,
+                        "文件内容分段": ([{
+                            "chunk_index": 1,
+                            "chunk_total": 1,
+                            "chunk_type": "unstructured",
+                            "source": {"type": "search", "query": q0},
+                            "range": {"start_line": 1, "end_line": max(1, len(body0.splitlines())) if body0 else 1},
+                            "content": body0,
+                        }] if body0 else []),
+                        "分段信息": {"strategy": "search_code", "chunk_type": "", "target_lines": 0, "max_lines": 0, "total_parts": 1 if body0 else 0, "provided_parts": 1 if body0 else 0, "complete": bool(complete0)},
+                        "候选列表": [],
+                        "解析方式": "仓库搜索",
+                        "置信度": 0.70,
+                        "是否需要工具调用": True,
+                        "搜索命中": hits[:18],
+                        "提示": "这是关键词搜索命中（非文件精确引用）。如需进一步读取上下文，请对命中项使用 file_content/read_file_range。" + ("（搜索结果过长，已截断）" if (body0 and (not complete0)) else ""),
+                        "建议工具调用": [{"type": "search_code", "query": q0, "case_sensitive": False, "max_results": 50}],
+                    }
+                    out.append(item)
+                    continue
+                if err:
+                    item = {
+                        "解析结果": "not_found",
+                        "资源类型": "关键词",
+                        "用户输入名称": raw,
+                        "真实路径": "",
+                        "文件内容": "",
+                        "文件内容分段": [],
+                        "分段信息": {"strategy": "search_code", "chunk_type": "", "target_lines": 0, "max_lines": 0, "total_parts": 0, "provided_parts": 0, "complete": True},
+                        "候选列表": [],
+                        "解析方式": "仓库搜索(失败)",
+                        "置信度": 0.40,
+                        "是否需要工具调用": True,
+                        "提示": str(err),
+                        "建议工具调用": [{"type": "search_code", "query": q0, "case_sensitive": False, "max_results": 50}],
+                    }
+                    out.append(item)
+                    continue
 
         item = {
             "解析结果": status,
@@ -4126,7 +4587,12 @@ def load_ai_chat_history(profile_id: str, limit: int = 40, session_id: str | Non
                 continue
             if not content:
                 continue
-            out.append({"role": role, "content": content})
+            item = {"role": role, "content": content}
+            if role == "user":
+                ug = str(m.get("undo_gid") or "").strip()
+                if ug:
+                    item["undo_gid"] = ug
+            out.append(item)
         return out
     return []
 
@@ -4257,7 +4723,7 @@ def get_workspace_context(max_entries: int = 80):
 
 def find_files_by_name(name: str, max_results: int = 20):
     q = str(name or "").strip()
-    if not q or not REPO_PATH:
+    if not REPO_PATH:
         return []
     ql = q.lower()
     repo_root = os.path.abspath(REPO_PATH)
@@ -4267,11 +4733,19 @@ def find_files_by_name(name: str, max_results: int = 20):
             if ".git" in dirs:
                 dirs.remove(".git")
             dirs[:] = [d for d in dirs if not d.startswith(".")]
+            try:
+                dirs.sort()
+            except Exception:
+                pass
+            try:
+                files.sort()
+            except Exception:
+                pass
             for fn in files:
                 if fn.startswith("."):
                     continue
                 fcl = fn.lower()
-                if fcl == ql or ql in fcl:
+                if (not q) or (fcl == ql) or (ql in fcl):
                     abs_path = os.path.join(root, fn)
                     rel = os.path.relpath(abs_path, repo_root).replace("\\", "/")
                     out.append(rel)
@@ -5723,7 +6197,8 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
         if undo_gid:
             snap = _undo_capture_file_snapshot(rp)
             if snap is not None:
-                _undo_record(undo_gid, {"type": "file_snapshot", "snapshot": snap})
+                op0 = "add" if (isinstance(snap, dict) and (snap.get("exists") is False)) else "modify"
+                _undo_record(undo_gid, {"type": "file_snapshot", "op": op0, "snapshot": snap})
         ok, msg = save_file_content(rp, content)
         if ok:
             invalidate_changed_files_cache()
@@ -5735,7 +6210,7 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
         if undo_gid:
             snap = _undo_capture_file_snapshot(rp)
             if snap is not None:
-                _undo_record(undo_gid, {"type": "file_snapshot", "snapshot": snap})
+                _undo_record(undo_gid, {"type": "file_snapshot", "op": "delete", "snapshot": snap})
         full = _safe_repo_abspath(rp)
         if not full:
             return False, "非法路径", {}
@@ -5816,6 +6291,13 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
         return bool(ok), msg or "", {"paths": arr}
 
     # Git
+    if t == "branches":
+        try:
+            brs, cur = get_branches()
+            return True, "", {"branches": brs, "current": cur}
+        except Exception as e:
+            return False, str(e), {}
+
     if t == "commits":
         try:
             limit = int(tool.get("limit") or 50)
@@ -5823,6 +6305,41 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
             limit = 50
         out0 = get_log(limit=limit)
         return True, "", {"limit": limit, "commits": out0}
+
+    if t == "commit_detail":
+        h0 = str(tool.get("hash") or "").strip()
+        if not h0:
+            return False, "缺少 hash", {}
+        try:
+            detail = get_commit_detail(h0)
+            if not isinstance(detail, dict) or ("error" in detail):
+                return False, str((detail or {}).get("error") or "获取提交详情失败"), {}
+            return True, "", {"commit": detail}
+        except Exception as e:
+            return False, str(e), {}
+
+    if t == "commit_file_diff":
+        h0 = str(tool.get("hash") or "").strip()
+        p0 = str(tool.get("path") or "").strip().replace("\\", "/").lstrip("/")
+        if not h0:
+            return False, "缺少 hash", {}
+        if not p0:
+            return False, "缺少 path", {}
+        try:
+            hunks = get_commit_file_diff(h0, p0)
+            return True, "", {"hash": h0, "path": p0, "hunks": hunks}
+        except Exception as e:
+            return False, str(e), {}
+
+    if t == "commit_push_status":
+        h0 = str(tool.get("hash") or "").strip()
+        if not h0:
+            return False, "缺少 hash", {}
+        try:
+            pushed, branches, err = is_commit_pushed(h0)
+            return True, "", {"hash": h0, "pushed": pushed, "branches": branches, "error": err}
+        except Exception as e:
+            return False, str(e), {}
 
     if t == "stage_file":
         rp = str(tool.get("path") or "").strip()
@@ -5913,7 +6430,7 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
         cmd = str(tool.get("cmd") or "").strip()
         timeout = int(tool.get("timeout") or 30)
         cwd = str(tool.get("cwd") or "").strip()
-        ok1, msg1, out1 = _run_cmd_simple(cmd, timeout=timeout, cwd=cwd, run_id=run_id, agent_deadline=agent_deadline)
+        ok1, msg1, out1 = _run_cmd_simple(cmd, timeout=timeout, cwd=cwd, run_id=run_id, agent_deadline=agent_deadline, undo_gid=undo_gid)
         if not ok1:
             return False, msg1 or "run_cmd failed", {"result": {"cmd": cmd, "timeout": timeout, "cwd": cwd, "output": out1}}
         return True, "", {"result": {"cmd": cmd, "timeout": timeout, "cwd": cwd, "output": out1}}
@@ -6348,7 +6865,7 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
     return False, final, run_id
 
 
-def _run_cmd_simple(cmd: str, timeout: int = 30, cwd: str = "", run_id: str = "", agent_deadline: float = 0.0):
+def _run_cmd_simple(cmd: str, timeout: int = 30, cwd: str = "", run_id: str = "", agent_deadline: float = 0.0, undo_gid: str = ""):
     if not REPO_PATH:
         return False, "未打开仓库", ""
     c = str(cmd or "").strip()
@@ -6372,6 +6889,8 @@ def _run_cmd_simple(cmd: str, timeout: int = 30, cwd: str = "", run_id: str = ""
                 to_s = max(1, min(to_s, remain))
             except Exception:
                 pass
+
+        pre_map, pre_snaps = _undo_prepare_cmd_snapshots(undo_gid)
 
         start_t = time.time()
         p = subprocess.Popen(
@@ -6425,6 +6944,10 @@ def _run_cmd_simple(cmd: str, timeout: int = 30, cwd: str = "", run_id: str = ""
                 out = ("".join(out_chunks) + ("\n" + "".join(err_chunks) if err_chunks else "")).strip()
                 if rc != 0:
                     return False, f"exit={rc}", out
+                try:
+                    _undo_finalize_cmd_snapshots(undo_gid, pre_map, pre_snaps)
+                except Exception:
+                    pass
                 return True, "", out
             time.sleep(0.2)
     except Exception as e:
@@ -7054,6 +7577,143 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(payload)
             return
 
+        elif p == "/api/undo_history":
+            try:
+                sid = qget("session_id")
+            except Exception:
+                sid = ""
+            try:
+                limit = int(qget("limit") or "20")
+            except Exception:
+                limit = 20
+            limit = max(1, min(200, int(limit)))
+            prefix = ("ai-" + str(sid).strip() + "-") if str(sid or "").strip() else ""
+            items = []
+            try:
+                with undo_lock:
+                    order = list(_undo_group_order)
+                    for gid in reversed(order):
+                        g = str(gid or "").strip()
+                        if not g:
+                            continue
+                        if prefix and (not g.startswith(prefix)):
+                            continue
+                        acts = _undo_groups.get(g)
+                        if not isinstance(acts, list):
+                            continue
+                        types = []
+                        created_ts = None
+                        add_n = 0
+                        del_n = 0
+                        mod_n = 0
+                        unknown_n = 0
+                        file_paths = []
+                        for a in acts:
+                            if not isinstance(a, dict):
+                                continue
+                            tp = str(a.get("type") or "").strip()
+                            if tp:
+                                types.append(tp)
+                            try:
+                                ts0 = a.get("ts")
+                                if ts0 is not None:
+                                    tsf = float(ts0)
+                                    if (created_ts is None) or (tsf < created_ts):
+                                        created_ts = tsf
+                            except Exception:
+                                pass
+                            if tp == "file_snapshot":
+                                op = str(a.get("op") or "").strip()
+                                try:
+                                    snap = a.get("snapshot")
+                                except Exception:
+                                    snap = None
+                                if not op:
+                                    try:
+                                        if isinstance(snap, dict) and (snap.get("exists") is False):
+                                            op = "add"
+                                        else:
+                                            op = ""
+                                    except Exception:
+                                        op = ""
+                                if op == "add":
+                                    add_n += 1
+                                elif op == "delete":
+                                    del_n += 1
+                                elif op == "modify":
+                                    mod_n += 1
+                                else:
+                                    unknown_n += 1
+                                try:
+                                    if isinstance(snap, dict):
+                                        rp = str(snap.get("path") or "").strip().replace("\\", "/").lstrip("/")
+                                        if rp:
+                                            file_paths.append(rp)
+                                except Exception:
+                                    pass
+                            elif tp == "rename":
+                                try:
+                                    oldp = str(a.get("old_path") or "").strip().replace("\\", "/").lstrip("/")
+                                    newp = str(a.get("new_path") or "").strip().replace("\\", "/").lstrip("/")
+                                    if oldp:
+                                        file_paths.append(oldp)
+                                    if newp:
+                                        file_paths.append(newp)
+                                except Exception:
+                                    pass
+                                try:
+                                    snaps = a.get("snapshots")
+                                    if isinstance(snaps, list):
+                                        for s0 in snaps:
+                                            if not isinstance(s0, dict):
+                                                continue
+                                            rp = str(s0.get("path") or "").strip().replace("\\", "/").lstrip("/")
+                                            if rp:
+                                                file_paths.append(rp)
+                                except Exception:
+                                    pass
+                        uniq_files = []
+                        try:
+                            seen = set()
+                            for rp in file_paths:
+                                if rp in seen:
+                                    continue
+                                seen.add(rp)
+                                uniq_files.append(rp)
+                        except Exception:
+                            uniq_files = []
+                        title_path = ""
+                        try:
+                            if uniq_files:
+                                title_path = uniq_files[0]
+                        except Exception:
+                            title_path = ""
+                        items.append({
+                            "group_id": g,
+                            "action_count": len(acts),
+                            "types": types[:6],
+                            "first_type": (types[0] if types else ""),
+                            "last_type": (types[-1] if types else ""),
+                            "created_ts": created_ts,
+                            "add": add_n,
+                            "delete": del_n,
+                            "modify": mod_n,
+                            "unknown": unknown_n,
+                            "files": uniq_files[:6],
+                            "file_count": len(uniq_files),
+                            "title_path": title_path,
+                        })
+                        if len(items) >= limit:
+                            break
+            except Exception:
+                items = []
+            payload = {"ok": True, "items": items, "limit": limit}
+            if sid:
+                payload["session_id"] = sid
+                payload["session_undo_steps"] = _undo_get_steps_for_session(sid)
+            self.send_json(payload)
+            return
+
         elif p == "/api/status":
             logger.debug("处理 /api/status 请求")
             origin_url = ""
@@ -7346,7 +8006,7 @@ class Handler(BaseHTTPRequestHandler):
             if not self._require_repo():
                 return
             name = qget("name") or qget("q") or ""
-            items = find_files_by_name(name, max_results=20)
+            items = find_files_by_name(name, max_results=200)
             self.send_json({"ok": True, "files": items})
 
         elif p == "/api/list_dir_tree":
@@ -7743,7 +8403,8 @@ class Handler(BaseHTTPRequestHandler):
                 if undo_gid:
                     snap = _undo_capture_file_snapshot(fp)
                     if snap is not None:
-                        _undo_record(undo_gid, {"type": "file_snapshot", "snapshot": snap})
+                        op0 = "add" if (isinstance(snap, dict) and (snap.get("exists") is False)) else "modify"
+                        _undo_record(undo_gid, {"type": "file_snapshot", "op": op0, "snapshot": snap})
                 ok, msg = save_file_content(fp, content)
                 if ok:
                     invalidate_changed_files_cache()
@@ -7774,7 +8435,7 @@ class Handler(BaseHTTPRequestHandler):
                 if undo_gid:
                     snap = _undo_capture_file_snapshot(fp)
                     if snap is not None:
-                        _undo_record(undo_gid, {"type": "file_snapshot", "snapshot": snap})
+                        _undo_record(undo_gid, {"type": "file_snapshot", "op": "delete", "snapshot": snap})
                 full = _safe_repo_abspath(fp)
                 if not full:
                     payload = {"ok": False, "msg": "非法路径"}
@@ -7814,46 +8475,7 @@ class Handler(BaseHTTPRequestHandler):
                     return
 
                 undo_gid = (self.headers.get("X-Undo-Group") or "").strip()
-
-                def _status_map():
-                    """Return {path: xy} based on git status porcelain (-z)."""
-                    try:
-                        out, _err, code = run_git(["status", "--porcelain=v1", "-u", "-z"], timeout=30)
-                        if code != 0:
-                            return {}
-                        m = {}
-                        entries = (out or "").split("\x00")
-                        i = 0
-                        while i < len(entries):
-                            ent = entries[i]
-                            if not ent or len(ent) < 4:
-                                i += 1
-                                continue
-                            xy = ent[:2]
-                            name0 = ent[3:]
-                            if name0:
-                                m[str(name0).replace("\\", "/")] = xy
-                            # Renames/copies include an extra path entry in -z output.
-                            if xy and xy[0] in ("R", "C"):
-                                i += 1
-                            i += 1
-                        return m
-                    except Exception:
-                        return {}
-
-                pre_map = _status_map() if undo_gid else {}
-                pre_snaps = {}
-                if undo_gid:
-                    try:
-                        for rp in pre_map.keys():
-                            try:
-                                snap0 = _undo_capture_file_snapshot(rp)
-                            except Exception:
-                                snap0 = None
-                            if snap0 is not None:
-                                pre_snaps[str(rp)] = snap0
-                    except Exception:
-                        pre_snaps = {}
+                pre_map, pre_snaps = _undo_prepare_cmd_snapshots(undo_gid)
                 try:
                     timeout = int(data.get("timeout") or 30)
                 except Exception:
@@ -7887,27 +8509,10 @@ class Handler(BaseHTTPRequestHandler):
                         logger.warning(f"run_cmd 完成 (ok={1 if r.returncode == 0 else 0}, exit_code={int(r.returncode)}, cmd={cmd[:180]})")
                     except Exception:
                         pass
-
-                    if undo_gid:
-                        post_map = _status_map()
-                        keys = set(pre_map.keys()) | set(post_map.keys())
-                        for rp in keys:
-                            pre_xy = pre_map.get(rp)
-                            post_xy = post_map.get(rp)
-                            if pre_xy is None and post_xy is not None:
-                                # New path in status after cmd: treat as created/first-time-changed; undo deletes it.
-                                _undo_record(undo_gid, {"type": "file_snapshot", "snapshot": {"path": rp, "exists": False, "content": ""}})
-                                continue
-                            if pre_xy is not None and post_xy is None:
-                                snap = pre_snaps.get(rp)
-                                if snap is not None:
-                                    _undo_record(undo_gid, {"type": "file_snapshot", "snapshot": snap})
-                                continue
-                            if pre_xy is not None and post_xy is not None and str(pre_xy) != str(post_xy):
-                                snap = pre_snaps.get(rp)
-                                if snap is not None:
-                                    _undo_record(undo_gid, {"type": "file_snapshot", "snapshot": snap})
-                        # If nothing recorded, this cmd does not affect undo_steps/counter.
+                    try:
+                        _undo_finalize_cmd_snapshots(undo_gid, pre_map, pre_snaps)
+                    except Exception:
+                        pass
 
                     try:
                         invalidate_changed_files_cache()
@@ -8091,15 +8696,15 @@ class Handler(BaseHTTPRequestHandler):
                     gid, actions = _undo_pop_latest_group()
                 if not actions:
                     if gid:
-                        self.send_json({"ok": True, "group_id": gid, "msg": "无可撤销操作"})
+                        self.send_json({"ok": True, "group_id": gid, "msg": "无可撤销操作", "noop": True, "applied": False})
                     else:
-                        self.send_json({"ok": False, "msg": "无可撤销操作"}, 400)
+                        self.send_json({"ok": False, "msg": "无可撤销操作", "noop": True, "applied": False}, 400)
                     return
                 ok, msg = _undo_apply_actions(actions)
                 if not ok:
                     self.send_json({"ok": False, "msg": msg or "撤销失败", "group_id": gid}, 500)
                     return
-                self.send_json({"ok": True, "group_id": gid})
+                self.send_json({"ok": True, "group_id": gid, "noop": False, "applied": True})
 
             elif p == "/api/undo_clear":
                 logger.info("处理 /api/undo_clear 请求")
@@ -9220,6 +9825,8 @@ def main():
     port = 7842
     max_attempts = 10
 
+    srv = None
+
     try:
         # 在单独的线程中启动WebSocket服务器
         if WEBSOCKET_AVAILABLE:
@@ -9262,6 +9869,11 @@ def main():
         print(f"\n服务器启动失败: {e}")
         sys.exit(1)
     finally:
+        try:
+            if srv is not None:
+                srv.server_close()
+        except Exception:
+            pass
         logger.info("Git Manager 后端已停止")
         print("已停止")
 

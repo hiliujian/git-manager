@@ -1510,8 +1510,10 @@ flex-shrink:0;cursor:pointer;
     .ai-composer-counter{position:absolute;right:6px;top:6px;min-width:0;height:14px;
       padding:0;border-radius:999px;background:transparent;color:var(--text2);
       border:none;font-size:10px;line-height:14px;
-      display:inline-flex;align-items:center;justify-content:center;pointer-events:none;
+      display:inline-flex;align-items:center;justify-content:center;pointer-events:auto;
+      cursor:pointer;user-select:none;
       font-variant-numeric:tabular-nums;}
+    .ai-composer-counter:hover{color:var(--text);}
 
     .ai-under{display:flex;align-items:center;gap:8px;padding:0 4px;}
     .ai-add-ctx-btn{display:inline-flex;align-items:center;justify-content:center;
@@ -1533,7 +1535,7 @@ flex-shrink:0;cursor:pointer;
     .ai-mention-menu{position:fixed;z-index:2300;min-width:var(--ai-menu-minw);max-width:var(--ai-menu-maxw);display:none;
       background:rgba(26,28,36,.96);border:1px solid rgba(61,66,98,.85);border-radius:12px;
       box-shadow:0 22px 60px rgba(0,0,0,0.55);padding:6px;backdrop-filter: blur(10px);
-      overflow:auto;}
+      overflow-y:auto;overflow-x:hidden;}
     .ai-mention-menu.show{display:block;}
     [data-theme="light"] .ai-mention-menu{background:rgba(255,255,255,.96);border:1px solid rgba(206,212,218,.9);
       box-shadow:0 22px 60px rgba(0,0,0,0.15);}
@@ -1543,6 +1545,20 @@ flex-shrink:0;cursor:pointer;
     .ai-mention-item.active{background:rgba(110,168,254,0.12);border-color:rgba(110,168,254,0.28);}
     [data-theme="light"] .ai-mention-item.active{background:rgba(76,166,255,0.10);border-color:rgba(76,166,255,0.20);}
     .ai-mention-item .nm{font-weight:800;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+
+    .ai-undo-history{position:fixed;z-index:2400;display:none;min-width:var(--ai-menu-minw);max-width:var(--ai-menu-maxw);
+      background:rgba(26,28,36,.96);border:1px solid rgba(61,66,98,.85);border-radius:12px;
+      box-shadow:0 22px 60px rgba(0,0,0,0.55);padding:6px;backdrop-filter: blur(10px);
+      overflow-y:auto;overflow-x:hidden;}
+    .ai-undo-history.show{display:block;}
+    [data-theme="light"] .ai-undo-history{background:rgba(255,255,255,.96);border:1px solid rgba(206,212,218,.9);
+      box-shadow:0 22px 60px rgba(0,0,0,0.15);}
+    .ai-undo-row{display:flex;align-items:flex-start;gap:8px;padding:8px;border-radius:10px;border:1px solid transparent;}
+    .ai-undo-row:hover{background:var(--bg4);border-color:var(--border);}
+    .ai-undo-row .meta{min-width:0;flex:1;display:flex;flex-direction:column;gap:2px;}
+    .ai-undo-row .tp{font-size:12px;color:var(--text);font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .ai-undo-row .sub{font-size:11px;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .ai-undo-row .act{font-size:11px;color:var(--accent);cursor:pointer;user-select:none;white-space:nowrap;}
     .ai-model-selector{display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border-radius:6px;
       background:transparent;border:1px solid transparent;color:var(--text2);
       cursor:pointer;transition:all 0.15s ease;font-size:11px;
@@ -9977,8 +9993,8 @@ flex-shrink:0;cursor:pointer;
         if (undoGidForTurn) {
           const u = await POST('/api/undo', { group_id: undoGidForTurn });
           const m = String((u && (u.msg || u.error)) || '');
-          undoOk = Boolean(u && u.ok);
-          undoNoop = (!undoOk) && (m.indexOf('无可撤销') >= 0);
+          undoNoop = Boolean(u && (u.noop === true)) || (m.indexOf('无可撤销') >= 0);
+          undoOk = Boolean(u && u.ok) && (!undoNoop) && (u.applied !== false);
           if (!undoOk && !undoNoop) {
             toast('撤销失败：' + (m || '撤销失败'), 'err');
           }
@@ -9987,8 +10003,8 @@ flex-shrink:0;cursor:pointer;
           if (sid) {
             const u = await POST('/api/undo', { session_id: sid });
             const m = String((u && (u.msg || u.error)) || '');
-            undoOk = Boolean(u && u.ok);
-            undoNoop = (!undoOk) && (m.indexOf('无可撤销') >= 0);
+            undoNoop = Boolean(u && (u.noop === true)) || (m.indexOf('无可撤销') >= 0);
+            undoOk = Boolean(u && u.ok) && (!undoNoop) && (u.applied !== false);
             if (!undoOk && !undoNoop) {
               toast('撤销失败：' + (m || '撤销失败'), 'err');
             }
@@ -10028,7 +10044,7 @@ flex-shrink:0;cursor:pointer;
           }
         } catch (e3) {}
         try {
-          if (undoGidForTurn && !undoNoop) toast('✓ 已撤销上一轮数据操作', 'ok');
+          if (undoGidForTurn && undoOk) toast('✓ 已撤销上一轮数据操作', 'ok');
         } catch (eT) {}
         try {
           if (undoGidForTurn && String(__gmAiActiveTurnUndoGroupId || '') === undoGidForTurn) __gmAiActiveTurnUndoGroupId = '';
@@ -10496,7 +10512,7 @@ flex-shrink:0;cursor:pointer;
     const ta = document.getElementById('aiChatInput');
     try {
       const w = __gmAiGetChatPanelWidth();
-      const maxH = Math.max(120, __gmAiGetChatPanelHeight() - 16);
+      const maxH = Math.min(320, Math.max(120, __gmAiGetChatPanelHeight() - 16));
       el.style.width = w + 'px';
       el.style.minWidth = w + 'px';
       el.style.maxWidth = w + 'px';
@@ -10614,7 +10630,7 @@ flex-shrink:0;cursor:pointer;
       const res = await GET('/api/find_files?name=' + encodeURIComponent(q));
       if (reqId !== __gmAiMentionReqId) return;
       const files = (res && res.ok && Array.isArray(res.files)) ? res.files : [];
-      const items = files.slice(0, 12).map(p => {
+      const items = files.slice(0, 80).map(p => {
         const rel = String(p || '');
         const bn = rel.split('/').pop() || rel;
         return { name: bn, path: rel };
@@ -12375,6 +12391,174 @@ flex-shrink:0;cursor:pointer;
     return api(p + sep + '_ts=' + Date.now());
   };
   const POST = (p,b,opts={})=> api(p, Object.assign({method:'POST', body: JSON.stringify(b)}, (opts || {})));
+
+  let __gmAiUndoHistoryEl = null;
+  let __gmAiUndoHistoryReqSeq = 0;
+
+  function __gmAiEnsureUndoHistoryPanel() {
+    if (__gmAiUndoHistoryEl) return __gmAiUndoHistoryEl;
+    const el = document.createElement('div');
+    el.id = 'aiUndoHistory';
+    el.className = 'ai-undo-history';
+    el.addEventListener('click', (e) => {
+      try { e.stopPropagation(); } catch (e2) {}
+    });
+    document.body.appendChild(el);
+    __gmAiUndoHistoryEl = el;
+    return el;
+  }
+
+  function __gmAiCloseUndoHistoryPanel() {
+    try {
+      const el = __gmAiUndoHistoryEl;
+      if (el) el.classList.remove('show');
+    } catch (e) {}
+  }
+
+  async function __gmAiOpenUndoHistoryPanel() {
+    const el = __gmAiEnsureUndoHistoryPanel();
+    const btn = document.getElementById('aiSendCounter');
+    if (!btn || !btn.getBoundingClientRect) return;
+    const r = btn.getBoundingClientRect();
+    const composer = (btn.closest ? btn.closest('.ai-composer') : null);
+    const cr = (composer && composer.getBoundingClientRect) ? composer.getBoundingClientRect() : null;
+
+    const __pos = () => {
+      const anchorR = r;
+      const maxH = Math.max(160, Math.min(__gmAiGetChatPanelHeight() - 16, window.innerHeight - 16));
+      el.style.maxHeight = maxH + 'px';
+      const mw = Math.max(220, Math.min(__gmAiGetChatPanelWidth(), el.offsetWidth || 320));
+      const mh = Math.min(maxH, (el.offsetHeight || 220));
+      const left0 = cr ? cr.left : anchorR.left;
+      const right0 = cr ? cr.right : (left0 + mw);
+      const left = Math.max(8, Math.min(window.innerWidth - mw - 8, Math.max(8, left0)));
+      const preferBottom = anchorR.bottom + 4;
+      const top = (preferBottom + mh <= window.innerHeight - 8) ? preferBottom : Math.max(8, anchorR.top - mh - 4);
+      el.style.left = left + 'px';
+      el.style.top = top + 'px';
+      // align width to composer if possible
+      if (cr) {
+        const w = Math.max(220, Math.min(__gmAiGetChatPanelWidth(), cr.width || mw));
+        el.style.width = w + 'px';
+        el.style.minWidth = w + 'px';
+        el.style.maxWidth = w + 'px';
+      }
+    };
+
+    el.style.left = '0px';
+    el.style.top = '-99999px';
+    el.classList.add('show');
+    try { __pos(); } catch (e0) {}
+
+    const sid = String(__gmAiActiveSessionId || '').trim();
+    const seq = (++__gmAiUndoHistoryReqSeq);
+    try {
+      el.innerHTML = '<div style="padding:6px 8px;color:var(--text2);font-size:12px;">加载中...</div>';
+    } catch (e) {}
+    try {
+      const url = '/api/undo_history' + (sid ? ('?session_id=' + encodeURIComponent(sid) + '&limit=20') : '?limit=20');
+      const res = await GET(url);
+      if (seq !== __gmAiUndoHistoryReqSeq) return;
+      const items = (res && res.ok && Array.isArray(res.items)) ? res.items : [];
+      if (!items.length) {
+        el.innerHTML = '<div style="padding:6px 8px;color:var(--text2);font-size:12px;">暂无可撤回记录</div>';
+        return;
+      }
+      const __fmtRelTime = (dt) => {
+        try {
+          const now = new Date();
+          const d0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+          const d1 = new Date(d0.getTime() - 24 * 3600 * 1000);
+          const dd = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate());
+          const hh = String(dt.getHours()).padStart(2, '0');
+          const mm = String(dt.getMinutes()).padStart(2, '0');
+          if (dd.getTime() === d0.getTime()) return `今日 ${hh}:${mm}`;
+          if (dd.getTime() === d1.getTime()) return `昨天 ${hh}:${mm}`;
+          const mo = String(dt.getMonth() + 1).padStart(2, '0');
+          const da = String(dt.getDate()).padStart(2, '0');
+          return `${mo}-${da} ${hh}:${mm}`;
+        } catch (e) {
+          return '';
+        }
+      };
+
+      const html = items.map((it, i) => {
+        const gid = String(it && it.group_id || '');
+        const addN = Number(it && it.add || 0) || 0;
+        const delN = Number(it && it.delete || 0) || 0;
+        const modN = Number(it && it.modify || 0) || 0;
+        const unkN = Number(it && it.unknown || 0) || 0;
+        const n = Number(it && it.action_count || 0) || 0;
+        const ts0 = (it && it.created_ts !== undefined) ? Number(it.created_ts || 0) : 0;
+        const dt = (ts0 && ts0 > 0) ? (new Date(ts0 * 1000)) : null;
+        const tstr = dt ? __fmtRelTime(dt) : '';
+
+        const files = (it && Array.isArray(it.files)) ? it.files : [];
+        const fileCount = Number(it && it.file_count || 0) || files.length || 0;
+        const titlePath = String((it && (it.title_path || '')) || (files[0] || '') || '').trim();
+        const title = titlePath ? (fileCount > 1 ? (titlePath + ` +${fileCount - 1}`) : titlePath) : '文件变更';
+
+        const opParts = [];
+        if (addN) opParts.push('新增');
+        if (delN) opParts.push('删除');
+        if (modN) opParts.push('修改');
+        const opStr = opParts.length ? (opParts.join('/') + '操作') : (unkN ? '未识别操作' : '操作');
+        const subParts = [];
+        subParts.push(opStr);
+        if (n) subParts.push(`${n}项`);
+        if (tstr) subParts.push(tstr);
+        const sub = subParts.join(' · ');
+        return `<div class="ai-undo-row" data-gid="${esc(gid)}">
+          <div class="meta">
+            <div class="tp">${esc(title)}</div>
+            <div class="sub">${esc(sub)}</div>
+          </div>
+          <div class="act" onclick="__gmAiUndoByGroupId('${esc(gid)}')">撤回</div>
+        </div>`;
+      }).join('');
+      el.innerHTML = html;
+      try { __pos(); } catch (e3) {}
+    } catch (e) {
+      el.innerHTML = '<div style="padding:6px 8px;color:var(--text2);font-size:12px;">加载失败</div>';
+      try { __pos(); } catch (e4) {}
+    }
+  }
+
+  async function __gmAiUndoByGroupId(gid) {
+    try {
+      const g = String(gid || '').trim();
+      if (!g) return;
+      const u = await POST('/api/undo', { group_id: g });
+      const m = String((u && (u.msg || u.error)) || '');
+      const noop = Boolean(u && (u.noop === true)) || (m.indexOf('无可撤销') >= 0);
+      const ok = Boolean(u && u.ok) && (!noop) && (u.applied !== false);
+      if (!ok) {
+        if (noop) {
+          toast('无可撤销操作', 'err');
+        } else {
+          toast('撤销失败：' + (m || '撤销失败'), 'err');
+        }
+        return;
+      }
+      toast('✓ 已撤销', 'ok');
+      try { __gmAiCloseUndoHistoryPanel(); } catch (e0) {}
+      try { await __gmAiRefreshSendCounter(); } catch (e1) {}
+      try { await refresh(); } catch (e2) {}
+    } catch (e) {}
+  }
+
+  // Click counter to open undo history panel
+  try {
+    document.addEventListener('click', (e) => {
+      const t = e && e.target;
+      const el = t && (t.id === 'aiSendCounter' ? t : (t.closest ? t.closest('#aiSendCounter') : null));
+      if (el) {
+        try { __gmAiOpenUndoHistoryPanel(); } catch (e0) {}
+        return;
+      }
+      try { __gmAiCloseUndoHistoryPanel(); } catch (e1) {}
+    }, true);
+  } catch (e) {}
 
   // ── Open Repo ─────────────────────────────────────────────────────────────────
   async function openRepo() {
