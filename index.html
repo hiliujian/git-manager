@@ -2156,6 +2156,7 @@ flex-shrink:0;cursor:pointer;
       border-top-color:var(--accent);border-radius:50%;animation:sp .6s linear infinite;}
     @keyframes sp{to{transform:rotate(360deg);}}
   </style>
+  <script defer src="https://cdn.jsdelivr.net/npm/markdown-it@14.1.0/dist/markdown-it.min.js"></script>
 </head>
 <body>
 
@@ -19597,48 +19598,68 @@ flex-shrink:0;cursor:pointer;
     }
   }
 
-  function __gmMdInline(s) {
+  let __gmMdIt = null;
+
+  function __gmGetMarkdownIt() {
     try {
-      const raw = String(s || '');
-      let out = '';
-      let i = 0;
+      if (__gmMdIt) return __gmMdIt;
+      const ctor = window.markdownit;
+      if (typeof ctor !== 'function') return null;
+      const md = ctor({
+        html: false,
+        linkify: true,
+        breaks: true,
+      });
 
-      const pushText = (x) => { out += esc(x); };
-      const emitImg = (alt, url) => {
-        const u0 = __gmMediaUrlFromMaybePath(url);
-        const safe = __gmSafeMediaUrl(u0);
-        if (!safe) { pushText(`![${alt}](${url})`); return; }
-        out += `<img src="${esc(safe)}" alt="${esc(alt)}" loading="lazy" />`;
-      };
-      const emitLink = (text, url) => {
-        const safe = __gmSafeUrl(url);
-        if (!safe) { pushText(text); return; }
-        out += `<a href="${esc(safe)}" target="_blank" rel="noreferrer">${esc(text)}</a>`;
-      };
+      try {
+        md.validateLink = (url) => {
+          const safe = __gmSafeUrl(url);
+          return Boolean(safe);
+        };
+      } catch (eVL) {}
 
-      const re = /(!\[([^\]]*)\]\(([^\)]+)\))|(\[([^\]]+)\]\(([^\)]+)\))|(`([^`]+)`)/g;
-      let m;
-      while ((m = re.exec(raw))) {
-        const pre = raw.slice(i, m.index);
-        if (pre) pushText(pre);
+      try {
+        const defaultLinkOpen = md.renderer.rules.link_open;
+        md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
+          try {
+            const t = tokens[idx];
+            const href = t.attrGet('href') || '';
+            const safe = __gmSafeUrl(href);
+            if (!safe) {
+              t.attrSet('href', '');
+            } else {
+              t.attrSet('href', safe);
+              t.attrSet('target', '_blank');
+              t.attrSet('rel', 'noreferrer');
+            }
+          } catch (e1) {}
+          return defaultLinkOpen ? defaultLinkOpen(tokens, idx, options, env, self) : self.renderToken(tokens, idx, options);
+        };
+      } catch (eLO) {}
 
-        if (m[1]) {
-          emitImg(m[2] || '', m[3] || '');
-        } else if (m[4]) {
-          emitLink(m[5] || '', m[6] || '');
-        } else if (m[7]) {
-          out += `<code>${esc(m[8] || '')}</code>`;
-        }
-        i = m.index + m[0].length;
-      }
-      const tail = raw.slice(i);
-      if (tail) pushText(tail);
+      try {
+        const defaultImage = md.renderer.rules.image;
+        md.renderer.rules.image = (tokens, idx, options, env, self) => {
+          try {
+            const t = tokens[idx];
+            const src = t.attrGet('src') || '';
+            const mapped = __gmMediaUrlFromMaybePath(src);
+            const safe = __gmSafeMediaUrl(mapped);
+            if (!safe) {
+              t.attrSet('src', '');
+            } else {
+              t.attrSet('src', safe);
+              t.attrSet('loading', 'lazy');
+            }
+          } catch (e2) {}
+          return defaultImage ? defaultImage(tokens, idx, options, env, self) : self.renderToken(tokens, idx, options);
+        };
+      } catch (eImg) {}
 
-      out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-      out = out.replace(/\*([^*]+)\*/g, '<em>$1</em>');
-      return out;
+      __gmMdIt = md;
+      return md;
     } catch (e) {
-      return esc(s);
+      return null;
     }
   }
 
@@ -19646,88 +19667,9 @@ flex-shrink:0;cursor:pointer;
     try {
       const src = String(md || '');
       if (!src) return '';
-
-      // Split by fenced code blocks
-      const parts = src.split(/```/);
-      let out = '';
-      for (let i = 0; i < parts.length; i++) {
-        const chunk = String(parts[i] || '');
-        if (i % 2 === 1) {
-          // code block
-          const lines = chunk.replace(/\r\n/g, '\n').split('\n');
-          if (lines.length && /^[a-z0-9_+\-#.]+$/i.test(lines[0].trim())) lines.shift();
-          const code = lines.join('\n');
-          out += `<pre><code>${esc(code)}</code></pre>`;
-          continue;
-        }
-
-        const text = chunk.replace(/\r\n/g, '\n');
-        const lines = text.split('\n');
-        let inUl = false;
-        let inOl = false;
-        for (let li = 0; li < lines.length; li++) {
-          const lineRaw = lines[li];
-          const line = String(lineRaw || '');
-          const trimmed = line.trim();
-
-          if (!trimmed) {
-            if (inUl) { out += '</ul>'; inUl = false; }
-            if (inOl) { out += '</ol>'; inOl = false; }
-            continue;
-          }
-
-          if (/^---$/.test(trimmed) || /^\*\*\*$/.test(trimmed)) {
-            if (inUl) { out += '</ul>'; inUl = false; }
-            if (inOl) { out += '</ol>'; inOl = false; }
-            out += '<hr />';
-            continue;
-          }
-
-          // headings
-          const hm = trimmed.match(/^(#{1,3})\s+(.+)$/);
-          if (hm) {
-            if (inUl) { out += '</ul>'; inUl = false; }
-            if (inOl) { out += '</ol>'; inOl = false; }
-            const lvl = hm[1].length;
-            out += `<h${lvl}>${__gmMdInline(hm[2])}</h${lvl}>`;
-            continue;
-          }
-
-          // blockquote
-          const qm = trimmed.match(/^>\s?(.+)$/);
-          if (qm) {
-            if (inUl) { out += '</ul>'; inUl = false; }
-            if (inOl) { out += '</ol>'; inOl = false; }
-            out += `<blockquote>${__gmMdInline(qm[1])}</blockquote>`;
-            continue;
-          }
-
-          // ordered list
-          const om = trimmed.match(/^\d+\.\s+(.+)$/);
-          if (om) {
-            if (inUl) { out += '</ul>'; inUl = false; }
-            if (!inOl) { out += '<ol>'; inOl = true; }
-            out += `<li>${__gmMdInline(om[1])}</li>`;
-            continue;
-          }
-
-          // unordered list
-          const um = trimmed.match(/^[-*]\s+(.+)$/);
-          if (um) {
-            if (inOl) { out += '</ol>'; inOl = false; }
-            if (!inUl) { out += '<ul>'; inUl = true; }
-            out += `<li>${__gmMdInline(um[1])}</li>`;
-            continue;
-          }
-
-          if (inUl) { out += '</ul>'; inUl = false; }
-          if (inOl) { out += '</ol>'; inOl = false; }
-          out += `<p>${__gmMdInline(trimmed)}</p>`;
-        }
-        if (inUl) out += '</ul>';
-        if (inOl) out += '</ol>';
-      }
-      return out;
+      const mdit = __gmGetMarkdownIt();
+      if (!mdit) return esc(src);
+      return String(mdit.render(src) || '');
     } catch (e) {
       return esc(md);
     }
