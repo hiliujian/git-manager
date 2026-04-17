@@ -3297,6 +3297,22 @@ flex-shrink:0;cursor:pointer;
     }
   }
 
+  function __gmAiShouldEnableContinueOnError(res, msg) {
+    try {
+      const m = String(msg || (res && (res.msg || res.error)) || '').trim();
+      if (!m) return false;
+      if (m.indexOf('上游返回错误') >= 0) return true;
+      if (m.indexOf('502') >= 0 || m.indexOf('503') >= 0 || m.indexOf('504') >= 0) return true;
+      if (m.indexOf('Bad Gateway') >= 0 || m.indexOf('Gateway') >= 0) return true;
+      if (m.indexOf('响应不是JSON') >= 0) return true;
+      if (m.indexOf('<html') >= 0 || m.indexOf('<head') >= 0 || m.indexOf('<body') >= 0) return true;
+      if (m.indexOf('connection failed') >= 0 || m.indexOf('连接失败') >= 0) return true;
+      return false;
+    } catch (e) {
+      return false;
+    }
+  }
+
   async function __gmAiSendAgentNow() {
     const ta = document.getElementById('aiChatInput');
     const text = ta ? String(ta.value || '').trim() : '';
@@ -3364,6 +3380,11 @@ flex-shrink:0;cursor:pointer;
       __gmAiIsResponding = false;
       try { __gmAiSetSendButtonState(false); } catch (eB2) {}
       __gmAiActiveTurnUndoGroupId = '';
+      try {
+        if (__gmAiShouldEnableContinueOnError(res, msg)) {
+          __gmAiSetContinueState(true, 'upstream_error');
+        }
+      } catch (eCt0) {}
       __gmToastApiError('对话失败', res, msg);
       return;
     }
@@ -3385,6 +3406,11 @@ flex-shrink:0;cursor:pointer;
       __gmAiIsResponding = false;
       try { __gmAiSetSendButtonState(false); } catch (eB2) {}
       __gmAiActiveTurnUndoGroupId = '';
+      try {
+        if (__gmAiShouldEnableContinueOnError(res, msg)) {
+          __gmAiSetContinueState(true, 'upstream_error');
+        }
+      } catch (eCt1) {}
       __gmToastApiError('对话失败', res, msg);
       return;
     }
@@ -9593,7 +9619,7 @@ flex-shrink:0;cursor:pointer;
       __gmAiNextSendIsContinue = true;
       const ta = document.getElementById('aiChatInput');
       if (ta) {
-        ta.value = '继续上次未完成的步骤：请基于当前会话上下文与工具回执，从失败点继续执行剩余任务。';
+        ta.value = '继续';
         try { __gmAiSchedulePersistDraft(); } catch (e0s) {}
         try { ta.focus(); } catch (e0) {}
       }
@@ -12430,7 +12456,6 @@ flex-shrink:0;cursor:pointer;
       const mw = Math.max(220, Math.min(__gmAiGetChatPanelWidth(), el.offsetWidth || 320));
       const mh = Math.min(maxH, (el.offsetHeight || 220));
       const left0 = cr ? cr.left : anchorR.left;
-      const right0 = cr ? cr.right : (left0 + mw);
       const left = Math.max(8, Math.min(window.innerWidth - mw - 8, Math.max(8, left0)));
       const preferBottom = anchorR.bottom + 4;
       const top = (preferBottom + mh <= window.innerHeight - 8) ? preferBottom : Math.max(8, anchorR.top - mh - 4);
