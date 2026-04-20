@@ -88,6 +88,73 @@ WS_PORT = 7843  # WebSocket端口号
 ws_clients = set()  # WebSocket客户端集合
 ws_clients_lock = threading.Lock()
 
+
+def get_repo_status():
+    if not REPO_PATH:
+        return False, "未打开仓库", {}
+    try:
+        origin_url = ""
+        try:
+            out, _, code = run_git(["config", "--get", "remote.origin.url"])
+            if code == 0:
+                origin_url = (out or "").strip()
+        except Exception:
+            origin_url = ""
+
+        has_staged = False
+        staged_count = 0
+        try:
+            sf, err_sf = get_staged_files()
+            if (not err_sf) and isinstance(sf, list):
+                staged_count = len(sf)
+                has_staged = staged_count > 0
+        except Exception:
+            has_staged = False
+            staged_count = 0
+
+        st0 = {
+            "repo": REPO_PATH,
+            "valid": bool(REPO_PATH and os.path.isdir(os.path.join(REPO_PATH, ".git"))),
+            "origin_url": origin_url,
+            "has_staged_changes": has_staged,
+            "staged_count": staged_count,
+        }
+        return True, "", st0
+    except Exception as e:
+        return False, str(e), {}
+
+
+def open_repo(path: str):
+    global REPO_PATH
+    raw = str(path or "").strip()
+    if not raw:
+        return False, "路径为空"
+    raw = os.path.expanduser(raw)
+    if not os.path.isdir(raw):
+        return False, f"目录不存在: {raw}"
+    check = raw
+    root = None
+    for _ in range(15):
+        if os.path.isdir(os.path.join(check, ".git")):
+            root = check
+            break
+        parent = os.path.dirname(check)
+        if parent == check:
+            break
+        check = parent
+    if not root:
+        return False, "不是 git 仓库（未找到 .git 目录）"
+    REPO_PATH = root
+    try:
+        _undo_load_state()
+    except Exception:
+        pass
+    return True, ""
+
+
+def workspace_context_text():
+    return get_workspace_context()
+
 ai_config_lock = threading.Lock()
 ai_history_lock = threading.Lock()
 
@@ -2038,7 +2105,7 @@ def get_file_state_hash():
         # 轻量级状态：基于 git status porcelain 输出 + 相关文件 mtime
         # 仅用 status 输出会导致“持续编辑但状态不变（一直是 M）”时无法触发推送。
         # 这里额外叠加 mtime，避免触发昂贵的 git diff 统计。
-        out, err, code = run_git(["status", "--porcelain=v1", "-u", "-z"])
+        out, err, code = run_git(["status", "--porcelain=v1", "-u", "-z"], timeout=30)
         if code != 0:
             logger.debug(f"获取文件状态失败: {err}")
             return None
@@ -2303,6 +2370,44 @@ def run_git(args, cwd=None, input_data=None, timeout=60):
         logger.error(f"Git 命令执行异常: {cmd_str} - {str(e)}", exc_info=True)
         return "", str(e), 1
 
+def unstage_file(rel_path: str):
+    if not REPO_PATH:
+        return False, "未打开仓库"
+    rp = str(rel_path or "").strip()
+    if not rp:
+        return False, "缺少 path"
+    _, err, code = run_git(["restore", "--staged", "--", rp], timeout=120)
+    if code != 0:
+        return False, err or "取消暂存失败"
+    return True, ""
+
+def discard_staged_file(rel_path: str):
+    if not REPO_PATH:
+        return False, "未打开仓库"
+    rp = str(rel_path or "").strip()
+    if not rp:
+        return False, "缺少 path"
+    _, err, code = run_git(["restore", "--staged", "--worktree", "--source=HEAD", "--", rp], timeout=120)
+    if code != 0:
+        return False, err or "丢弃暂存区失败"
+    return True, ""
+
+def unstage_all_staged():
+    if not REPO_PATH:
+        return False, "未打开仓库"
+    _, err, code = run_git(["restore", "--staged", "."], timeout=180)
+    if code != 0:
+        return False, err or "取消全部暂存失败"
+    return True, ""
+
+def discard_all_staged():
+    if not REPO_PATH:
+        return False, "未打开仓库"
+    _, err, code = run_git(["restore", "--staged", "--worktree", "--source=HEAD", "."], timeout=180)
+    if code != 0:
+        return False, err or "丢弃全部暂存失败"
+    return True, ""
+
 def get_unmerged_files():
     """Return a list of unmerged (conflicted) files in the working tree.
 
@@ -2348,7 +2453,6 @@ def has_any_staged_changes():
     raw = out or ""
     files = [p for p in raw.split("\x00") if p]
     return (len(files) > 0), None
-
 
 def get_staged_files():
     if not REPO_PATH:
@@ -5233,6 +5337,58 @@ def get_capabilities_spec():
             "example": {"type": "workspace_context"},
         },
         {
+            "type": "pull_safe",
+            "desc": "拉取远程更新（git pull --no-edit），并返回：是否有冲突、是否本地修改会被覆盖、冲突文件列表。",
+            "required": [],
+            "properties": {},
+            "example": {"type": "pull_safe"},
+        },
+        {
+            "type": "stash_and_pull",
+            "desc": "暂存本地修改（git stash push -u）后执行更新（git pull --no-edit）。完成后可用 stash_pop 恢复修改。",
+            "required": [],
+            "properties": {},
+            "example": {"type": "stash_and_pull"},
+        },
+        {
+            "type": "commit_and_pull",
+            "desc": "提交本地修改（git add -A + git commit）后执行更新（git pull --no-edit）。",
+            "required": ["message"],
+            "properties": {
+                "message": {"type": "string", "desc": "提交信息"},
+            },
+            "example": {"type": "commit_and_pull", "message": "WIP: save changes before pull"},
+        },
+        {
+            "type": "switch_branch_safe",
+            "desc": "切换分支（包含覆盖检测）。若工作区有未提交修改且会被覆盖，则返回 needs_handling/affected_files。",
+            "required": ["branch"],
+            "properties": {
+                "branch": {"type": "string", "desc": "目标分支名（支持 remotes/origin/foo 或 origin/foo 或本地分支名）"},
+                "detached": {"type": "boolean", "desc": "可选：远端分支时是否仅切到远端（detached HEAD）"},
+            },
+            "example": {"type": "switch_branch_safe", "branch": "main"},
+        },
+        {
+            "type": "stash_and_switch",
+            "desc": "暂存本地修改（git stash push -u）后切换分支。完成后可用 stash_pop 恢复修改。",
+            "required": ["branch"],
+            "properties": {
+                "branch": {"type": "string", "desc": "目标分支名"},
+            },
+            "example": {"type": "stash_and_switch", "branch": "main"},
+        },
+        {
+            "type": "commit_and_switch",
+            "desc": "提交本地修改（git add -A + git commit）后切换分支。",
+            "required": ["branch", "message"],
+            "properties": {
+                "branch": {"type": "string", "desc": "目标分支名"},
+                "message": {"type": "string", "desc": "提交信息"},
+            },
+            "example": {"type": "commit_and_switch", "branch": "main", "message": "save changes"},
+        },
+        {
             "type": "list_files",
             "desc": "列出仓库文件变更列表（用于了解哪些文件有修改/新增/删除）。",
             "required": [],
@@ -5455,23 +5611,6 @@ def get_capabilities_spec():
             "example": {"type": "push"},
         },
         {
-            "type": "stash_and_pull",
-            "desc": "暂存(stash)后拉取(pull)。",
-            "required": [],
-            "properties": {},
-            "example": {"type": "stash_and_pull"},
-        },
-        {
-            "type": "commit_and_pull",
-            "desc": "提交(commit)后拉取(pull)。",
-            "required": ["message"],
-            "properties": {
-                "message": {"type": "string", "desc": "提交信息"},
-                "files": {"type": "array", "desc": "要提交的文件列表"},
-            },
-            "example": {"type": "commit_and_pull", "message": "chore: sync", "files": ["README.md"]},
-        },
-        {
             "type": "switch_branch",
             "desc": "切换分支。",
             "required": ["branch"],
@@ -5479,26 +5618,6 @@ def get_capabilities_spec():
                 "branch": {"type": "string", "desc": "分支名"},
             },
             "example": {"type": "switch_branch", "branch": "main"},
-        },
-        {
-            "type": "stash_and_switch",
-            "desc": "暂存(stash)后切换分支。",
-            "required": ["branch"],
-            "properties": {
-                "branch": {"type": "string", "desc": "分支名"},
-            },
-            "example": {"type": "stash_and_switch", "branch": "main"},
-        },
-        {
-            "type": "commit_and_switch",
-            "desc": "提交(commit)后切换分支。",
-            "required": ["branch", "message"],
-            "properties": {
-                "branch": {"type": "string", "desc": "分支名"},
-                "message": {"type": "string", "desc": "提交信息"},
-                "files": {"type": "array", "desc": "要提交的文件列表"},
-            },
-            "example": {"type": "commit_and_switch", "branch": "main", "message": "chore: save", "files": ["README.md"]},
         },
         {
             "type": "stash_pop",
@@ -5737,6 +5856,30 @@ def _ai_build_system_context_text():
         "1. **工具驱动**：通过调用工具完成实际操作，而非仅描述步骤\n"
         "2. **结果导向**：基于工具返回的真实结果回复用户，不臆造结果\n"
         "3. **清晰沟通**：用自然语言解释操作结果，隐藏技术细节\n\n"
+
+        "# 术语（避免歧义，必须严格遵守）\n"
+        "- **暂存（stash）**：指 `git stash` 的暂存栈；对应工具 `stash_and_pull` / `stash_and_switch`，恢复用 `stash_pop`。\n"
+        "- **暂存区（staged / index）**：指 `git add` 后进入 index 的暂存区；对应工具如 `stage_file`、以及提交流程中的 add/commit。\n"
+        "- 当用户说“暂存后更新/暂存后切换”时，在本系统语境下默认指 **stash**（不是 git add）。\n\n"
+
+        "# 关键交互约束（必须遵守）\n"
+        "- 当用户要执行 Git 操作（如 pull / switch / commit / stash）时，你必须先用 `status` 确认当前是否已打开仓库。\n"
+        "  - 若 `status` 显示仓库未打开：你只能提示用户选择仓库路径并调用 `open_repo`；不要在仓库已打开时重复要求打开。\n"
+        "- 当用户要执行 **更新（pull）** 或 **切换分支**，且检测到本地存在未提交修改时，你必须先在对话中让用户选择处理方式：\n"
+        "  - 更新（pull）：`提交后更新` / `暂存后更新` / `直接更新` / `取消`\n"
+        "  - 切换分支：`提交后切换` / `暂存后切换` / `直接切换` / `取消`\n"
+        "- **用户未明确选择前，禁止执行会改变仓库状态的工具调用**（例如 commit/pull/switch/stash）。\n"
+        "- 若需要提交信息，必须在对话中向用户索要提交信息后再执行。\n\n"
+
+        "# 复合操作后的状态说明与后续选择（必须遵守）\n"
+        "- 当你执行了以下任一复合工具后，你必须在同一轮回复中：\n"
+        "  1) 用一句话说明：做了什么 + 是否成功 + 当前仓库处于什么状态；\n"
+        "  2) 给出清晰的后续可选步骤，并让用户在对话中选择下一步（不要替用户决定）。\n"
+        "- `stash_and_pull` / `stash_and_switch` 完成后：\n"
+        "  - 如果发生了 stash（工具返回 stashed=true 或 pending_pop=true）：必须提示用户选择：`恢复暂存（stash_pop）` / `暂不恢复` / `取消`。\n"
+        "  - 如果没有 stash（stashed=false）：也要说明“无需 stash”。\n"
+        "- `commit_and_pull` / `commit_and_switch` 完成后：\n"
+        "  - 必须提示用户选择：`继续推送（push）` / `暂不推送` / `查看提交记录（commits）` / `取消`。\n\n"
         
         "# 输出规范\n\n"
         
@@ -5799,9 +5942,13 @@ def _ai_build_system_context_text():
         "### Git 操作\n"
         "- `stage_file` - 暂存文件\n"
         "- `commit` - 提交更改\n"
-        "- `pull` - 拉取远程更新\n"
+        "- `pull_safe` - 拉取远程更新（包含冲突/覆盖检测，推荐）\n"
+        "- `stash_and_pull` - 暂存修改并更新（完成后可用 stash_pop 恢复）\n"
+        "- `commit_and_pull` - 提交并更新\n"
         "- `push` - 推送到远程\n"
-        "- `switch_branch` - 切换分支\n"
+        "- `switch_branch_safe` - 切换分支（包含覆盖检测，推荐）\n"
+        "- `stash_and_switch` - 暂存修改并切换分支（完成后可用 stash_pop 恢复）\n"
+        "- `commit_and_switch` - 提交并切换分支\n"
         "- `stash_pop` - 恢复暂存的修改\n\n"
         
         "### 信息查询\n"
@@ -6363,13 +6510,111 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
         notify_files_updated()
         return True, "", {"output": out}
 
-    if t == "pull":
-        out, err, code = run_git(["pull"]) 
-        if code != 0:
-            return False, (err or out or "pull failed"), {}
-        invalidate_changed_files_cache()
-        notify_files_updated()
-        return True, "", {"output": out}
+    if t in ("pull_safe",):
+        out, err, code = run_git(["pull", "--no-edit"], timeout=300)
+        output = (out or "")
+        error = (err or "")
+        local_changes_conflict = False
+        affected_files = []
+        try:
+            if code != 0 and (
+                ("would be overwritten" in error.lower()) or
+                ("will be overwritten" in error.lower()) or
+                ("本地修改" in error) or
+                ("覆盖" in error)
+            ):
+                local_changes_conflict = True
+                lines = error.split("\n")
+                in_file_list = False
+                for line in lines:
+                    line = (line or "").strip()
+                    if ("would be overwritten" in line.lower()) or ("will be overwritten" in line.lower()):
+                        in_file_list = True
+                        continue
+                    if in_file_list:
+                        if line.startswith("Please") or line.startswith("Aborting") or (not line):
+                            break
+                        if line and (not line.startswith("error:")) and (not line.startswith("hint:")):
+                            affected_files.append(line.strip())
+        except Exception:
+            pass
+
+        conflict_files, _ = get_unmerged_files()
+        has_conflicts = bool(conflict_files)
+        ok = (code == 0) and (not has_conflicts)
+        if ok:
+            try:
+                invalidate_changed_files_cache()
+                notify_files_updated()
+            except Exception:
+                pass
+        return True, "", {
+            "ok": ok,
+            "output": output.strip(),
+            "error": error.strip(),
+            "has_conflicts": has_conflicts,
+            "conflict_files": conflict_files,
+            "local_changes_conflict": local_changes_conflict,
+            "affected_files": affected_files,
+        }
+
+    if t == "stash_and_pull":
+        stash_out, stash_err, stash_code = run_git(["stash", "push", "-u", "-m", "Auto stash before pull"], timeout=60)
+        if stash_code != 0:
+            return False, (stash_err or stash_out or "git stash 失败"), {"output": (stash_out or "").strip(), "error": (stash_err or "").strip()}
+        stashed = "No local changes to save" not in (stash_out or "")
+
+        pull_out, pull_err, pull_code = run_git(["pull", "--no-edit"], timeout=300)
+        conflict_files, _ = get_unmerged_files()
+        has_conflicts = bool(conflict_files)
+        ok = (pull_code == 0) and (not has_conflicts)
+        try:
+            invalidate_changed_files_cache()
+            notify_files_updated()
+        except Exception:
+            pass
+        return True, "", {
+            "ok": ok,
+            "stashed": stashed,
+            "pending_pop": bool(stashed),
+            "pull_output": (pull_out or "").strip(),
+            "pull_error": (pull_err or "").strip(),
+            "has_conflicts": has_conflicts,
+            "conflict_files": conflict_files,
+            "message": "成功暂存修改并更新" if ok else ("更新未完成：你的本地修改已暂存（可稍后手动恢复）" if stashed else "更新未完成"),
+        }
+
+    if t == "commit_and_pull":
+        commit_msg = str(tool.get("message") or "").strip()
+        if not commit_msg:
+            return False, "提交信息不能为空", {}
+
+        add_out, add_err, add_code = run_git(["add", "-A"], timeout=60)
+        if add_code != 0:
+            return False, (add_err or add_out or "暂存文件失败"), {}
+
+        commit_out, commit_err, commit_code = run_git(["commit", "-m", commit_msg], timeout=60)
+        if commit_code != 0:
+            return False, (commit_err or commit_out or "提交失败"), {}
+
+        pull_out, pull_err, pull_code = run_git(["pull", "--no-edit"], timeout=300)
+        conflict_files, _ = get_unmerged_files()
+        has_conflicts = bool(conflict_files)
+        ok = (pull_code == 0) and (not has_conflicts)
+        try:
+            invalidate_changed_files_cache()
+            notify_files_updated()
+        except Exception:
+            pass
+        return True, "", {
+            "ok": ok,
+            "commit_output": (commit_out or "").strip(),
+            "pull_output": (pull_out or "").strip(),
+            "pull_error": (pull_err or "").strip(),
+            "has_conflicts": has_conflicts,
+            "conflict_files": conflict_files,
+            "message": "成功提交并更新" if ok else "提交成功但更新时发生冲突",
+        }
 
     if t == "push":
         out, err, code = run_git(["push"])
@@ -6385,14 +6630,162 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
         notify_files_updated()
         return True, "", {"output": out}
 
-    if t == "switch_branch":
-        br = str(tool.get("branch") or "").strip()
-        out, err, code = run_git(["switch", br])
-        if code != 0:
-            return False, (err or out or "switch failed"), {}
-        invalidate_changed_files_cache()
-        notify_files_updated()
-        return True, "", {"branch": br}
+    if t in ("switch_branch_safe",):
+        target_branch = str(tool.get("branch") or "").strip()
+        if not target_branch:
+            return False, "未指定目标分支", {}
+
+        # 获取当前分支
+        current_out, current_err, current_code = run_git(["branch", "--show-current"], timeout=30)
+        current_branch = (current_out or "").strip()
+        if current_code != 0:
+            return False, (current_err or "获取当前分支失败"), {}
+        if target_branch == current_branch:
+            return True, "", {"ok": True, "current": current_branch, "message": "已在目标分支上"}
+
+        status_out, _, _ = run_git(["status", "--porcelain"], timeout=30)
+        has_changes = bool((status_out or "").strip())
+
+        is_remote, remote_ref, _raw = _normalize_remote_ref(target_branch)
+        want_detached = bool(tool.get("detached"))
+
+        if not has_changes:
+            if is_remote and want_detached:
+                remote_ref = remote_ref or target_branch.replace("remotes/", "", 1)
+                out, err, code = run_git(["switch", "--detach", remote_ref], timeout=120)
+                if code != 0:
+                    out, err, code = run_git(["checkout", remote_ref], timeout=120)
+                if code != 0:
+                    return True, "", {"ok": False, "error": err or "切换到远端分支失败", "output": out or ""}
+                _, cur = get_branches()
+                try:
+                    invalidate_changed_files_cache()
+                    notify_files_updated()
+                except Exception:
+                    pass
+                return True, "", {"ok": True, "current": cur, "message": f"成功切换到分支 {cur}"}
+
+            ok2, cur2, err_msg, out_msg, _safe_err = switch_branch(target_branch)
+            if ok2:
+                try:
+                    invalidate_changed_files_cache()
+                    notify_files_updated()
+                except Exception:
+                    pass
+                return True, "", {"ok": True, "current": cur2, "message": f"成功切换到分支 {cur2}"}
+            return True, "", {"ok": False, "error": err_msg or "切换分支失败", "output": out_msg or ""}
+
+        # 有本地修改：尝试切换，失败时解析“会覆盖”的受影响文件列表
+        if is_remote and (not want_detached):
+            return True, "", {
+                "ok": False,
+                "needs_handling": True,
+                "has_uncommitted_changes": True,
+                "affected_files": [],
+                "error": "工作区有未提交的修改，请先提交/暂存后再从远端分支创建/切换本地分支",
+                "message": "工作区有未提交的修改，请先处理后再切换远端分支",
+            }
+
+        test_out, test_err, test_code = run_git(["checkout", target_branch], timeout=60)
+        if test_code == 0:
+            try:
+                invalidate_changed_files_cache()
+                notify_files_updated()
+            except Exception:
+                pass
+            return True, "", {
+                "ok": True,
+                "current": target_branch,
+                "has_uncommitted_changes": True,
+                "message": f"成功切换到分支 {target_branch}，未提交的修改已保留",
+            }
+
+        error_msg = (test_err or "").lower()
+        if ("would be overwritten" in error_msg) or ("overwritten by checkout" in error_msg):
+            affected_files = []
+            try:
+                lines = (test_err or "").split("\n")
+                in_file_list = False
+                for line in lines:
+                    line = (line or "").strip()
+                    if ("would be overwritten" in line.lower()) or ("overwritten by checkout" in line.lower()):
+                        in_file_list = True
+                        continue
+                    if in_file_list:
+                        if line.startswith("Please") or line.startswith("Aborting") or (not line):
+                            break
+                        if line and (not line.startswith("error:")) and (not line.startswith("hint:")):
+                            affected_files.append(line.strip())
+            except Exception:
+                affected_files = []
+            return True, "", {
+                "ok": False,
+                "needs_handling": True,
+                "has_uncommitted_changes": True,
+                "affected_files": affected_files,
+                "error": "工作区有未提交的修改会被覆盖",
+                "message": "切换分支会覆盖当前未提交的修改，请先处理这些修改",
+            }
+
+        return True, "", {"ok": False, "error": (test_err or "切换分支失败"), "output": (test_out or "")}
+
+    if t == "stash_and_switch":
+        target_branch = str(tool.get("branch") or "").strip()
+        if not target_branch:
+            return False, "未指定目标分支", {}
+
+        stash_out, stash_err, stash_code = run_git(
+            ["stash", "push", "-u", "-m", f"Auto stash before switching to {target_branch}"],
+            timeout=60,
+        )
+        if stash_code != 0:
+            return False, (stash_err or stash_out or "git stash 失败"), {"output": (stash_out or "").strip(), "error": (stash_err or "").strip()}
+        stashed = "No local changes to save" not in (stash_out or "")
+
+        dirty2, detail2 = _has_worktree_changes()
+        if dirty2:
+            if stashed:
+                try:
+                    run_git(["stash", "pop"], timeout=60)
+                except Exception:
+                    pass
+            return False, "暂存后工作区仍存在未提交更改，无法安全切换分支（可能包含未被 stash 的变更）", {"output": detail2 or ""}
+
+        ok2, cur2, err_msg, out_msg, _safe_err = switch_branch(target_branch)
+        try:
+            invalidate_changed_files_cache()
+            notify_files_updated()
+        except Exception:
+            pass
+        if ok2:
+            return True, "", {"ok": True, "current": cur2, "stashed": stashed, "has_stash": bool(stashed), "message": f"成功切换到分支 {cur2}"}
+        return True, "", {"ok": False, "error": err_msg or "切换分支失败", "output": out_msg or "", "stashed": stashed, "has_stash": bool(stashed)}
+
+    if t == "commit_and_switch":
+        target_branch = str(tool.get("branch") or "").strip()
+        commit_msg = str(tool.get("message") or "").strip()
+        if not target_branch:
+            return False, "未指定目标分支", {}
+        if not commit_msg:
+            return False, "提交信息不能为空", {}
+
+        add_out, add_err, add_code = run_git(["add", "-A"], timeout=60)
+        if add_code != 0:
+            return False, (add_err or add_out or "暂存文件失败"), {}
+
+        commit_out, commit_err, commit_code = run_git(["commit", "-m", commit_msg], timeout=60)
+        if commit_code != 0:
+            return False, (commit_err or commit_out or "提交失败"), {}
+
+        ok2, cur2, err_msg, out_msg, _safe_err = switch_branch(target_branch)
+        try:
+            invalidate_changed_files_cache()
+            notify_files_updated()
+        except Exception:
+            pass
+        if ok2:
+            return True, "", {"ok": True, "current": cur2, "commit_output": (commit_out or "").strip(), "message": f"成功提交并切换到分支 {cur2}"}
+        return True, "", {"ok": False, "error": err_msg or "切换分支失败", "output": out_msg or "", "commit_output": (commit_out or "").strip()}
 
     # Undo
     if t in ("undo_last_turn", "undo"):
@@ -8126,34 +8519,15 @@ class Handler(BaseHTTPRequestHandler):
                     logger.warning("打开仓库失败: 路径为空")
                     self.send_json({"error":"路径为空"}, 400)
                     return
-                raw = os.path.expanduser(raw)
                 logger.info(f"尝试打开仓库: {raw}")
-                if not os.path.isdir(raw):
-                    logger.error(f"打开仓库失败: 目录不存在 - {raw}")
-                    self.send_json({"error":f"目录不存在: {raw}"}, 400)
+                ok, msg = open_repo(raw)
+                if not ok:
+                    logger.error(f"打开仓库失败: {msg} - {raw}")
+                    self.send_json({"error": msg or "打开仓库失败"}, 400)
                     return
-                check = raw
-                root  = None
-                for _ in range(15):
-                    if os.path.isdir(os.path.join(check, ".git")):
-                        root = check
-                        break
-                    parent = os.path.dirname(check)
-                    if parent == check:
-                        break
-                    check = parent
-                if not root:
-                    logger.error(f"打开仓库失败: 不是 git 仓库 - {raw}")
-                    self.send_json({"error":"不是 git 仓库（未找到 .git 目录）"}, 400)
-                    return
-                REPO_PATH = root
-                try:
-                    _undo_load_state()
-                except Exception:
-                    pass
                 _, cur = get_branches()
-                logger.info(f"成功打开仓库: {root} (分支: {cur})")
-                self.send_json({"ok": True, "repo": root, "branch": cur})
+                logger.info(f"成功打开仓库: {REPO_PATH} (分支: {cur})")
+                self.send_json({"ok": True, "repo": REPO_PATH, "branch": cur})
 
             elif p == "/api/unstage_file":
                 logger.info("处理 /api/unstage_file 请求")

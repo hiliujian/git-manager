@@ -3298,22 +3298,6 @@ flex-shrink:0;cursor:pointer;
     }
   }
 
-  function __gmAiShouldEnableContinueOnError(res, msg) {
-    try {
-      const m = String(msg || (res && (res.msg || res.error)) || '').trim();
-      if (!m) return false;
-      if (m.indexOf('上游返回错误') >= 0) return true;
-      if (m.indexOf('502') >= 0 || m.indexOf('503') >= 0 || m.indexOf('504') >= 0) return true;
-      if (m.indexOf('Bad Gateway') >= 0 || m.indexOf('Gateway') >= 0) return true;
-      if (m.indexOf('响应不是JSON') >= 0) return true;
-      if (m.indexOf('<html') >= 0 || m.indexOf('<head') >= 0 || m.indexOf('<body') >= 0) return true;
-      if (m.indexOf('connection failed') >= 0 || m.indexOf('连接失败') >= 0) return true;
-      return false;
-    } catch (e) {
-      return false;
-    }
-  }
-
   async function __gmAiSendAgentNow() {
     const ta = document.getElementById('aiChatInput');
     const text = ta ? String(ta.value || '').trim() : '';
@@ -3381,11 +3365,7 @@ flex-shrink:0;cursor:pointer;
       __gmAiIsResponding = false;
       try { __gmAiSetSendButtonState(false); } catch (eB2) {}
       __gmAiActiveTurnUndoGroupId = '';
-      try {
-        if (__gmAiShouldEnableContinueOnError(res, msg)) {
-          __gmAiSetContinueState(true, 'upstream_error');
-        }
-      } catch (eCt0) {}
+      try { __gmAiSetContinueState(true, 'error'); } catch (eCt0) {}
       __gmToastApiError('对话失败', res, msg);
       return;
     }
@@ -3407,11 +3387,7 @@ flex-shrink:0;cursor:pointer;
       __gmAiIsResponding = false;
       try { __gmAiSetSendButtonState(false); } catch (eB2) {}
       __gmAiActiveTurnUndoGroupId = '';
-      try {
-        if (__gmAiShouldEnableContinueOnError(res, msg)) {
-          __gmAiSetContinueState(true, 'upstream_error');
-        }
-      } catch (eCt1) {}
+      try { __gmAiSetContinueState(true, 'error'); } catch (eCt1) {}
       __gmToastApiError('对话失败', res, msg);
       return;
     }
@@ -9287,6 +9263,11 @@ flex-shrink:0;cursor:pointer;
                   __gmAiSetContinueState(true, rr || 'server');
                 }
               } catch (eCt) {}
+              try {
+                if (data && data.ok === false) {
+                  __gmAiSetContinueState(true, 'error');
+                }
+              } catch (eCt2) {}
               try {
                 if (__gmAiRunStatusCache && __gmAiRunStatusCache.delete) __gmAiRunStatusCache.delete(runId);
               } catch (eC1) {}
