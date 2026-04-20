@@ -1624,9 +1624,18 @@ flex-shrink:0;cursor:pointer;
       border:1px solid rgba(255,255,255,0.08);padding:1px 4px;border-radius:6px;}
     [data-theme="light"] .ai-md code{background:rgba(0,0,0,0.04);border-color:rgba(0,0,0,0.10);}
     .ai-md pre{margin:8px 0;padding:10px 10px;border-radius:10px;overflow:auto;
-      background:rgba(0,0,0,0.28);border:1px solid rgba(255,255,255,0.08);}
+      background:rgba(0,0,0,0.28);border:1px solid rgba(255,255,255,0.08);position:relative;}
     [data-theme="light"] .ai-md pre{background:rgba(0,0,0,0.06);border-color:rgba(0,0,0,0.10);}
     .ai-md pre code{background:none;border:none;padding:0;font-size:11px;}
+    .ai-md .ai-code-copy{position:absolute;top:8px;right:8px;z-index:2;
+      font-size:inherit;line-height:1; padding:6px 8px; border-radius:8px;
+      border:1px solid rgba(255,255,255,0.16); background:rgba(0,0,0,0.35);
+      color:var(--text); cursor:pointer; user-select:none; opacity:0;
+      transition:opacity 0.15s ease, background 0.15s ease, border-color 0.15s ease;}
+    .ai-md pre:hover .ai-code-copy{opacity:1;}
+    .ai-md .ai-code-copy:hover{background:rgba(0,0,0,0.52);border-color:rgba(255,255,255,0.24);}
+    [data-theme="light"] .ai-md .ai-code-copy{background:rgba(255,255,255,0.75);border-color:rgba(0,0,0,0.14);}
+    [data-theme="light"] .ai-md .ai-code-copy:hover{background:rgba(255,255,255,0.92);border-color:rgba(0,0,0,0.22);}
     .ai-md blockquote{margin:8px 0;padding:6px 10px;border-left:3px solid rgba(110,168,254,0.45);
       color:var(--text2);background:rgba(110,168,254,0.06);border-radius:10px;}
     [data-theme="light"] .ai-md blockquote{background:rgba(76,166,255,0.08);}
@@ -2914,6 +2923,34 @@ flex-shrink:0;cursor:pointer;
         setTimeout(() => {
           try { loadAiChatHistory(pid).catch(()=>{}); } catch (e0) {}
         }, 0);
+      }
+    } catch (e) {}
+  }
+
+  function __gmAiEnhanceCodeBlocks(root) {
+    try {
+      const host = root && root.querySelector ? root : document;
+      const pres = host.querySelectorAll('.ai-md pre');
+      if (!pres || !pres.length) return;
+      for (const pre of pres) {
+        try {
+          if (!pre || pre.getAttribute('data-has-copy') === '1') continue;
+          const code = pre.querySelector('code');
+          if (!code) continue;
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'ai-code-copy';
+          btn.textContent = '复制';
+          btn.title = '复制代码';
+          btn.addEventListener('click', async (ev) => {
+            try { ev.preventDefault(); ev.stopPropagation(); } catch (e0) {}
+            const ok = await __gmCopyTextToClipboard(code.innerText || code.textContent || '');
+            if (ok) toast('✓ 已复制', 'ok');
+            else toast('复制失败', 'err');
+          });
+          pre.insertBefore(btn, pre.firstChild);
+          pre.setAttribute('data-has-copy', '1');
+        } catch (e2) {}
       }
     } catch (e) {}
   }
@@ -9857,6 +9894,7 @@ flex-shrink:0;cursor:pointer;
 
         node.className = 'ai-msg ' + (isUser ? 'user' : 'assistant');
         node.innerHTML = `<div class="ai-meta">${esc(isUser ? '你' : 'AI')}</div><div class="ai-bubble${userLoading ? ' user-loading' : ''}${isPending ? ' pending' : ''}"><div class="ai-msg-actions"><button title="删除" onclick="aiDeleteMsg(${idx})">×</button></div><div class="ai-md">${isPending ? esc(content) : aiRenderMarkdown(content)}</div></div>`;
+        try { __gmAiEnhanceCodeBlocks(node); } catch (eEnh) {}
       }
 
       for (let i = children.length - 1; i >= len; i--) {
