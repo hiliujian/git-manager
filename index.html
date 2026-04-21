@@ -1627,6 +1627,7 @@ flex-shrink:0;cursor:pointer;
       background:rgba(0,0,0,0.28);border:1px solid rgba(255,255,255,0.08);position:relative;}
     [data-theme="light"] .ai-md pre{background:rgba(0,0,0,0.06);border-color:rgba(0,0,0,0.10);}
     .ai-md pre code{background:none;border:none;padding:0;font-size:11px;}
+    .ai-md pre.ai-pre-wrap .ai-pre-scroll{overflow:auto;max-width:100%;}
     .ai-md .ai-code-copy{position:absolute;top:8px;right:8px;z-index:2;
       font-size:inherit;line-height:1; padding:6px 8px; border-radius:8px;
       border:1px solid rgba(255,255,255,0.16); background:rgba(0,0,0,0.35);
@@ -2937,6 +2938,22 @@ flex-shrink:0;cursor:pointer;
           if (!pre || pre.getAttribute('data-has-copy') === '1') continue;
           const code = pre.querySelector('code');
           if (!code) continue;
+
+          try {
+            if (pre.getAttribute('data-pre-wrapped') !== '1') {
+              const wrap = document.createElement('div');
+              wrap.className = 'ai-pre-scroll';
+              const children = Array.from(pre.childNodes || []);
+              for (const ch of children) {
+                if (ch && ch.nodeType === 1 && ch.classList && ch.classList.contains('ai-code-copy')) continue;
+                wrap.appendChild(ch);
+              }
+              pre.appendChild(wrap);
+              pre.classList.add('ai-pre-wrap');
+              pre.setAttribute('data-pre-wrapped', '1');
+            }
+          } catch (eWrap) {}
+
           const btn = document.createElement('button');
           btn.type = 'button';
           btn.className = 'ai-code-copy';
@@ -9707,8 +9724,6 @@ flex-shrink:0;cursor:pointer;
     } catch (e) {}
   }
 
-  let __gmAiTempProfileIds = new Set();
-
   let __gmAiModelMenuEl = null;
 
   let __gmAiMentionMenuEl = null;
@@ -11612,17 +11627,21 @@ flex-shrink:0;cursor:pointer;
 
       const res = await POST('/api/ai_config', { config: __gmAiConfig });
       if (res && res.ok) {
+        const pidSaved = String(__gmAiEditingProfileId || '').trim();
         try {
           const pid0 = String(__gmAiEditingProfileId || '').trim();
           if (pid0 && window.__gmAiProfileDrafts && typeof window.__gmAiProfileDrafts === 'object') {
             delete window.__gmAiProfileDrafts[pid0];
           }
         } catch (eD0) {}
+        try { await loadAiConfig(); } catch (eLCfg) {}
+        __gmAiEditingProfileId = pidSaved;
         __gmAiSetMeta('已保存到本地配置文件');
         toast('✓ AI 配置已保存', 'ok');
         try { __gmAiRenderProfileList(); } catch (eR0) {}
         try {
-          const prof = (__gmAiConfig.profiles || []).find(p => p && String(p.id || '') === String(__gmAiEditingProfileId || '')) || null;
+          const pid2 = String(pidSaved || '').trim();
+          const prof = pid2 ? ((__gmAiConfig.profiles || []).find(p => p && String(p.id || '') === pid2) || null) : null;
           __gmAiFillEditor(prof);
         } catch (eR1) {}
         return;
@@ -11658,36 +11677,6 @@ flex-shrink:0;cursor:pointer;
     }
     POST('/api/ai_sessions', { profile_id: pid, action: 'set_active', session_id: sid }).catch(()=>{});
     loadAiChatHistory(pid, sid).then(()=>__gmAiRefreshSendCounter()).catch(()=>{});
-  }
-
-  function __gmAiCleanupTempProfiles() {
-    try {
-      const ids = __gmAiTempProfileIds;
-      if (!ids || !ids.size) return;
-      const profiles = Array.isArray(__gmAiConfig.profiles) ? __gmAiConfig.profiles : [];
-      const keep = [];
-      profiles.forEach(p => {
-        const id = String(p && p.id || '');
-        if (!id) return;
-        const isTemp = ids.has(id);
-        const empty = !(String(p.base_url || '').trim() || String(p.api_key || '').trim() || String(p.model || '').trim());
-        if (isTemp && empty) {
-          ids.delete(id);
-          return;
-        }
-        keep.push(p);
-      });
-      __gmAiConfig.profiles = keep;
-      if (__gmAiEditingProfileId && ids.has(String(__gmAiEditingProfileId || ''))) {
-        __gmAiEditingProfileId = keep[0] ? String(keep[0].id || '') : '';
-      }
-      if (__gmAiConfig.active_profile_id && !keep.find(p => String(p && p.id || '') === String(__gmAiConfig.active_profile_id || ''))) {
-        __gmAiConfig.active_profile_id = keep[0] ? String(keep[0].id || '') : '';
-      }
-      __gmAiSelectedProfileId = String(__gmAiConfig.active_profile_id || __gmAiSelectedProfileId || '');
-      __gmAiRenderProfileList();
-      __gmAiRenderProfileModelName();
-    } catch (e) {}
   }
 
   function onAiHistoryChipDelete(ev, sessionId) {
@@ -11954,7 +11943,6 @@ flex-shrink:0;cursor:pointer;
       __gmAiConfig.profiles.unshift(p);
       if (!__gmAiConfig.active_profile_id) __gmAiConfig.active_profile_id = id;
       __gmAiEditingProfileId = id;
-      try { __gmAiTempProfileIds.add(id); } catch (e2) {}
       __gmAiFillEditor(p);
       __gmAiRenderProfileList();
       __gmAiRenderProfileModelName();
@@ -19625,7 +19613,7 @@ flex-shrink:0;cursor:pointer;
       const ctor = window.markdownit;
       if (typeof ctor !== 'function') return null;
       const md = ctor({
-        html: false,
+        html: true,
         linkify: true,
         breaks: true,
       });

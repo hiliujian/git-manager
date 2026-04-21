@@ -5721,12 +5721,190 @@ def _ai_pick_profile(cfg: dict, profile_id: str | None):
     return None
 
 
+def _ai_estimate_text_tokens(text: str):
+    s = str(text or "")
+    if not s:
+        return 0
+    try:
+        cjk = 0
+        other = 0
+        for ch in s:
+            o = ord(ch)
+            if (
+                (0x4E00 <= o <= 0x9FFF)
+                or (0x3400 <= o <= 0x4DBF)
+                or (0x20000 <= o <= 0x2A6DF)
+                or (0x2A700 <= o <= 0x2B73F)
+                or (0x2B740 <= o <= 0x2B81F)
+                or (0x2B820 <= o <= 0x2CEAF)
+                or (0xF900 <= o <= 0xFAFF)
+                or (0x2F800 <= o <= 0x2FA1F)
+            ):
+                cjk += 1
+            else:
+                other += 1
+        return int((cjk * 1.0) + (other / 4.0))
+    except Exception:
+        return max(1, int(len(s) / 4))
+
+
+def _ai_estimate_messages_tokens(messages: list):
+    try:
+        total = 0
+        arr = messages if isinstance(messages, list) else []
+        for m in arr:
+            if not isinstance(m, dict):
+                continue
+            total += 4
+            total += _ai_estimate_text_tokens(m.get("role"))
+            total += _ai_estimate_text_tokens(m.get("content"))
+        total += 8
+        return int(total)
+    except Exception:
+        return 0
+
+
+def _ai_truncate_text_to_tokens(text: str, keep_tokens: int):
+    try:
+        s = str(text or "")
+        t = int(keep_tokens or 0)
+        if t <= 0:
+            return ""
+        if _ai_estimate_text_tokens(s) <= t:
+            return s
+        try:
+            max_chars = max(0, int(t * 4))
+            if len(s) <= max_chars:
+                return s
+            return s[-max_chars:]
+        except Exception:
+            return s
+    except Exception:
+        return str(text or "")
+
+
+def _ai_trim_messages_to_budget(messages: list, max_total_tokens: int, reserve_output_tokens: int = 0):
+    try:
+        if not isinstance(messages, list):
+            return []
+        max_total = int(max_total_tokens or 0)
+        reserve = max(0, int(reserve_output_tokens or 0))
+        if max_total <= 0:
+            return [m for m in messages if isinstance(m, dict)]
+
+        arr0 = [m for m in messages if isinstance(m, dict)]
+        if not arr0:
+            return []
+
+        sys_msgs = [m for m in arr0 if str(m.get("role") or "") == "system"]
+        rest0 = [m for m in arr0 if str(m.get("role") or "") != "system"]
+
+        out = sys_msgs + rest0
+        if _ai_estimate_messages_tokens(out) + reserve <= max_total:
+            return out
+
+        min_keep = len(sys_msgs) + 1
+
+        def total_ok():
+            return (_ai_estimate_messages_tokens(out) + reserve) <= max_total
+
+        def truncate_long_message(prefer_role: str):
+            best_i = -1
+            best_t = 0
+            for i in range(len(sys_msgs), len(out)):
+                m = out[i]
+                if str(m.get("role") or "") != prefer_role:
+                    continue
+                ct = _ai_estimate_text_tokens(m.get("content"))
+                if ct > best_t:
+                    best_t = ct
+                    best_i = i
+            if best_i < 0:
+                return False
+            m = out[best_i]
+            cur_t = _ai_estimate_text_tokens(m.get("content"))
+            if cur_t <= 0:
+                return False
+            keep_t = max(32, int(cur_t * 0.7))
+            m2 = dict(m)
+            m2["content"] = _ai_truncate_text_to_tokens(m.get("content"), keep_t)
+            out[best_i] = m2
+            return True
+
+        def drop_earliest_assistant():
+            for i in range(len(sys_msgs), len(out)):
+                if str(out[i].get("role") or "") == "assistant":
+                    del out[i]
+                    return True
+            return False
+
+        def drop_earliest_turn():
+            i = len(sys_msgs)
+            while i < len(out):
+                if str(out[i].get("role") or "") == "user":
+                    if i + 1 < len(out) and str(out[i + 1].get("role") or "") == "assistant":
+                        del out[i:i + 2]
+                        return True
+                    del out[i]
+                    return True
+                i += 1
+            return False
+
+        def truncate_earliest_user():
+            for i in range(len(sys_msgs), len(out)):
+                if str(out[i].get("role") or "") == "user":
+                    m = out[i]
+                    cur_t = _ai_estimate_text_tokens(m.get("content"))
+                    if cur_t <= 0:
+                        return False
+                    keep_t = max(32, int(cur_t * 0.6))
+                    m2 = dict(m)
+                    m2["content"] = _ai_truncate_text_to_tokens(m.get("content"), keep_t)
+                    out[i] = m2
+                    return True
+            return False
+
+        guard = 0
+        while (not total_ok()) and guard < 200:
+            guard += 1
+            if len(out) <= min_keep:
+                break
+            if truncate_long_message("assistant"):
+                continue
+            if truncate_long_message("user"):
+                continue
+            if drop_earliest_assistant() and len(out) >= min_keep:
+                continue
+            if drop_earliest_turn() and len(out) >= min_keep:
+                continue
+            if truncate_earliest_user():
+                continue
+            break
+
+        if total_ok():
+            return out
+        return None
+    except Exception:
+        return messages if isinstance(messages, list) else []
+
+
 def ai_chat(messages: list, temperature: float | None = None, profile_id: str | None = None):
     with ai_config_lock:
         cfg = load_hivo_ai_config()
     prof = _ai_pick_profile(cfg, profile_id)
     if not prof:
         return False, "未配置可用模型", None
+
+    limits = cfg.get("limits") if isinstance(cfg, dict) else None
+    limits = limits if isinstance(limits, dict) else {}
+    try:
+        max_input_tokens = int(limits.get("ai_max_input_tokens") or 0)
+    except Exception:
+        max_input_tokens = 0
+    try:
+        max_output_tokens = int(limits.get("ai_max_output_tokens") or 0)
+    except Exception:
+        max_output_tokens = 0
 
     base_url = str(prof.get("base_url") or prof.get("endpoint") or "").strip()
     api_key = str(prof.get("api_key") or "")
@@ -5739,19 +5917,27 @@ def ai_chat(messages: list, temperature: float | None = None, profile_id: str | 
     if not isinstance(messages, list) or not messages:
         return False, "messages 为空", None
 
+    msgs2 = _ai_trim_messages_to_budget(messages, max_total_tokens=max_input_tokens, reserve_output_tokens=max_output_tokens)
+    if msgs2 is None:
+        return False, "对话内容过长，已超过限制", None
+    if not msgs2:
+        return False, "messages 为空", None
+
     url = _ai_build_chat_url(base_url)
     if not url:
         return False, "API Base URL 非法", None
 
     payload = {
         "model": model,
-        "messages": messages,
+        "messages": msgs2,
     }
     if temperature is not None:
         try:
             payload["temperature"] = float(temperature)
         except Exception:
             pass
+    if max_output_tokens > 0:
+        payload["max_tokens"] = max_output_tokens
 
     headers = {
         "Content-Type": "application/json",
@@ -8504,6 +8690,16 @@ class Handler(BaseHTTPRequestHandler):
         p  = urlparse(self.path).path
         try:
             length = int(self.headers.get('Content-Length', '0'))
+            try:
+                cfg0 = _hivo_load_cfg()
+                limits0 = cfg0.get("limits") if isinstance(cfg0, dict) else None
+                limits0 = limits0 if isinstance(limits0, dict) else {}
+                max_body = int(limits0.get("max_post_body_bytes") or 0)
+            except Exception:
+                max_body = 0
+            if max_body > 0 and length > max_body:
+                self.send_json({"ok": False, "error": f"请求体过大（>{max_body} bytes）"}, 413)
+                return
             body = self.rfile.read(length).decode('utf-8')
             data = json.loads(body) if body else {}
             logger.debug(f"POST 请求数据: {json.dumps(data, ensure_ascii=False)[:200]}...")
