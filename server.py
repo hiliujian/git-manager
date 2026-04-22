@@ -6811,9 +6811,31 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
     if t == "stash_pop":
         out, err, code = run_git(["stash", "pop"])
         if code != 0:
-            return False, (err or out or "stash pop failed"), {}
-        invalidate_changed_files_cache()
-        notify_files_updated()
+            list_out, list_err, list_code = run_git(["stash", "list"], timeout=30)
+            stash_kept = False
+            top = ""
+            try:
+                raw = (list_out or "").strip()
+                if raw:
+                    stash_kept = True
+                    top = raw.splitlines()[0].strip()
+            except Exception:
+                stash_kept = False
+                top = ""
+            conflict_files, _ = get_unmerged_files()
+            return False, (err or out or "stash pop failed"), {
+                "has_conflict": bool(conflict_files) or ("CONFLICT" in (out or "")) or ("CONFLICT" in (err or "")),
+                "conflict_files": conflict_files,
+                "stash_kept": stash_kept,
+                "stash_top": top,
+                "output": (out or "").strip(),
+                "error_detail": (err or "").strip(),
+            }
+        try:
+            invalidate_changed_files_cache()
+            notify_files_updated()
+        except Exception:
+            pass
         return True, "", {"output": out}
 
     if t in ("switch_branch_safe",):
@@ -10357,30 +10379,47 @@ class Handler(BaseHTTPRequestHandler):
                 if not self._require_repo():
                     return
 
-                # git stash pop
                 pop_out, pop_err, pop_code = run_git(["stash", "pop"], timeout=60)
-                
-                # 检测是否有冲突
-                has_conflict = (pop_code != 0) or "CONFLICT" in (pop_out or "") or "CONFLICT" in (pop_err or "")
-                
+
+                conflict_files, _ = get_unmerged_files()
+                has_conflict = (pop_code != 0) or bool(conflict_files) or ("CONFLICT" in (pop_out or "")) or ("CONFLICT" in (pop_err or ""))
+
                 if has_conflict:
                     logger.warning("恢复暂存的修改时发生冲突")
-                    conflict_files, _ = get_unmerged_files()
+                    list_out, list_err, list_code = run_git(["stash", "list"], timeout=30)
+                    stash_kept = False
+                    top = ""
+                    try:
+                        raw = (list_out or "").strip()
+                        if raw:
+                            stash_kept = True
+                            top = raw.splitlines()[0].strip()
+                    except Exception:
+                        stash_kept = False
+                        top = ""
                     self.send_json({
                         "ok": False,
                         "has_conflict": True,
                         "conflict_files": conflict_files,
-                        "error": "恢复暂存的修改时发生冲突，请手动解决",
+                        "stash_kept": stash_kept,
+                        "stash_top": top,
+                        "error": "恢复暂存的修改时发生冲突：修改未完全恢复，不代表丢失。请先解决冲突后再继续。",
                         "output": (pop_out or "").strip(),
                         "error_detail": (pop_err or "").strip()
                     })
-                else:
-                    logger.info("成功恢复暂存的修改")
-                    self.send_json({
-                        "ok": True,
-                        "message": "成功恢复暂存的修改",
-                        "output": (pop_out or "").strip()
-                    })
+                    return
+
+                logger.info("成功恢复暂存的修改")
+                try:
+                    invalidate_changed_files_cache()
+                    notify_files_updated()
+                except Exception:
+                    pass
+                self.send_json({
+                    "ok": True,
+                    "message": "成功恢复暂存的修改",
+                    "output": (pop_out or "").strip()
+                })
 
             else:
                 logger.warning(f"未知的 POST 请求路径: {p}")

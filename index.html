@@ -3996,6 +3996,10 @@ flex-shrink:0;cursor:pointer;
   let findDragStartY = 0;
   let findDragStartLeft = 0;
   let findDragStartTop = 0;
+  let findDragMinLeft = 0;
+  let findDragMinTop = 0;
+  let findDragMaxLeft = 0;
+  let findDragMaxTop = 0;
 
   function __gmFindComputeStartIndex() {
     try {
@@ -4105,9 +4109,17 @@ flex-shrink:0;cursor:pointer;
     } catch (e) {}
   }
 
+  function __gmGetFindBarMount() {
+    return document.querySelector('.diff-area') || document.getElementById('diffView') || document.body;
+  }
+
+  function __gmGetFindBarBoundsEl() {
+    return document.getElementById('diffView') || document.querySelector('.diff-area') || document.body;
+  }
+
   function mountFindBar() {
     if (!findBarEl) return;
-    const mount = document.querySelector('.diff-area') || document.getElementById('diffView') || document.body;
+    const mount = __gmGetFindBarMount();
     if (findBarEl.parentElement !== mount) mount.appendChild(findBarEl);
   }
 
@@ -4125,23 +4137,43 @@ flex-shrink:0;cursor:pointer;
     <button class="btn" id="findNext">下一个</button>
     <button class="btn" id="findClose">关闭</button>
   `;
-    const mount = document.querySelector('.diff-area') || document.getElementById('diffView') || document.body;
+    const mount = __gmGetFindBarMount();
     mount.appendChild(el);
     findBarEl = el;
+
+    try {
+      const boundsEl = __gmGetFindBarBoundsEl();
+      if (boundsEl && mount) {
+        const topBase = (boundsEl.offsetTop || 0) + 8;
+        el.style.top = `${Math.max(0, topBase)}px`;
+        el.style.right = '10px';
+        el.style.left = 'auto';
+      }
+    } catch (e0) {}
 
     el.addEventListener('mousedown', (e) => {
       if (e.button !== 0) return;
       if (e.target && e.target.closest && e.target.closest('input,button')) return;
-      const mountEl = document.querySelector('.diff-area') || document.getElementById('diffView') || document.body;
-      if (!mountEl) return;
+      const mountEl = __gmGetFindBarMount();
+      const boundsEl = __gmGetFindBarBoundsEl();
+      if (!mountEl || !boundsEl) return;
 
       const mrect = mountEl.getBoundingClientRect();
+      const brect = boundsEl.getBoundingClientRect();
       const rect = el.getBoundingClientRect();
       findDragActive = true;
       findDragStartX = e.clientX;
       findDragStartY = e.clientY;
       findDragStartLeft = rect.left - mrect.left;
       findDragStartTop = rect.top - mrect.top;
+
+      findDragMinLeft = brect.left - mrect.left;
+      findDragMinTop = brect.top - mrect.top;
+      findDragMaxLeft = (brect.right - mrect.left) - rect.width;
+      findDragMaxTop = (brect.bottom - mrect.top) - rect.height;
+
+      if (findDragMinLeft < 0) findDragMinLeft = 0;
+      if (findDragMinTop < 0) findDragMinTop = 0;
 
       el.style.left = `${findDragStartLeft}px`;
       el.style.top = `${findDragStartTop}px`;
@@ -4152,10 +4184,8 @@ flex-shrink:0;cursor:pointer;
 
     window.addEventListener('mousemove', (e) => {
       if (!findDragActive || !findBarEl) return;
-      const mountEl = document.querySelector('.diff-area') || document.getElementById('diffView') || document.body;
+      const mountEl = __gmGetFindBarMount();
       if (!mountEl) return;
-      const mrect = mountEl.getBoundingClientRect();
-      const rect = findBarEl.getBoundingClientRect();
 
       const dx = e.clientX - findDragStartX;
       const dy = e.clientY - findDragStartY;
@@ -4163,10 +4193,12 @@ flex-shrink:0;cursor:pointer;
       let left = findDragStartLeft + dx;
       let top = findDragStartTop + dy;
 
-      const maxLeft = Math.max(0, mrect.width - rect.width);
-      const maxTop = Math.max(0, mrect.height - rect.height);
-      if (left < 0) left = 0;
-      if (top < 0) top = 0;
+      const minLeft = (typeof findDragMinLeft === 'number') ? findDragMinLeft : 0;
+      const minTop = (typeof findDragMinTop === 'number') ? findDragMinTop : 0;
+      const maxLeft = (typeof findDragMaxLeft === 'number') ? findDragMaxLeft : minLeft;
+      const maxTop = (typeof findDragMaxTop === 'number') ? findDragMaxTop : minTop;
+      if (left < minLeft) left = minLeft;
+      if (top < minTop) top = minTop;
       if (left > maxLeft) left = maxLeft;
       if (top > maxTop) top = maxTop;
 
@@ -8981,6 +9013,24 @@ flex-shrink:0;cursor:pointer;
     if (!action) return;
 
     try {
+      try {
+        const list = await GET('/api/files');
+        const cur = (list && Array.isArray(list.files)) ? list.files : [];
+        if (cur && cur.length) {
+          const ok = await showConfirm({
+            title: '确认撤销撤回',
+            message: '检测到你在撤回后又产生了新的未提交修改。\n\n继续“撤销撤回”会用快照内容覆盖当前工作区文件，可能导致你刚才的新修改丢失。\n\n是否继续？',
+            okText: '继续撤销',
+            cancelText: '取消',
+            danger: true,
+          });
+          if (!ok) {
+            st.push(action);
+            return;
+          }
+        }
+      } catch (e0) {}
+
       disableAutoRefreshDiff(8000);
       toast('撤销中...', 'warn');
 
@@ -13300,7 +13350,12 @@ flex-shrink:0;cursor:pointer;
               toast('✓ 已恢复修改', 'ok');
             } else {
               const msg2 = (popRes && (popRes.error || popRes.msg || popRes.message)) ? (popRes.error || popRes.msg || popRes.message) : '恢复修改失败';
-              __gmToastApiError('恢复修改失败', popRes, msg2);
+              const kept = !!(popRes && popRes.stash_kept);
+              const top = (popRes && popRes.stash_top) ? String(popRes.stash_top || '') : '';
+              const cfs = (popRes && Array.isArray(popRes.conflict_files)) ? popRes.conflict_files : [];
+              const list = cfs.length ? ('\n\n冲突文件：\n' + cfs.slice(0, 12).map(x => ' - ' + x).join('\n') + (cfs.length > 12 ? `\n... 还有 ${cfs.length - 12} 个` : '')) : '';
+              const hint = (kept ? (`\n\n提示：stash 仍然保留（未丢失）${top ? `：\n${top}` : ''}。请先解决冲突后再尝试恢复。`) : '\n\n提示：请检查 stash 列表确认是否仍在（通常冲突时不会自动丢弃）。');
+              __gmToastApiError('恢复修改失败', popRes, msg2 + list + hint);
             }
           }
           await refresh();
@@ -18251,12 +18306,12 @@ flex-shrink:0;cursor:pointer;
         const fs = (list && Array.isArray(list.files)) ? list.files : [];
         paths = fs.map(x => x && x.path).filter(Boolean);
       }
-      const limit = 50;
-      const take = (paths || []).slice(0, limit);
-      undoSnaps = (await Promise.all(take.map(p => snapshotWorkingFile(p)))).filter(Boolean);
-      if (paths && paths.length > limit) {
-        console.warn(`Undo snapshot limited to first ${limit} files (total ${paths.length})`);
+      const out = [];
+      for (const p of (paths || [])) {
+        const s = await snapshotWorkingFile(p);
+        if (s) out.push(s);
       }
+      undoSnaps = out;
     } catch (e) {
       console.warn('snapshot revert_all failed:', e);
       undoSnaps = [];
@@ -19153,10 +19208,15 @@ flex-shrink:0;cursor:pointer;
                 toast('✓ 已恢复暂存的修改', 'ok');
                 await refresh();
               } else if (popRes && popRes.has_conflict) {
+                const kept = !!(popRes && popRes.stash_kept);
+                const top = (popRes && popRes.stash_top) ? String(popRes.stash_top || '') : '';
+                const hint = kept
+                  ? (`\n\n提示：stash 仍然保留（未丢失）${top ? `：\n${top}` : ''}。解决冲突后可再次点击恢复。`)
+                  : '\n\n提示：通常冲突时 stash 不会自动丢弃；可在命令行用 git stash list 检查。';
                 await showConfirm({
                   title: '⚠️ 恢复时发生冲突',
                   message: '恢复暂存的修改时发生冲突，请手动解决冲突。\n\n冲突文件:\n  • ' + 
-                    (popRes.conflict_files || []).join('\n  • '),
+                    (popRes.conflict_files || []).join('\n  • ') + hint,
                   okText: '知道了',
                   hideCancel: true,
                   danger: true
@@ -19564,6 +19624,11 @@ flex-shrink:0;cursor:pointer;
       const u = String(url || '').trim();
       if (!u) return '';
       if (/^https?:\/\//i.test(u)) return u;
+      if (/^mailto:/i.test(u)) return u;
+      if (/^tel:/i.test(u)) return u;
+      if (u.startsWith('#')) return u;
+      if (u.startsWith('/')) return u;
+      if (u.startsWith('./') || u.startsWith('../')) return u;
       return '';
     } catch (e) {
       return '';
@@ -19579,6 +19644,10 @@ flex-shrink:0;cursor:pointer;
       if (/^data:audio\/(mpeg|mp3|wav|ogg|aac|mp4|webm|x-wav|flac);base64,/i.test(u)) return u;
       if (/^data:video\/(mp4|webm|ogg|quicktime);base64,/i.test(u)) return u;
       if (u.startsWith('/api/raw_file?path=')) return u;
+      if (u.startsWith('./') || u.startsWith('../') || (!u.startsWith('/') && !/^[a-zA-Z]+:/i.test(u))) {
+        const mapped = __gmMediaUrlFromMaybePath(u);
+        if (mapped && String(mapped).startsWith('/api/raw_file?path=')) return mapped;
+      }
       return '';
     } catch (e) {
       return '';
