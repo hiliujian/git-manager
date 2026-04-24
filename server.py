@@ -5133,6 +5133,7 @@ def get_capabilities_spec():
         {"method": "POST", "path": "/api/stash_and_switch", "body": {"branch": "<name>"}},
         {"method": "POST", "path": "/api/commit_and_switch", "body": {"branch": "<name>", "message": "<text>", "files": ["<rel>"]}},
         {"method": "POST", "path": "/api/stash_pop", "body": {}},
+        {"method": "POST", "path": "/api/fetch_remotes", "body": {}},
         {"method": "POST", "path": "/api/pull_file", "body": {"path": "<rel>"}},
         {"method": "POST", "path": "/api/restore_file", "body": {"hash": "<sha>", "path": "<rel>"}},
         {"method": "POST", "path": "/api/restore_workspace", "body": {"hash": "<sha>"}},
@@ -5625,6 +5626,13 @@ def get_capabilities_spec():
             "required": [],
             "properties": {},
             "example": {"type": "stash_pop"},
+        },
+        {
+            "type": "fetch_remotes",
+            "desc": "拉取最新远端引用（git fetch --all --prune），用于刷新远端分支列表。",
+            "required": [],
+            "properties": {},
+            "example": {"type": "fetch_remotes"},
         },
     ]
 
@@ -6695,6 +6703,17 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
         invalidate_changed_files_cache()
         notify_files_updated()
         return True, "", {"output": out}
+
+    if t in ("fetch_remotes",):
+        ok, msg, out = fetch_remotes()
+        if not ok:
+            return False, msg or "fetch_remotes failed", {"output": (out or "")}
+        try:
+            invalidate_changed_files_cache()
+            notify_files_updated()
+        except Exception:
+            pass
+        return True, "", {"output": (out or "")}
 
     if t in ("pull_safe",):
         out, err, code = run_git(["pull", "--no-edit"], timeout=300)
@@ -7911,6 +7930,15 @@ def get_branches():
     
     logger.info(f"成功获取分支列表，共 {len(branches)} 个分支，当前分支: {current}")
     return branches, current
+
+
+def fetch_remotes():
+    if not REPO_PATH:
+        return False, "未打开仓库", ""
+    out, err, code = run_git(["fetch", "--all", "--prune"], timeout=300)
+    if code != 0:
+        return False, (err or out or "fetch 失败"), (out or "")
+    return True, "", (out or "")
 
 def is_commit_pushed(commit_hash):
     """判断某个提交是否已经存在于任意远端分支（基于本地 remote refs）。"""
@@ -10420,6 +10448,21 @@ class Handler(BaseHTTPRequestHandler):
                     "message": "成功恢复暂存的修改",
                     "output": (pop_out or "").strip()
                 })
+
+            elif p == "/api/fetch_remotes":
+                logger.info("处理 /api/fetch_remotes 请求 (刷新远端引用)")
+                if not self._require_repo():
+                    return
+                ok, msg, out = fetch_remotes()
+                if not ok:
+                    self.send_json({"ok": False, "error": msg or "fetch 失败", "output": (out or "").strip()}, 400)
+                    return
+                try:
+                    invalidate_changed_files_cache()
+                    notify_files_updated()
+                except Exception:
+                    pass
+                self.send_json({"ok": True, "output": (out or "").strip()})
 
             else:
                 logger.warning(f"未知的 POST 请求路径: {p}")
