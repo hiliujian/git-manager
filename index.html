@@ -3732,6 +3732,27 @@ flex-shrink:0;cursor:pointer;
     }
   }
 
+  function addToRecentFilesLog(commitHash, filepath, status) {
+    const p = String(filepath || '').trim();
+    const ch = String(commitHash || '').trim();
+    if (!p || !ch) return;
+
+    const key = `log|${ch}|${p}`;
+
+    recentFiles = recentFiles.filter(f => String((f && (f.key || f.path)) || '') !== key);
+    recentFiles.unshift({
+      key,
+      path: p,
+      status: status || 'M',
+      log: true,
+      commit_hash: ch,
+      timestamp: Date.now()
+    });
+    if (recentFiles.length > MAX_RECENT_FILES) {
+      recentFiles = recentFiles.slice(0, MAX_RECENT_FILES);
+    }
+  }
+
   function showRecentFilesDropdown() {
     let dropdown = document.getElementById('recentFilesDropdown');
     
@@ -3795,13 +3816,35 @@ flex-shrink:0;cursor:pointer;
 
     recentFiles.forEach((file, idx) => {
       const isExternal = !!file.external;
+      const isLog = !!file.log;
+      const key = String((file && (file.key || file.path)) || '');
       // 检查文件是否还在当前文件列表中
       const currentIndex = isExternal ? -1 : files.findIndex(f => f.path === file.path);
-      const isActive = (!isExternal && currentIndex === curFile);
+      const isActive = (!isExternal && currentIndex === curFile) || (!!(curLogFile && String(curLogFile.path || '') === String(file.path || '')));
       const exists = currentIndex >= 0;
 
       const segs = String(file.path || '').replace(/\\/g, '/').split('/');
       const name = segs[segs.length - 1] || String(file.path || '');
+
+      if (isLog) {
+        const status = String(file.status || 'M');
+        const stCls = (status || 'M').replace(/[^A-Z]/g,'') || 'M';
+        const isActiveLog = !!(curLogFile && String(curLogFile.path || '') === String(file.path || ''));
+        html += `
+          <div class="recent-file-item ${isActiveLog ? 'active' : ''}" 
+               onclick="openLogRecentFile(${idx}); event.stopPropagation();">
+            <span class="recent-file-status ${stCls}">${esc(status)}</span>
+            <div class="recent-file-info">
+              <div class="recent-file-name" title="${esc(file.path)}">${esc(name)}</div>
+              <div class="recent-file-stats">
+                <span class="lines">历史提交</span>
+              </div>
+            </div>
+            <button class="recent-file-remove" title="从最近列表移除" onclick="removeRecentFileByPath('${esc(key).replace(/'/g,'\\\'')}'); event.stopPropagation();">×</button>
+          </div>
+        `;
+        return;
+      }
 
       if (exists) {
         const currentFile = files[currentIndex];
@@ -3862,7 +3905,7 @@ flex-shrink:0;cursor:pointer;
                 <span class="lines">工作区文件</span>
               </div>
             </div>
-            <button class="recent-file-remove" title="从最近列表移除" onclick="removeRecentFileByPath('${esc(String(file.path||'')).replace(/'/g,'\\\'')}'); event.stopPropagation();">×</button>
+            <button class="recent-file-remove" title="从最近列表移除" onclick="removeRecentFileByPath('${esc(String((file && (file.key || file.path)) || '')).replace(/'/g,'\\\'')}'); event.stopPropagation();">×</button>
           </div>
         `;
       } catch (e) {}
@@ -3880,12 +3923,28 @@ flex-shrink:0;cursor:pointer;
   async function removeRecentFileByPath(path) {
     try {
       const p = String(path || '');
+      const isLogKey = p.startsWith('log|');
+      const logParts = isLogKey ? p.split('|') : [];
+      const logCommit = (isLogKey && logParts.length >= 3) ? String(logParts[1] || '') : '';
+      const logPath = (isLogKey && logParts.length >= 3) ? logParts.slice(2).join('|') : '';
+      const targetPathForCompare = isLogKey ? logPath : p;
       const norm = (s) => String(s || '').replace(/\\/g, '/').toLowerCase();
-      const pk = norm(p);
+      const pk = norm(targetPathForCompare);
       const oldList = Array.isArray(recentFiles) ? recentFiles.slice() : [];
-      const oldIdx = oldList.findIndex(f => norm((f && f.path) || '') === pk);
+      const oldIdx = oldList.findIndex(f => {
+        const k = String((f && (f.key || f.path)) || '');
+        if (isLogKey) return k === p;
+        return norm((f && f.path) || '') === pk;
+      });
       const wasActiveExternal = (() => {
         try { return !!(window.__plainEditorFilename && norm(String(window.__plainEditorFilename)) === pk); } catch (e) { return false; }
+      })();
+      const wasActiveLog = (() => {
+        try {
+          if (!curLogFile) return false;
+          if (isLogKey) return (String(curLogFile.commit_hash || '') === logCommit) && (norm(String(curLogFile.path || '')) === pk);
+          return norm(String(curLogFile.path || '')) === pk;
+        } catch (e) { return false; }
       })();
       const wasActiveRepo = (() => {
         try {
@@ -3896,10 +3955,14 @@ flex-shrink:0;cursor:pointer;
         } catch (e) { return false; }
       })();
 
-      recentFiles = oldList.filter(f => norm((f && f.path) || '') !== pk);
+      recentFiles = oldList.filter(f => {
+        const k = String((f && (f.key || f.path)) || '');
+        if (isLogKey) return k !== p;
+        return norm((f && f.path) || '') !== pk;
+      });
       updateRecentFilesDropdown();
 
-      const needSwitch = wasActiveExternal || wasActiveRepo;
+      const needSwitch = wasActiveExternal || wasActiveRepo || wasActiveLog;
       if (!needSwitch) return;
 
       if (!recentFiles || recentFiles.length === 0) {
@@ -3915,6 +3978,14 @@ flex-shrink:0;cursor:pointer;
             clearDiff();
             renderFileList();
           } catch (e3) {}
+        }
+        if (wasActiveLog) {
+          try {
+            curLogFile = null;
+            curHunks = [];
+            clearDiff();
+            try { document.querySelectorAll('.lf').forEach((el) => el.classList.remove('active')); } catch (e4) {}
+          } catch (e5) {}
         }
         return;
       }
@@ -3934,6 +4005,19 @@ flex-shrink:0;cursor:pointer;
             renderFileList();
           } catch (e3) {}
         }
+        if (wasActiveLog) {
+          try {
+            curLogFile = null;
+            curHunks = [];
+            clearDiff();
+            try { document.querySelectorAll('.lf').forEach((el) => el.classList.remove('active')); } catch (e4) {}
+          } catch (e5) {}
+        }
+        return;
+      }
+
+      if (nextItem.log) {
+        await openLogRecentFile(nextIdx);
         return;
       }
 
@@ -3992,6 +4076,28 @@ flex-shrink:0;cursor:pointer;
       if (!(fc && fc.ok)) return;
       const c = (fc && typeof fc.content === 'string') ? String(fc.content || '') : '';
       openFileInEditor(p, c, false, null);
+    } catch (e) {}
+  }
+
+  async function openLogRecentFile(idx) {
+    try {
+      const item = recentFiles && recentFiles[idx];
+      if (!item || !item.log) return;
+      hideRecentFilesDropdown();
+
+      const p = String(item.path || '').trim();
+      const ch = String(item.commit_hash || '').trim();
+      const st = String(item.status || 'M') || 'M';
+      if (!p || !ch) return;
+
+      try { __gmPersistCurrentDiffEditorHistory(); } catch (e) {}
+      curFile = null;
+      curLogFile = { path: p, status: st, commit_hash: ch };
+
+      try { document.querySelectorAll('.fi').forEach(el => el.classList.remove('active')); } catch (e) {}
+      try { document.querySelectorAll('.lf').forEach((el) => el.classList.remove('active')); } catch (e) {}
+
+      await loadCommitFileDiff(ch, p, st);
     } catch (e) {}
   }
 
@@ -16496,8 +16602,16 @@ flex-shrink:0;cursor:pointer;
     document.getElementById('revertFileBtn').style.display = 'none';
     document.getElementById('diffLabel').innerHTML =
             `<span class="fi-st ${status||'M'}" style="font-size:9px">${status||'M'}</span>
-     <span class="fn">${esc(filepath)}</span>
-     <span style="color:var(--text3);font-size:10px">历史提交</span>`;
+     <span class="fn" onclick="showRecentFilesDropdown(); event.stopPropagation();" title="点击查看最近打开的文件">${esc(filepath)}</span>
+     <span style="color:var(--text3);font-size:10px">历史提交</span>
+     <button class="editor-close-btn" id="diffLabelCloseBtn" title="从最近列表移除并切换下一个 (Alt+W)">
+       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+         <line x1="18" y1="6" x2="6" y2="18"></line>
+         <line x1="6" y1="6" x2="18" y2="18"></line>
+       </svg>
+     </button>`;
+    try { addToRecentFilesLog(String(commitHash || ''), String(filepath || ''), String(status || 'M')); } catch (e) {}
+    try { bindDiffLabelCloseBtn(`log|${String(commitHash || '').trim()}|${String(filepath || '').trim()}`); } catch (e) {}
     document.getElementById('diffView').innerHTML =
             '<div class="empty-state"><div class="spin"></div><p>加载中...</p></div>';
 
@@ -16511,9 +16625,16 @@ flex-shrink:0;cursor:pointer;
     const lineCountLabel = totalLines > 0 ? `<span class="line-count">${totalLines}行</span>` : '';
     document.getElementById('diffLabel').innerHTML =
             `<span class="fi-st ${status||'M'}" style="font-size:9px">${status||'M'}</span>
-     <span class="fn">${esc(filepath)}</span>
+     <span class="fn" onclick="showRecentFilesDropdown(); event.stopPropagation();" title="点击查看最近打开的文件">${esc(filepath)}</span>
      ${lineCountLabel}
-     <span style="color:var(--text3);font-size:10px">历史提交</span>`;
+     <span style="color:var(--text3);font-size:10px">历史提交</span>
+     <button class="editor-close-btn" id="diffLabelCloseBtn" title="从最近列表移除并切换下一个 (Alt+W)">
+       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+         <line x1="18" y1="6" x2="6" y2="18"></line>
+         <line x1="6" y1="6" x2="18" y2="18"></line>
+       </svg>
+     </button>`;
+    try { bindDiffLabelCloseBtn(`log|${String(commitHash || '').trim()}|${String(filepath || '').trim()}`); } catch (e) {}
 
     // 对于历史提交的diff，使用renderDiff而不是renderDiffWithFullContext
     // 因为历史提交的diff可能没有完整的文件内容
@@ -17063,12 +17184,12 @@ flex-shrink:0;cursor:pointer;
   </button>`;
   }
 
-  function setDiffMode(mode, el) {
-    diffMode = mode;
+  function setDiffMode(mode, el){
+    diffMode=mode;localStorage.setItem('diffMode',mode);
     document.querySelectorAll('.dtab').forEach(t => t.classList.remove('active'));
     el.classList.add('active');
     if (curFile !== null) loadDiff(curFile);
-    else if (curLogFile !== null) loadCommitFileDiff(curCommit.full_hash, curLogFile.path, curLogFile.status);
+    else if (curLogFile !== null) loadCommitFileDiff((curLogFile.commit_hash || (curCommit && curCommit.full_hash) || ''), curLogFile.path, curLogFile.status);
   }
 
   function expandChangeViewContext(delta = 5) {
@@ -18767,12 +18888,13 @@ flex-shrink:0;cursor:pointer;
     const f = curCommitFiles[i];
     if (!f || !curCommit) return;
     try { __gmPersistCurrentDiffEditorHistory(); } catch (e) {}
-    curLogFile = f;
+    curLogFile = { path: f.path, status: f.status, commit_hash: (curCommit.full_hash || curCommit.hash || '') };
     curFile    = null;  // 取消工作区文件选中
 
     document.querySelectorAll('.lf').forEach((el,j) => el.classList.toggle('active', j===i));
     document.querySelectorAll('.fi').forEach(el => el.classList.remove('active'));
 
+    try { addToRecentFilesLog(String(curCommit.full_hash || curCommit.hash || ''), String(f.path || ''), String(f.status || 'M')); } catch (e) {}
     await loadCommitFileDiff(curCommit.full_hash, f.path, f.status);
   }
 
