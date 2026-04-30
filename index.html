@@ -2173,6 +2173,7 @@ flex-shrink:0;cursor:pointer;
     @keyframes sp{to{transform:rotate(360deg);}}
   </style>
   <script defer src="https://cdn.jsdelivr.net/npm/markdown-it@14.1.0/dist/markdown-it.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/dompurify@3.0.8/dist/purify.min.js"></script>
 </head>
 <body>
 
@@ -2696,6 +2697,57 @@ flex-shrink:0;cursor:pointer;
   // ══════════════════════════════════════════════════════════════════════════════
   // 配置
   // ══════════════════════════════════════════════════════════════════════════════
+
+  // ── innerHTML 安全拦截（降低 XSS 风险） ───────────────────────────────────────
+  // 目标：不大规模重写 90+ 处 innerHTML 模板代码（很多依赖 onclick 内联处理），
+  // 但对所有 innerHTML 注入做统一 sanitize。
+  // 规则：
+  // - 优先使用 DOMPurify.sanitize；若库不可用则做最小脚本标签剥离。
+  (function __gmPatchInnerHTMLSetter() {
+    try {
+      const proto = (window.Element && window.Element.prototype) ? window.Element.prototype : null;
+      if (!proto) return;
+
+      const desc = Object.getOwnPropertyDescriptor(proto, 'innerHTML');
+      if (!desc || typeof desc.set !== 'function' || typeof desc.get !== 'function') return;
+
+      const origSet = desc.set;
+      const origGet = desc.get;
+
+      const stripScriptsFallback = (html) => {
+        try {
+          const s = String(html == null ? '' : html);
+          return s.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
+        } catch (e) {
+          return '';
+        }
+      };
+
+      const sanitize = (html) => {
+        try {
+          if (window.DOMPurify && typeof window.DOMPurify.sanitize === 'function') {
+            return window.DOMPurify.sanitize(String(html == null ? '' : html), {
+              USE_PROFILES: { html: true, svg: true, svgFilters: true },
+            });
+          }
+        } catch (e) {}
+        return stripScriptsFallback(html);
+      };
+
+      Object.defineProperty(proto, 'innerHTML', {
+        configurable: true,
+        enumerable: desc.enumerable,
+        get: function() { return origGet.call(this); },
+        set: function(v) {
+          try {
+            origSet.call(this, sanitize(v));
+          } catch (e) {
+            try { origSet.call(this, ''); } catch (e2) {}
+          }
+        }
+      });
+    } catch (e) {}
+  })();
   const DEBUG_MODE = false; // 设置为 true 启用详细日志
   
   const BASE = 'http://localhost:7842';
@@ -3770,6 +3822,8 @@ flex-shrink:0;cursor:pointer;
       document.getElementById('diffLabel').appendChild(dropdown);
     }
 
+    try { __gmBindRecentFilesDropdownDelegation(); } catch (e) {}
+
     // 更新内容
     updateRecentFilesDropdown();
 
@@ -3780,6 +3834,24 @@ flex-shrink:0;cursor:pointer;
     setTimeout(() => {
       document.addEventListener('click', closeRecentFilesOnClickOutside);
     }, 0);
+  }
+
+  function __gmBindRecentFilesDropdownDelegation() {
+    const dropdown = document.getElementById('recentFilesDropdown');
+    if (!dropdown) return;
+    if (dropdown.__gmDelegationBound) return;
+    dropdown.__gmDelegationBound = true;
+    dropdown.addEventListener('click', (e) => {
+      const el = e.target && e.target.closest ? e.target.closest('[data-action]') : null;
+      if (!el) return;
+      const act = String(el.getAttribute('data-action') || '');
+      try { e.preventDefault(); e.stopPropagation(); } catch (e2) {}
+      if (act === 'openLogRecentFile') return openLogRecentFile(Number(el.getAttribute('data-idx')));
+      if (act === 'openExternalRecentFile') return openExternalRecentFile(Number(el.getAttribute('data-idx')));
+      if (act === 'openRepoRecentFile') return openRepoRecentFile(Number(el.getAttribute('data-idx')));
+      if (act === 'selectFileFromRecent') return selectFileFromRecent(Number(el.getAttribute('data-idx')));
+      if (act === 'removeRecentFileByPath') return removeRecentFileByPath(String(el.getAttribute('data-path') || ''));
+    });
   }
 
   function hideRecentFilesDropdown() {
@@ -3832,7 +3904,7 @@ flex-shrink:0;cursor:pointer;
         const isActiveLog = !!(curLogFile && String(curLogFile.path || '') === String(file.path || ''));
         html += `
           <div class="recent-file-item ${isActiveLog ? 'active' : ''}" 
-               onclick="openLogRecentFile(${idx}); event.stopPropagation();">
+               data-action="openLogRecentFile" data-idx="${idx}">
             <span class="recent-file-status ${stCls}">${esc(status)}</span>
             <div class="recent-file-info">
               <div class="recent-file-name" title="${esc(file.path)}">${esc(name)}</div>
@@ -3840,7 +3912,7 @@ flex-shrink:0;cursor:pointer;
                 <span class="lines">历史提交</span>
               </div>
             </div>
-            <button class="recent-file-remove" title="从最近列表移除" onclick="removeRecentFileByPath('${esc(key).replace(/'/g,'\\\'')}'); event.stopPropagation();">×</button>
+            <button class="recent-file-remove" title="从最近列表移除" data-action="removeRecentFileByPath" data-path="${esc(key)}">×</button>
           </div>
         `;
         return;
@@ -3852,7 +3924,7 @@ flex-shrink:0;cursor:pointer;
 
         html += `
           <div class="recent-file-item ${isActive ? 'active' : ''}" 
-               onclick="selectFileFromRecent(${currentIndex}); event.stopPropagation();">
+               data-action="selectFileFromRecent" data-idx="${currentIndex}">
             <span class="recent-file-status ${currentFile.status}">${currentFile.status}</span>
             <div class="recent-file-info">
               <div class="recent-file-name" title="${esc(file.path)}">${esc(name)}</div>
@@ -3863,7 +3935,7 @@ flex-shrink:0;cursor:pointer;
                 ${currentFile.modified > 0 ? `<span class="modified">~${currentFile.modified}</span>` : ''}
               </div>
             </div>
-            <button class="recent-file-remove" title="从最近列表移除" onclick="removeRecentFileByPath('${esc(String(file.path||'')).replace(/'/g,'\\\'')}'); event.stopPropagation();">×</button>
+            <button class="recent-file-remove" title="从最近列表移除" data-action="removeRecentFileByPath" data-path="${esc(String(file.path||''))}">×</button>
           </div>
         `;
         return;
@@ -3878,7 +3950,7 @@ flex-shrink:0;cursor:pointer;
         
         html += `
           <div class="recent-file-item ${isActiveExternal ? 'active' : ''}" 
-               onclick="openExternalRecentFile(${idx}); event.stopPropagation();">
+               data-action="openExternalRecentFile" data-idx="${idx}">
             <span class="recent-file-status ${status}">${esc(status)}</span>
             <div class="recent-file-info">
               <div class="recent-file-name" title="${esc(file.path)}">${esc(name)}</div>
@@ -3886,7 +3958,7 @@ flex-shrink:0;cursor:pointer;
                 <span class="lines">外部文件</span>
               </div>
             </div>
-            <button class="recent-file-remove" title="从最近列表移除" onclick="removeRecentFileByPath('${esc(String(file.path||'')).replace(/'/g,'\\\'')}'); event.stopPropagation();">×</button>
+            <button class="recent-file-remove" title="从最近列表移除" data-action="removeRecentFileByPath" data-path="${esc(String(file.path||''))}">×</button>
           </div>
         `;
         return;
@@ -3897,7 +3969,7 @@ flex-shrink:0;cursor:pointer;
         const isActiveRepoPlain = !!(window.__plainEditorFilename && !window.__plainEditorIsExternal && String(window.__plainEditorFilename) === String(file.path));
         html += `
           <div class="recent-file-item ${isActiveRepoPlain ? 'active' : ''}" 
-               onclick="openRepoRecentFile(${idx}); event.stopPropagation();">
+               data-action="openRepoRecentFile" data-idx="${idx}">
             <span class="recent-file-status W">W</span>
             <div class="recent-file-info">
               <div class="recent-file-name" title="${esc(file.path)}">${esc(name)}</div>
@@ -3905,7 +3977,7 @@ flex-shrink:0;cursor:pointer;
                 <span class="lines">工作区文件</span>
               </div>
             </div>
-            <button class="recent-file-remove" title="从最近列表移除" onclick="removeRecentFileByPath('${esc(String((file && (file.key || file.path)) || '')).replace(/'/g,'\\\'')}'); event.stopPropagation();">×</button>
+            <button class="recent-file-remove" title="从最近列表移除" data-action="removeRecentFileByPath" data-path="${esc(String((file && (file.key || file.path)) || ''))}">×</button>
           </div>
         `;
       } catch (e) {}
@@ -12814,6 +12886,7 @@ flex-shrink:0;cursor:pointer;
     document.getElementById('refreshBtn').style.display = 'flex';
     document.getElementById('changeBtn').style.display  = 'flex';
     initBranchDropdown();
+    try { __gmBindDiffLabelDelegation(); } catch (e) {}
 
     // 启动WebSocket连接
     connectWebSocket();
@@ -12821,6 +12894,21 @@ flex-shrink:0;cursor:pointer;
     // 不再需要轮询模式，WebSocket会实时推送更新
     // 但保留作为备份
     startRealTimeRefresh();
+  }
+
+  function __gmBindDiffLabelDelegation() {
+    const dl = document.getElementById('diffLabel');
+    if (!dl) return;
+    if (dl.__gmDelegationBound) return;
+    dl.__gmDelegationBound = true;
+    dl.addEventListener('click', (e) => {
+      const el = e.target && e.target.closest ? e.target.closest('[data-action]') : null;
+      if (!el) return;
+      const act = String(el.getAttribute('data-action') || '');
+      try { e.preventDefault(); e.stopPropagation(); } catch (e2) {}
+      if (act === 'showRecentFilesDropdown') return showRecentFilesDropdown();
+      if (act === 'removeRecentFileByPath') return removeRecentFileByPath(String(el.getAttribute('data-path') || ''));
+    });
   }
 
   function __gmResetRepoScopedState() {
@@ -14584,7 +14672,7 @@ flex-shrink:0;cursor:pointer;
 
       document.getElementById('diffLabel').innerHTML =
               `<span class="fi-st ${fileObj.status}" style="font-size:9px">${fileObj.status}</span>
-       <span class="fn" onclick="showRecentFilesDropdown(); event.stopPropagation();" title="点击查看最近打开的文件">${esc(fileObj.path)}</span>
+       <span class="fn" data-action="showRecentFilesDropdown" title="点击查看最近打开的文件">${esc(fileObj.path)}</span>
        ${lineCountLabel}
        ${fileObj.added > 0 ? `<span style="color:var(--accent2);font-size:10px">+${fileObj.added}</span>` : ''}
        ${fileObj.removed > 0 ? `<span style="color:var(--danger);font-size:10px">-${fileObj.removed}</span>` : ''}
@@ -16257,7 +16345,7 @@ flex-shrink:0;cursor:pointer;
         const lineCountLabel = totalLines > 0 ? `<span class="line-count">${totalLines}行</span>` : '';
         document.getElementById('diffLabel').innerHTML =
                 `<span class="fi-st ${fileObj.status}" style="font-size:9px">${fileObj.status}</span>
-       <span class="fn" onclick="showRecentFilesDropdown(); event.stopPropagation();" title="点击查看最近打开的文件">${esc(fileObj.path)}</span>
+       <span class="fn" data-action="showRecentFilesDropdown" title="点击查看最近打开的文件">${esc(fileObj.path)}</span>
        ${lineCountLabel}
        ${fileObj.added > 0 ? `<span style="color:var(--accent2);font-size:10px">+${fileObj.added}</span>` : ''}
        ${fileObj.removed > 0 ? `<span style="color:var(--danger);font-size:10px">-${fileObj.removed}</span>` : ''}
@@ -16602,7 +16690,7 @@ flex-shrink:0;cursor:pointer;
     document.getElementById('revertFileBtn').style.display = 'none';
     document.getElementById('diffLabel').innerHTML =
             `<span class="fi-st ${status||'M'}" style="font-size:9px">${status||'M'}</span>
-     <span class="fn" onclick="showRecentFilesDropdown(); event.stopPropagation();" title="点击查看最近打开的文件">${esc(filepath)}</span>
+     <span class="fn" data-action="showRecentFilesDropdown" title="点击查看最近打开的文件">${esc(filepath)}</span>
      <span style="color:var(--text3);font-size:10px">历史提交</span>
      <button class="editor-close-btn" id="diffLabelCloseBtn" title="从最近列表移除并切换下一个 (Alt+W)">
        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -16625,7 +16713,7 @@ flex-shrink:0;cursor:pointer;
     const lineCountLabel = totalLines > 0 ? `<span class="line-count">${totalLines}行</span>` : '';
     document.getElementById('diffLabel').innerHTML =
             `<span class="fi-st ${status||'M'}" style="font-size:9px">${status||'M'}</span>
-     <span class="fn" onclick="showRecentFilesDropdown(); event.stopPropagation();" title="点击查看最近打开的文件">${esc(filepath)}</span>
+     <span class="fn" data-action="showRecentFilesDropdown" title="点击查看最近打开的文件">${esc(filepath)}</span>
      ${lineCountLabel}
      <span style="color:var(--text3);font-size:10px">历史提交</span>
      <button class="editor-close-btn" id="diffLabelCloseBtn" title="从最近列表移除并切换下一个 (Alt+W)">
@@ -18968,10 +19056,9 @@ flex-shrink:0;cursor:pointer;
     const btn = document.getElementById('diffLabelCloseBtn');
     if (!btn) return;
     const p = String(path || '');
-    btn.onclick = (e) => {
-      try { e.preventDefault(); e.stopPropagation(); } catch (e2) {}
-      removeRecentFileByPath(p);
-    };
+    btn.setAttribute('data-action', 'removeRecentFileByPath');
+    btn.setAttribute('data-path', p);
+    btn.onclick = null;
   }
 
   function showModal(id) {
@@ -19166,7 +19253,7 @@ flex-shrink:0;cursor:pointer;
       const isRemote = name.startsWith('remotes/');
       const active = (name === cur);
       const dotClass = isRemote ? 'remote' : 'local';
-      return `<div class="bm-item ${active ? 'active' : ''}" data-branch="${esc(name)}" onclick="selectBranchFromMenu(this)">
+      return `<div class="bm-item ${active ? 'active' : ''}" data-branch="${esc(name)}" data-action="selectBranchFromMenu">
       <span class="bm-dot ${dotClass}"></span>
       <span class="bm-name">${esc(name)}</span>
       <span class="bm-scope">${scopeLabel}</span>
@@ -19455,6 +19542,20 @@ flex-shrink:0;cursor:pointer;
       document.body.setAttribute('data-branch-body-inited','1');
       document.addEventListener('click', () => closeBranchMenu());
       menu.addEventListener('click', (e) => e.stopPropagation());
+
+      try {
+        const list = document.getElementById('branchMenuList');
+        if (list && !list.__gmDelegationBound) {
+          list.__gmDelegationBound = true;
+          list.addEventListener('click', (e) => {
+            const el = e.target && e.target.closest ? e.target.closest('.bm-item[data-branch]') : null;
+            if (!el) return;
+            try { e.preventDefault(); e.stopPropagation(); } catch (e2) {}
+            selectBranchFromMenu(el);
+          });
+        }
+      } catch (e) {}
+
       document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') closeBranchMenu();
       });
@@ -20644,7 +20745,7 @@ flex-shrink:0;cursor:pointer;
       }
     } catch (e) { workspaceLabel = ''; repoChangeLabel = ''; }
     document.getElementById('diffLabel').innerHTML = 
-      `<span class="fn" onclick="showRecentFilesDropdown(); event.stopPropagation();" title="点击查看最近打开的文件">${esc(filename)}</span>
+      `<span class="fn" data-action="showRecentFilesDropdown" title="点击查看最近打开的文件">${esc(filename)}</span>
        <span class="line-count">${totalLines}行</span>
        <span style="color:var(--text3);font-size:10px">编辑器模式</span>
        ${externalLabel}${workspaceLabel}${repoChangeLabel}
