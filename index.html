@@ -880,7 +880,7 @@
     }
     .autosave-switch input:checked + .autosave-slider:before{transform:translateX(16px) translateY(-50%);background: var(--accent);border-color:#25508a;box-shadow:0 0 0 2px rgba(110,180,247,.16), 0 2px 10px rgba(0,0,0,.35);}
     .autosave-switch input:focus-visible + .autosave-slider{outline:2px solid rgba(110,180,247,.22);outline-offset:2px;}
-    .diff-view{flex:1;overflow:auto;background:var(--bg2);padding:0 8px;position:relative;overflow-anchor:none;display:flex;flex-direction:column;}
+    .diff-view{flex:1;overflow:auto;background:var(--bg2);padding:0 8px;position:relative;overflow-anchor:none;}
     .diff-view[contenteditable="true"]:focus{outline:none;}
     .diff-view[contenteditable="true"]{caret-color:transparent;}
     .diff-view[contenteditable="true"] .editable-line{caret-color:auto;}
@@ -1212,15 +1212,12 @@
     /* ── DIFF CONTENT ── */
     .empty-state{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;
       gap:12px;color:var(--text3);}
-    .diff-view > .empty-state{flex:1;}
     .empty-state svg{opacity:.2;}
     .empty-state p{font-size:13px;}
 
     /* Split layout */
-    .diff-view > .split-wrap{flex:1;min-height:0;}
     .split-wrap{display:grid;grid-template-columns:1fr 3px 1fr;min-height:100%;overflow-x:auto;}
-    .sp{overflow:auto;border-right:2px solid var(--border);min-width:0;tab-size:4;-moz-tab-size:4;display:flex;flex-direction:column;}
-    .sp > .empty-state{flex:1;}
+    .sp{overflow:auto;border-right:2px solid var(--border);min-width:0;tab-size:4;-moz-tab-size:4;}
     .sp:last-child{border-right:none;}
     .sp-hdr{padding:4px 10px;background:var(--bg3);border-bottom:1px solid var(--border);font-size:11px;position:sticky;top:0;z-index:1;font-family:'JetBrains Mono',monospace;}
     
@@ -2195,7 +2192,7 @@ flex-shrink:0;cursor:pointer;
       <div class="bm-title">切换分支 <span class="bm-kbd">Esc</span></div>
       <div class="bm-search">
         <input id="branchMenuSearch" placeholder="搜索分支..." />
-        <button class="btn" id="branchMenuRefreshBtn" onclick="refreshBranchMenu(event)">
+        <button class="btn" id="branchMenuRefreshBtn" data-action="refreshBranchMenu">
           <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
             <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/>
           </svg>刷新
@@ -2206,7 +2203,7 @@ flex-shrink:0;cursor:pointer;
   </div>
   <span class="repo-label" id="repoLabel"></span>
   <div class="row ml">
-    <button class="btn" id="stagedBtn" style="display:none" onclick="showStagedPanel()">
+    <button class="btn" id="stagedBtn" style="display:none" data-action="showStagedPanel">
       <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
         <path d="M7 7h10"/>
         <path d="M7 12h10"/>
@@ -2214,24 +2211,24 @@ flex-shrink:0;cursor:pointer;
       </svg>
       <span id="stagedBtnText">暂存</span>
     </button>
-    <button class="btn" id="pullBtn" style="display:none" onclick="pullUpdate()">
+    <button class="btn" id="pullBtn" style="display:none" data-action="pullUpdate">
       <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
         <path d="M12 3v10"/>
         <polyline points="8 9 12 13 16 9"/>
         <path d="M4 17h16"/>
       </svg>更新
     </button>
-    <button class="btn" id="refreshBtn" style="display:none" onclick="refresh()">
+    <button class="btn" id="refreshBtn" style="display:none" data-action="refresh">
       <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
         <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/>
       </svg>刷新
     </button>
-    <button class="btn" id="changeBtn" style="display:none" onclick="goToOpener()">
+    <button class="btn" id="changeBtn" style="display:none" data-action="goToOpener">
       <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/>
       </svg>换仓库
     </button>
-    <button class="icon-btn" id="themeToggle" title="切换主题" onclick="toggleTheme()">
+    <button class="icon-btn" id="themeToggle" title="切换主题" data-action="toggleTheme">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <circle cx="12" cy="12" r="5"/>
         <line x1="12" y1="1" x2="12" y2="3"/>
@@ -2258,8 +2255,8 @@ flex-shrink:0;cursor:pointer;
     </p>
     <input class="open-input" id="repoInput" type="text"
            placeholder="输入仓库路径..."
-           onkeydown="if(event.key==='Enter')openRepo()">
-    <button class="open-submit" onclick="openRepo()">打开仓库</button>
+           data-action="repoInput">
+    <button class="open-submit" data-action="openRepo">打开仓库</button>
     <div class="open-err" id="openErr"></div>
     <div style="font-size:11px;color:var(--text3);text-align:center;line-height:1.8">
       需先在项目目录运行：<code style="color:var(--accent2)">python3 server.py</code><br>
@@ -2275,26 +2272,26 @@ flex-shrink:0;cursor:pointer;
   <div class="sidebar" id="sidebar">
     <div class="ph">
       <span class="ph-title">变更</span>
-      <span class="badge" id="fileCount" title="筛选变更文件" onclick="toggleFileFilter()">0</span>
-      <button class="icon-btn" title="刷新" onclick="refresh()">
+      <span class="badge" id="fileCount" title="筛选变更文件" data-action="toggleFileFilter">0</span>
+      <button class="icon-btn" title="刷新" data-action="refresh">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
           <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/>
         </svg>
       </button>
-      <button class="collapse-btn" id="toggleLeftBtn" title="收起左侧栏" onclick="toggleLeftPanel()">
+      <button class="collapse-btn" id="toggleLeftBtn" title="收起左侧栏" data-action="toggleLeftPanel">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="15 18 9 12 15 6"/>
         </svg>
       </button>
     </div>
     <div class="sf-search">
-      <input type="search" placeholder="过滤文件..." oninput="filterFiles(this.value)">
+      <input type="search" placeholder="过滤文件..." id="fileFilterInput">
     </div>
     <div class="file-list" id="fileList"></div>
     <div class="sf-foot">
-      <button class="btn" style="flex:1" onclick="selAll(true)">全选</button>
-      <button class="btn" style="flex:1" onclick="selAll(false)">取消</button>
-      <button class="btn red" id="revertAllBtn" style="flex:1" onclick="showModal('revertAllModal')">全撤回</button>
+      <button class="btn" style="flex:1" data-action="selAll" data-value="1">全选</button>
+      <button class="btn" style="flex:1" data-action="selAll" data-value="0">取消</button>
+      <button class="btn red" id="revertAllBtn" style="flex:1" data-action="showModal" data-modal="revertAllModal">全撤回</button>
     </div>
   </div>
   <div class="resizer" id="r1"></div>
@@ -2302,18 +2299,18 @@ flex-shrink:0;cursor:pointer;
   <!-- Center: diff -->
   <div class="diff-area">
     <div class="diff-toolbar">
-      <div class="dtab active" id="dtSplit" onclick="setDiffMode('split',this)">并排对比</div>
-      <div class="dtab" id="dtUnified" onclick="setDiffMode('unified',this)">变更视图</div>
+      <div class="dtab active" id="dtSplit" data-action="setDiffMode" data-mode="split">并排对比</div>
+      <div class="dtab" id="dtUnified" data-action="setDiffMode" data-mode="unified">变更视图</div>
       <div class="diff-filelabel" id="diffLabel"></div>
       <div class="row">
-        <button class="btn" onclick="navFile(-1)">‹ 上个</button>
-        <button class="btn" onclick="navFile(1)">下个 ›</button>
-        <button class="btn red" id="revertFileBtn" style="display:none" onclick="showModal('revertFileModal')">
+        <button class="btn" data-action="navFile" data-step="-1">‹ 上个</button>
+        <button class="btn" data-action="navFile" data-step="1">下个 ›</button>
+        <button class="btn red" id="revertFileBtn" style="display:none" data-action="showModal" data-modal="revertFileModal">
           <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/>
           </svg>撤回文件
         </button>
-        <button class="btn green" id="saveFileBtn" style="display:none" onclick="saveFile()">
+        <button class="btn green" id="saveFileBtn" style="display:none" data-action="saveFile">
           <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/>
           </svg>保存
@@ -2360,11 +2357,11 @@ flex-shrink:0;cursor:pointer;
   <!-- Right: commit + log -->
   <div class="right-panel" id="rightPanel">
     <div class="vtabs">
-      <div class="vtab active" onclick="switchTab('commit',this)">提交</div>
-      <div class="vtab" onclick="switchTab('log',this)">日志</div>
-      <div class="vtab ai-vtab" onclick="switchTab('ai',this)">Hivo</div>
+      <div class="vtab active" data-action="switchTab" data-tab="commit">提交</div>
+      <div class="vtab" data-action="switchTab" data-tab="log">日志</div>
+      <div class="vtab ai-vtab" data-action="switchTab" data-tab="ai">Hivo</div>
       <div style="margin-left:auto"></div>
-      <button class="collapse-btn" id="toggleRightBtn" title="收起右侧栏" onclick="toggleRightPanel()">
+      <button class="collapse-btn" id="toggleRightBtn" title="收起右侧栏" data-action="toggleRightPanel">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="9 18 15 12 9 6"/>
         </svg>
@@ -2376,12 +2373,12 @@ flex-shrink:0;cursor:pointer;
       <div class="ph" style="background:var(--bg2)"><span class="ph-title">提交信息</span></div>
       <textarea class="commit-msg" id="commitMsg" placeholder="输入提交说明..."></textarea>
       <div class="commit-actions">
-        <button class="btn green" style="justify-content:center" onclick="doCommit()">
+        <button class="btn green" style="justify-content:center" data-action="doCommit" data-push="0">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
             <polyline points="20 6 9 17 4 12"/>
           </svg>提交
         </button>
-        <button class="btn blue" style="justify-content:center" onclick="doCommit(true)">
+        <button class="btn blue" style="justify-content:center" data-action="doCommit" data-push="1">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/>
           </svg>提交并推送
@@ -2395,14 +2392,14 @@ flex-shrink:0;cursor:pointer;
         <span class="ph-title">最近提交</span>
         <span class="badge" id="logCount">0</span>
       </div>
-      <div class="log-search"><input type="text" placeholder="搜索提交信息..." oninput="filterLog(this.value)"></div>
+      <div class="log-search"><input type="text" placeholder="搜索提交信息..." id="logFilterInput"></div>
       <div class="log-list" id="logList"></div>
     </div>
 
     <!-- Log detail -->
     <div class="vtab-content" id="tabLogDetail">
       <div class="log-detail-top">
-        <div class="log-detail-back" onclick="backToLog()">
+        <div class="log-detail-back" data-action="backToLog">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
             <polyline points="15 18 9 12 15 6"/>
           </svg>返回历史列表
@@ -2410,9 +2407,9 @@ flex-shrink:0;cursor:pointer;
         <div class="log-detail-hash" id="ldHash"></div>
         <div class="log-detail-msg" id="ldMsg"></div>
         <div class="log-detail-meta" style="margin-top:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          <button class="btn red" id="revertCommitBtn" style="padding:2px 10px;display:none" title="撤回该提交（git revert），会生成一个新的回滚提交" onclick="revertCommitFromHistory()">Revert</button>
-          <button class="btn blue" id="pushCommitBtn" style="padding:2px 10px;display:none" title="推送当前分支" onclick="pushFromHistory()">Push</button>
-          <button class="btn" id="softResetCommitBtn" style="padding:2px 8px;display:none" title="撤销最近一次提交（git reset --soft），保留修改" onclick="softResetCommitFromHistory()">↩</button>
+          <button class="btn red" id="revertCommitBtn" style="padding:2px 10px;display:none" title="撤回该提交（git revert），会生成一个新的回滚提交" data-action="revertCommitFromHistory">Revert</button>
+          <button class="btn blue" id="pushCommitBtn" style="padding:2px 10px;display:none" title="推送当前分支" data-action="pushFromHistory">Push</button>
+          <button class="btn" id="softResetCommitBtn" style="padding:2px 8px;display:none" title="撤销最近一次提交（git reset --soft），保留修改" data-action="softResetCommitFromHistory">↩</button>
           <span id="commitActionHint" style="color:var(--text3);font-size:11px">撤回该提交（git revert），会生成一个新的回滚提交</span>
         </div>
         <div class="log-detail-meta" id="ldMeta"></div>
@@ -2426,7 +2423,7 @@ flex-shrink:0;cursor:pointer;
         <!-- 顶部会话栏 - 可滚动的会话列表 + 固定的新建按钮 -->
         <div class="ai-topbar">
           <div class="ai-sessions-scroll" id="aiSessionsScroll"></div>
-          <button class="ai-new-session-btn" title="新建会话" onclick="newAiSession()">+</button>
+          <button class="ai-new-session-btn" title="新建会话" data-action="newAiSession">+</button>
         </div>
 
         <div id="aiChatView" style="display:flex;flex-direction:column;flex:1;min-height:0;">
@@ -2438,9 +2435,9 @@ flex-shrink:0;cursor:pointer;
             <div class="ai-composer-wrap">
               <div class="ai-composer">
                 <span class="ai-composer-counter" id="aiSendCounter" title="UndoSteps/Turns">0/0</span>
-                <textarea id="aiChatInput" class="ai-input" placeholder="Ask Hivo anything..." onkeydown="aiChatInputKeydown(event)"></textarea>
-                <button class="ai-continue-btn" id="aiContinueBtn" onclick="aiContinue()" title="继续执行">Continue</button>
-                <button class="ai-send-btn" onclick="sendAiChat()">
+                <textarea id="aiChatInput" class="ai-input" placeholder="Ask Hivo anything..."></textarea>
+                <button class="ai-continue-btn" id="aiContinueBtn" data-action="aiContinue" title="继续执行">Continue</button>
+                <button class="ai-send-btn" data-action="sendAiChat">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <line x1="22" y1="2" x2="11" y2="13"></line>
                     <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
@@ -2448,9 +2445,9 @@ flex-shrink:0;cursor:pointer;
                 </button>
               </div>
               <div class="ai-under">
-                <button class="ai-add-ctx-btn" title="Add Context" onclick="aiAddContext()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg></button>
-                <button class="ai-undo-btn" title="撤回上一轮" onclick="aiUndoLastTurn()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14l-4-4 4-4"/><path d="M5 10h10a4 4 0 0 1 0 8h-1"/></svg></button>
-                <div class="ai-model-selector" onclick="openAiModelMenu(event)" title="选择模型">
+                <button class="ai-add-ctx-btn" title="Add Context" data-action="aiAddContext"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg></button>
+                <button class="ai-undo-btn" title="撤回上一轮" data-action="aiUndoLastTurn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14l-4-4 4-4"/><path d="M5 10h10a4 4 0 0 1 0 8h-1"/></svg></button>
+                <div class="ai-model-selector" data-action="openAiModelMenu" title="选择模型">
                   <svg class="ai-model-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <circle cx="12" cy="12" r="3"/>
                     <path d="M12 1v6m0 6v6m5.2-13.2l-4.2 4.2m-1.4 1.4l-4.2 4.2m10.6.6l-4.2-4.2m-1.4-1.4l-4.2-4.2"/>
@@ -2470,18 +2467,18 @@ flex-shrink:0;cursor:pointer;
           <div class="ai-config">
             <div class="ai-config-top">
               <div class="ai-seg" style="margin-right:2px;">
-                <div id="aiCfgSegModel" class="seg active" onclick="showAiConfigPanel()">模型配置</div>
-                <div id="aiCfgSegSearch" class="seg" onclick="showAiSearchPanel()">搜索引擎</div>
+                <div id="aiCfgSegModel" class="seg active" data-action="showAiConfigPanel">模型配置</div>
+                <div id="aiCfgSegSearch" class="seg" data-action="showAiSearchPanel">搜索引擎</div>
               </div>
               <div class="sp"></div>
-              <button class="btn" title="返回" aria-label="返回" style="width:22px;height:22px;padding:0;display:inline-flex;align-items:center;justify-content:center" onclick="showAiChatPanel()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></button>
+              <button class="btn" title="返回" aria-label="返回" style="width:22px;height:22px;padding:0;display:inline-flex;align-items:center;justify-content:center" data-action="showAiChatPanel"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></button>
             </div>
             <div class="ai-grid">
               <div class="ai-card">
                 <div class="ai-card-hd">
                   <div class="ai-card-title">模型配置</div>
                   <div style="margin-left:auto"></div>
-                  <button class="btn" style="padding:2px 10px" onclick="addAiProfile()">新增</button>
+                  <button class="btn" style="padding:2px 10px" data-action="addAiProfile">新增</button>
                 </div>
                 <div id="aiProfileList" class="ai-list"></div>
               </div>
@@ -2490,9 +2487,9 @@ flex-shrink:0;cursor:pointer;
                 <div class="ai-card-hd">
                   <div class="ai-card-title">编辑配置</div>
                   <div style="margin-left:auto"></div>
-                  <button class="btn red" id="aiDeleteProfileBtn" style="padding:2px 10px;display:none" onclick="deleteAiProfile()">删除</button>
+                  <button class="btn red" id="aiDeleteProfileBtn" style="padding:2px 10px;display:none" data-action="deleteAiProfile">删除</button>
                 </div>
-                <form class="ai-form" onsubmit="return false;">
+                <form class="ai-form">
                   <input type="text" name="username" autocomplete="username" style="display:none">
                   <div>
                     <label>API Base URL</label>
@@ -2510,8 +2507,8 @@ flex-shrink:0;cursor:pointer;
                   </div>
                   <div id="aiModelSuggest" class="ai-model-suggest"></div>
                   <div class="ai-row">
-                    <button class="btn" style="flex:1;justify-content:center" onclick="setAiProfileActive()">设为当前</button>
-                    <button class="btn green" style="flex:1;justify-content:center" onclick="saveAiProfiles()">保存</button>
+                    <button class="btn" style="flex:1;justify-content:center" data-action="setAiProfileActive">设为当前</button>
+                    <button class="btn green" style="flex:1;justify-content:center" data-action="saveAiProfiles">保存</button>
                   </div>
                   <div id="aiConfigMeta" style="font-size:11px;color:var(--text3);"></div>
                 </form>
@@ -2525,11 +2522,11 @@ flex-shrink:0;cursor:pointer;
           <div class="ai-config">
             <div class="ai-config-top">
               <div class="ai-seg" style="margin-right:2px;">
-                <div id="aiCfgSegModel2" class="seg" onclick="showAiConfigPanel()">模型配置</div>
-                <div id="aiCfgSegSearch2" class="seg active" onclick="showAiSearchPanel()">搜索引擎</div>
+                <div id="aiCfgSegModel2" class="seg" data-action="showAiConfigPanel">模型配置</div>
+                <div id="aiCfgSegSearch2" class="seg active" data-action="showAiSearchPanel">搜索引擎</div>
               </div>
               <div class="sp"></div>
-              <button class="btn" title="返回" aria-label="返回" style="width:22px;height:22px;padding:0;display:inline-flex;align-items:center;justify-content:center" onclick="showAiChatPanel()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></button>
+              <button class="btn" title="返回" aria-label="返回" style="width:22px;height:22px;padding:0;display:inline-flex;align-items:center;justify-content:center" data-action="showAiChatPanel"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></button>
             </div>
             <div class="ai-grid">
               <div class="ai-card">
@@ -2543,7 +2540,7 @@ flex-shrink:0;cursor:pointer;
                       <span class="autosave-slider"></span>
                     </label>
                   </div>
-                  <button class="btn" style="padding:2px 10px" onclick="addAiSearchProfile()">新增</button>
+                  <button class="btn" style="padding:2px 10px" data-action="addAiSearchProfile">新增</button>
                 </div>
                 <div id="aiSearchProfileList" class="ai-list"></div>
               </div>
@@ -2552,9 +2549,9 @@ flex-shrink:0;cursor:pointer;
                 <div class="ai-card-hd">
                   <div class="ai-card-title">编辑配置</div>
                   <div style="margin-left:auto"></div>
-                  <button class="btn red" id="aiDeleteSearchProfileBtn" style="padding:2px 10px;display:none" onclick="deleteAiSearchProfile()">删除</button>
+                  <button class="btn red" id="aiDeleteSearchProfileBtn" style="padding:2px 10px;display:none" data-action="deleteAiSearchProfile">删除</button>
                 </div>
-                <form class="ai-form" onsubmit="return false;">
+                <form class="ai-form">
                   <div>
                     <label>Provider</label>
                     <input id="aiSearchProvider" type="text" placeholder="searxng / serper / tavily" />
@@ -2579,8 +2576,8 @@ flex-shrink:0;cursor:pointer;
                     </div>
                   </div>
                   <div class="ai-row">
-                    <button class="btn" style="flex:1;justify-content:center" onclick="setAiSearchProfileActive()">设为当前</button>
-                    <button class="btn green" style="flex:1;justify-content:center" onclick="saveAiSearchProfiles()">保存</button>
+                    <button class="btn" style="flex:1;justify-content:center" data-action="setAiSearchProfileActive">设为当前</button>
+                    <button class="btn green" style="flex:1;justify-content:center" data-action="saveAiSearchProfiles">保存</button>
                   </div>
                   <div id="aiSearchMeta" style="font-size:11px;color:var(--text3);"></div>
                 </form>
@@ -2599,8 +2596,8 @@ flex-shrink:0;cursor:pointer;
     <h3 id="revertFileTitle">撤回整个文件</h3>
     <p id="revertFileDesc"></p>
     <div class="modal-btns">
-      <button class="btn" onclick="closeModal('revertFileModal')">取消</button>
-      <button class="btn red" id="revertFileConfirmBtn" onclick="doRevertFile()">确认撤回</button>
+      <button class="btn" data-action="closeModal" data-modal="revertFileModal">取消</button>
+      <button class="btn red" id="revertFileConfirmBtn" data-action="doRevertFile">确认撤回</button>
     </div>
   </div>
 </div>
@@ -2611,8 +2608,8 @@ flex-shrink:0;cursor:pointer;
     <h3 id="revertAllTitle">撤回所有修改</h3>
     <p id="revertAllDesc">将撤回工作区所有未提交修改，此操作不可撤销！</p>
     <div class="modal-btns">
-      <button class="btn" onclick="closeModal('revertAllModal')">取消</button>
-      <button class="btn red" id="revertAllOkBtn" onclick="doRevertAll()">全部撤回</button>
+      <button class="btn" data-action="closeModal" data-modal="revertAllModal">取消</button>
+      <button class="btn red" id="revertAllOkBtn" data-action="doRevertAll">全部撤回</button>
     </div>
   </div>
 </div>
@@ -2622,8 +2619,8 @@ flex-shrink:0;cursor:pointer;
     <h3 id="confirmTitle">确认</h3>
     <p id="confirmMessage"></p>
     <div class="modal-btns">
-      <button class="btn" id="confirmCancelBtn" onclick="closeModal('confirmModal')">取消</button>
-      <button class="btn blue" id="confirmOkBtn">确定</button>
+      <button class="btn" id="confirmCancelBtn" data-action="closeModal" data-modal="confirmModal">取消</button>
+      <button class="btn blue" id="confirmOkBtn" data-action="confirmOk">确定</button>
     </div>
   </div>
 </div>
@@ -2642,10 +2639,10 @@ flex-shrink:0;cursor:pointer;
     <div id="stagedDesc" style="font-size:12px;color:var(--text3);margin-top:-6px;margin-bottom:10px;"></div>
     <div id="stagedList" style="max-height:420px;overflow:auto;border:1px solid var(--border);border-radius:8px;background:var(--bg2);"></div>
     <div class="modal-btns" style="margin-top:12px;flex-wrap:wrap">
-      <button class="btn" id="stagedUnstageAllBtn" onclick="unstageAllStagedFromPanel()">全部恢复</button>
-      <button class="btn red" id="stagedDiscardAllBtn" onclick="discardAllStagedFromPanel()">全部丢弃</button>
+      <button class="btn" id="stagedUnstageAllBtn" data-action="unstageAllStagedFromPanel">全部恢复</button>
+      <button class="btn red" id="stagedDiscardAllBtn" data-action="discardAllStagedFromPanel">全部丢弃</button>
       <div style="flex:1"></div>
-      <button class="btn" onclick="closeModal('stagedModal')">关闭</button>
+      <button class="btn" data-action="closeModal" data-modal="stagedModal">关闭</button>
     </div>
   </div>
 </div>
@@ -2680,8 +2677,8 @@ flex-shrink:0;cursor:pointer;
 
 <div class="undo-tip" id="undoTip" style="display:none">
   <span class="t" id="undoTipText">已撤回</span>
-  <button class="btn" id="undoTipBtn" onclick="undoLastRevertFromTip()">撤销</button>
-  <button class="btn x" onclick="hideUndoTip()">关闭</button>
+  <button class="btn" id="undoTipBtn" data-action="undoLastRevertFromTip">撤销</button>
+  <button class="btn x" data-action="hideUndoTip">关闭</button>
 </div>
 
 <div id="navDial" class="nav-dial">
@@ -2767,7 +2764,6 @@ flex-shrink:0;cursor:pointer;
   function __gmRenderStagedList() {
     const box = document.getElementById('stagedList');
     if (!box) return;
-    try { __gmBindStagedListDelegation(); } catch (e) {}
     const files0 = Array.isArray(__gmStagedPanelFiles) ? __gmStagedPanelFiles : [];
     if (!files0.length) {
       box.innerHTML = '<div style="padding:12px;color:var(--text3);">暂无暂存区文件</div>';
@@ -3092,7 +3088,6 @@ flex-shrink:0;cursor:pointer;
     try {
       const box = document.getElementById('aiSearchProfileList');
       if (!box) return;
-      try { __gmBindAiDelegation(); } catch (e) {}
       const c = (__gmAiConfig && typeof __gmAiConfig === 'object') ? __gmAiConfig : {};
       const ws = (c.web_search && typeof c.web_search === 'object') ? c.web_search : {};
       const profiles = Array.isArray(ws.profiles) ? ws.profiles : [];
@@ -3857,6 +3852,197 @@ flex-shrink:0;cursor:pointer;
       if (act === 'selectFileFromRecent') return selectFileFromRecent(Number(el.getAttribute('data-idx')));
       if (act === 'removeRecentFileByPath') return removeRecentFileByPath(String(el.getAttribute('data-path') || ''));
     });
+  }
+
+  function __gmBindStaticUiDelegation() {
+    try {
+      if (document.__gmStaticUiDelegationBound) return;
+      document.__gmStaticUiDelegationBound = true;
+
+      document.addEventListener('click', (e) => {
+        try {
+          const el = e.target && e.target.closest ? e.target.closest('[data-action]') : null;
+          if (!el) return;
+          const act = String(el.getAttribute('data-action') || '');
+          if (!act) return;
+
+          if (act === 'refreshBranchMenu') {
+            e.preventDefault();
+            refreshBranchMenu(e);
+            return;
+          }
+
+          if (act === 'showStagedPanel') { e.preventDefault(); showStagedPanel(); return; }
+          if (act === 'pullUpdate') { e.preventDefault(); pullUpdate(); return; }
+          if (act === 'refresh') { e.preventDefault(); refresh(); return; }
+          if (act === 'goToOpener') { e.preventDefault(); goToOpener(); return; }
+          if (act === 'toggleTheme') { e.preventDefault(); toggleTheme(); return; }
+          if (act === 'openRepo') { e.preventDefault(); openRepo(); return; }
+          if (act === 'toggleFileFilter') { e.preventDefault(); toggleFileFilter(); return; }
+          if (act === 'toggleLeftPanel') { e.preventDefault(); toggleLeftPanel(); return; }
+          if (act === 'toggleRightPanel') { e.preventDefault(); toggleRightPanel(); return; }
+          if (act === 'saveFile') { e.preventDefault(); saveFile(); return; }
+          if (act === 'backToLog') { e.preventDefault(); backToLog(); return; }
+          if (act === 'revertCommitFromHistory') { e.preventDefault(); revertCommitFromHistory(); return; }
+          if (act === 'pushFromHistory') { e.preventDefault(); pushFromHistory(); return; }
+          if (act === 'softResetCommitFromHistory') { e.preventDefault(); softResetCommitFromHistory(); return; }
+
+          if (act === 'newAiSession') { e.preventDefault(); newAiSession(); return; }
+          if (act === 'aiContinue') { e.preventDefault(); aiContinue(); return; }
+          if (act === 'sendAiChat') { e.preventDefault(); sendAiChat(); return; }
+          if (act === 'aiAddContext') { e.preventDefault(); aiAddContext(); return; }
+          if (act === 'aiUndoLastTurn') { e.preventDefault(); aiUndoLastTurn(); return; }
+          if (act === 'openAiModelMenu') { e.preventDefault(); openAiModelMenu(e); return; }
+          if (act === 'showAiConfigPanel') { e.preventDefault(); showAiConfigPanel(); return; }
+          if (act === 'showAiSearchPanel') { e.preventDefault(); showAiSearchPanel(); return; }
+          if (act === 'showAiChatPanel') { e.preventDefault(); showAiChatPanel(); return; }
+
+          if (act === 'selectAiProfile') { e.preventDefault(); selectAiProfile(String(el.getAttribute('data-id') || '')); return; }
+          if (act === 'editAiSearchProfile') { e.preventDefault(); editAiSearchProfile(String(el.getAttribute('data-id') || '')); return; }
+          if (act === 'aiDeleteMsg') { e.preventDefault(); aiDeleteMsg(parseInt(String(el.getAttribute('data-idx') || ''), 10)); return; }
+          if (act === 'aiPickMention') { e.preventDefault(); aiPickMention(parseInt(String(el.getAttribute('data-idx') || ''), 10)); return; }
+          if (act === 'onAiHistoryChipClick') { e.preventDefault(); onAiHistoryChipClick(String(el.getAttribute('data-id') || '')); return; }
+          if (act === 'onAiHistoryChipDelete') {
+            e.preventDefault();
+            try { e.stopPropagation(); } catch (e3) {}
+            onAiHistoryChipDelete(e, String(el.getAttribute('data-id') || ''));
+            return;
+          }
+
+          if (act === 'showRecentFilesDropdown') { e.preventDefault(); showRecentFilesDropdown(); return; }
+
+          if (act === 'editAiProfile') { e.preventDefault(); editAiProfile(String(el.getAttribute('data-id') || '')); return; }
+          if (act === '__gmAiUndoByGroupId') { e.preventDefault(); __gmAiUndoByGroupId(String(el.getAttribute('data-gid') || '')); return; }
+          if (act === 'selectLogFile') { e.preventDefault(); selectLogFile(parseInt(String(el.getAttribute('data-idx') || ''), 10)); return; }
+          if (act === 'restoreFromCommit') {
+            e.preventDefault();
+            try { e.stopPropagation(); } catch (e3) {}
+            restoreFromCommit(String(el.getAttribute('data-hash') || ''), String(el.getAttribute('data-path') || ''), el);
+            return;
+          }
+
+          if (act === 'addAiProfile') { e.preventDefault(); addAiProfile(); return; }
+          if (act === 'deleteAiProfile') { e.preventDefault(); deleteAiProfile(); return; }
+          if (act === 'setAiProfileActive') { e.preventDefault(); setAiProfileActive(); return; }
+          if (act === 'saveAiProfiles') { e.preventDefault(); saveAiProfiles(); return; }
+          if (act === 'addAiSearchProfile') { e.preventDefault(); addAiSearchProfile(); return; }
+          if (act === 'deleteAiSearchProfile') { e.preventDefault(); deleteAiSearchProfile(); return; }
+          if (act === 'setAiSearchProfileActive') { e.preventDefault(); setAiSearchProfileActive(); return; }
+          if (act === 'saveAiSearchProfiles') { e.preventDefault(); saveAiSearchProfiles(); return; }
+          if (act === 'doRevertFile') { e.preventDefault(); doRevertFile(); return; }
+          if (act === 'doRevertAll') { e.preventDefault(); doRevertAll(); return; }
+          if (act === 'confirmOk') { e.preventDefault(); confirmOk(); return; }
+          if (act === 'unstageAllStagedFromPanel') { e.preventDefault(); unstageAllStagedFromPanel(); return; }
+          if (act === 'discardAllStagedFromPanel') { e.preventDefault(); discardAllStagedFromPanel(); return; }
+          if (act === 'unstageOneStagedFromPanel') { e.preventDefault(); unstageOneStagedFromPanel(parseInt(String(el.getAttribute('data-idx') || ''), 10)); return; }
+          if (act === 'discardOneStagedFromPanel') { e.preventDefault(); discardOneStagedFromPanel(parseInt(String(el.getAttribute('data-idx') || ''), 10)); return; }
+          if (act === 'undoLastRevertFromTip') { e.preventDefault(); undoLastRevertFromTip(); return; }
+          if (act === 'hideUndoTip') { e.preventDefault(); hideUndoTip(); return; }
+
+          if (act === 'selAll') {
+            e.preventDefault();
+            const v = String(el.getAttribute('data-value') || '');
+            selAll(v === '1' || v === 'true');
+            return;
+          }
+
+          if (act === 'showModal') {
+            e.preventDefault();
+            const modal = String(el.getAttribute('data-modal') || '');
+            if (!modal) return;
+            showModal(modal);
+            return;
+          }
+
+          if (act === 'closeModal') {
+            e.preventDefault();
+            const modal = String(el.getAttribute('data-modal') || '');
+            if (!modal) return;
+            closeModal(modal);
+            return;
+          }
+
+          if (act === 'setDiffMode') {
+            e.preventDefault();
+            const mode = String(el.getAttribute('data-mode') || '');
+            if (!mode) return;
+            setDiffMode(mode, el);
+            return;
+          }
+
+          if (act === 'navFile') {
+            e.preventDefault();
+            const step = parseInt(String(el.getAttribute('data-step') || ''), 10);
+            if (!Number.isFinite(Number(step))) return;
+            navFile(step);
+            return;
+          }
+
+          if (act === 'switchTab') {
+            e.preventDefault();
+            const tab = String(el.getAttribute('data-tab') || '');
+            if (!tab) return;
+            switchTab(tab, el);
+            return;
+          }
+
+          if (act === 'doCommit') {
+            e.preventDefault();
+            const push = String(el.getAttribute('data-push') || '0');
+            doCommit(push === '1' || push === 'true');
+            return;
+          }
+        } catch (e2) {}
+      });
+
+      const fileFilterInput = document.getElementById('fileFilterInput');
+      if (fileFilterInput && !fileFilterInput.__gmBound) {
+        fileFilterInput.__gmBound = true;
+        fileFilterInput.addEventListener('input', (e) => {
+          try { filterFiles(String(e && e.target ? e.target.value : '')); } catch (e2) {}
+        });
+      }
+
+      const logFilterInput = document.getElementById('logFilterInput');
+      if (logFilterInput && !logFilterInput.__gmBound) {
+        logFilterInput.__gmBound = true;
+        logFilterInput.addEventListener('input', (e) => {
+          try { filterLog(String(e && e.target ? e.target.value : '')); } catch (e2) {}
+        });
+      }
+
+      const repoInput = document.getElementById('repoInput');
+      if (repoInput && !repoInput.__gmBound) {
+        repoInput.__gmBound = true;
+        repoInput.addEventListener('keydown', (e) => {
+          try {
+            if (e && e.key === 'Enter') {
+              e.preventDefault();
+              openRepo();
+            }
+          } catch (e2) {}
+        });
+      }
+
+      const aiChatInput = document.getElementById('aiChatInput');
+      if (aiChatInput && !aiChatInput.__gmBound) {
+        aiChatInput.__gmBound = true;
+        aiChatInput.addEventListener('keydown', (e) => {
+          try { aiChatInputKeydown(e); } catch (e2) {}
+        });
+      }
+
+      try {
+        const forms = document.querySelectorAll('form.ai-form');
+        forms.forEach(f => {
+          if (f.__gmBound) return;
+          f.__gmBound = true;
+          f.addEventListener('submit', (e) => {
+            try { e.preventDefault(); } catch (e2) {}
+          });
+        });
+      } catch (e2) {}
+    } catch (e) {}
   }
 
   function hideRecentFilesDropdown() {
@@ -9993,7 +10179,6 @@ flex-shrink:0;cursor:pointer;
       closeAiModelMenu();
     });
     __gmAiModelMenuEl = el;
-    try { __gmBindAiDelegation(); } catch (e) {}
     return el;
   }
 
@@ -10093,7 +10278,6 @@ flex-shrink:0;cursor:pointer;
     try {
       const list = document.getElementById('aiChatInner') || document.getElementById('aiChatList');
       if (!list) return;
-      try { __gmBindAiDelegation(); } catch (e) {}
       if (!Array.isArray(__gmAiChatMessages) || __gmAiChatMessages.length === 0) {
         try { list.__gmAiMsgCache = []; } catch (e0) {}
         list.innerHTML = `<div class="ai-empty"><div class="ai-empty-card">
@@ -10818,7 +11002,6 @@ flex-shrink:0;cursor:pointer;
       return `<div class="${cls}" data-action="aiPickMention" data-idx="${i}"><div style="min-width:0;flex:1;display:flex;flex-direction:column;gap:2px;"><div class="nm">${esc(nm)}</div></div></div>`;
     }).join('');
     el.innerHTML = html;
-    try { __gmBindAiDelegation(); } catch (e) {}
     const ta = document.getElementById('aiChatInput');
     try {
       const w = __gmAiGetChatPanelWidth();
@@ -11004,9 +11187,9 @@ flex-shrink:0;cursor:pointer;
       const chips = [];
 
       if (!sessions.length) {
-        chips.push(`<div class="ai-session-chip active" data-sid="" draggable="true" onclick="onAiHistoryChipClick('')">
+        chips.push(`<div class="ai-session-chip active" data-sid="" draggable="true" data-action="onAiHistoryChipClick" data-id="">
           <span class="t">会话</span>
-          <span class="x" onclick="onAiHistoryChipDelete(event,'')">×</span>
+          <span class="x" data-action="onAiHistoryChipDelete" data-id="">×</span>
         </div>`);
       }
       
@@ -11014,9 +11197,9 @@ flex-shrink:0;cursor:pointer;
         const sid = String(s.id || '');
         const title = String(s.title || '会话');
         const cls = 'ai-session-chip' + (sid && sid === active ? ' active' : '');
-        chips.push(`<div class="${cls}" data-sid="${esc(sid)}" draggable="true" onclick="onAiHistoryChipClick('${esc(sid)}')">
+        chips.push(`<div class="${cls}" data-sid="${esc(sid)}" draggable="true" data-action="onAiHistoryChipClick" data-id="${esc(sid)}">
           <span class="t">${esc(title)}</span>
-          <span class="x" onclick="onAiHistoryChipDelete(event,'${esc(sid)}')">×</span>
+          <span class="x" data-action="onAiHistoryChipDelete" data-id="${esc(sid)}">×</span>
         </div>`);
       });
       chips.push('<div class="ai-session-drop-end" aria-hidden="true"></div>');
@@ -11252,7 +11435,6 @@ flex-shrink:0;cursor:pointer;
     try {
       const el = document.getElementById('aiProfileList');
       if (!el) return;
-      try { __gmBindAiDelegation(); } catch (e) {}
       const profiles = Array.isArray(__gmAiConfig.profiles) ? __gmAiConfig.profiles : [];
       const active = String(__gmAiConfig.active_profile_id || '');
       const selected = String(__gmAiEditingProfileId || '');
@@ -12796,7 +12978,7 @@ flex-shrink:0;cursor:pointer;
             <div class="tp">${esc(title)}</div>
             <div class="sub">${esc(sub)}</div>
           </div>
-          <div class="act" onclick="__gmAiUndoByGroupId('${esc(gid)}')">撤回</div>
+          <div class="act" data-action="__gmAiUndoByGroupId" data-gid="${esc(gid)}">撤回</div>
         </div>`;
       }).join('');
       el.innerHTML = html;
@@ -12896,10 +13078,6 @@ flex-shrink:0;cursor:pointer;
     document.getElementById('changeBtn').style.display  = 'flex';
     initBranchDropdown();
     try { __gmBindDiffLabelDelegation(); } catch (e) {}
-    try { __gmBindDiffViewDelegation(); } catch (e) {}
-    try { __gmBindStagedListDelegation(); } catch (e) {}
-    try { __gmBindAiDelegation(); } catch (e) {}
-    try { __gmBindLogDetailFileListDelegation(); } catch (e) {}
 
     // 启动WebSocket连接
     connectWebSocket();
@@ -12907,89 +13085,6 @@ flex-shrink:0;cursor:pointer;
     // 不再需要轮询模式，WebSocket会实时推送更新
     // 但保留作为备份
     startRealTimeRefresh();
-  }
-
-  function __gmBindLogDetailFileListDelegation() {
-    const fl = document.getElementById('ldFileList');
-    if (!fl) return;
-    if (fl.__gmDelegationBound) return;
-    fl.__gmDelegationBound = true;
-    fl.addEventListener('click', (e) => {
-      const el = e.target && e.target.closest ? e.target.closest('[data-action]') : null;
-      if (!el) return;
-      const act = String(el.getAttribute('data-action') || '');
-      if (act !== 'selectLogFile' && act !== 'restoreFromCommit') return;
-      try { e.preventDefault(); e.stopPropagation(); } catch (e2) {}
-      if (act === 'selectLogFile') {
-        const idx = Number(el.getAttribute('data-idx'));
-        if (!Number.isFinite(idx)) return;
-        return selectLogFile(idx);
-      }
-      const hash = String(el.getAttribute('data-hash') || '');
-      const path = String(el.getAttribute('data-path') || '');
-      if (!hash || !path) return;
-      return restoreFromCommit(hash, path, el);
-    });
-  }
-
-  function __gmBindStagedListDelegation() {
-    const box = document.getElementById('stagedList');
-    if (!box) return;
-    if (box.__gmDelegationBound) return;
-    box.__gmDelegationBound = true;
-    box.addEventListener('click', (e) => {
-      const el = e.target && e.target.closest ? e.target.closest('[data-action]') : null;
-      if (!el) return;
-      const act = String(el.getAttribute('data-action') || '');
-      if (act !== 'unstageOneStagedFromPanel' && act !== 'discardOneStagedFromPanel') return;
-      try { e.preventDefault(); e.stopPropagation(); } catch (e2) {}
-      const idx = Number(el.getAttribute('data-idx'));
-      if (!Number.isFinite(idx)) return;
-      if (act === 'unstageOneStagedFromPanel') return unstageOneStagedFromPanel(idx);
-      return discardOneStagedFromPanel(idx);
-    });
-  }
-
-  function __gmBindAiDelegation() {
-    const bind = (root) => {
-      if (!root) return;
-      if (root.__gmDelegationBound) return;
-      root.__gmDelegationBound = true;
-      root.addEventListener('click', (e) => {
-        const el = e.target && e.target.closest ? e.target.closest('[data-action]') : null;
-        if (!el) return;
-        const act = String(el.getAttribute('data-action') || '');
-        try { e.preventDefault(); e.stopPropagation(); } catch (e2) {}
-        if (act === 'aiDeleteMsg') return aiDeleteMsg(Number(el.getAttribute('data-idx')));
-        if (act === 'selectAiProfile') return selectAiProfile(String(el.getAttribute('data-id') || ''));
-        if (act === 'showAiConfigPanel') return showAiConfigPanel();
-        if (act === 'editAiProfile') return editAiProfile(String(el.getAttribute('data-id') || ''));
-        if (act === 'editAiSearchProfile') return editAiSearchProfile(String(el.getAttribute('data-id') || ''));
-        if (act === 'aiPickMention') return aiPickMention(Number(el.getAttribute('data-idx')));
-      });
-    };
-
-    try { bind(document.getElementById('aiChatInner')); } catch (e) {}
-    try { bind(__gmAiModelMenuEl || document.getElementById('aiModelMenu')); } catch (e) {}
-    try { bind(document.getElementById('aiProfileList')); } catch (e) {}
-    try { bind(__gmAiMentionMenuEl || document.getElementById('aiMentionMenu')); } catch (e) {}
-  }
-
-  function __gmBindDiffViewDelegation() {
-    const dv = document.getElementById('diffView');
-    if (!dv) return;
-    if (dv.__gmDelegationBound) return;
-    dv.__gmDelegationBound = true;
-    dv.addEventListener('click', (e) => {
-      const el = e.target && e.target.closest ? e.target.closest('[data-action]') : null;
-      if (!el) return;
-      const act = String(el.getAttribute('data-action') || '');
-      if (act !== 'scrollToLine') return;
-      try { e.preventDefault(); e.stopPropagation(); } catch (e2) {}
-      const ln = Number(el.getAttribute('data-line'));
-      if (!Number.isFinite(ln)) return;
-      scrollToLine(ln);
-    });
   }
 
   function __gmBindDiffLabelDelegation() {
@@ -15306,18 +15401,16 @@ flex-shrink:0;cursor:pointer;
     // 查找所有块级复选框
     const blockCheckboxes = viewEl.querySelectorAll('.commit-cb');
     blockCheckboxes.forEach(cb => {
-      const onchangeAttr = cb.getAttribute('onchange') || '';
-      // 匹配块级复选框: toggleCommitBlock('path',hunkIdx,startIdx,endIdx,...)
-      const blockMatch = onchangeAttr.match(/toggleCommitBlock\('([^']+)',(\d+),(\d+),(\d+),/);
-      if (blockMatch) {
-        const hunkIdx = parseInt(blockMatch[2]);
-        const startIdx = parseInt(blockMatch[3]);
-        const endIdx = parseInt(blockMatch[4]);
-        
+      try {
+        const act = String(cb.getAttribute('data-action') || '');
+        if (act !== 'toggleCommitBlock') return;
+        const hunkIdx = parseInt(String(cb.getAttribute('data-hunk') || ''), 10);
+        const startIdx = parseInt(String(cb.getAttribute('data-start') || ''), 10);
+        const endIdx = parseInt(String(cb.getAttribute('data-end') || ''), 10);
+        if (!Number.isFinite(Number(hunkIdx)) || !Number.isFinite(Number(startIdx)) || !Number.isFinite(Number(endIdx))) return;
         const h = hunks[hunkIdx];
         if (!h || !Array.isArray(h.lines)) return;
-        
-        // 计算这个块内有多少行被勾选
+
         let total = 0;
         let selected = 0;
         for (let li = startIdx; li <= endIdx; li++) {
@@ -15330,12 +15423,11 @@ flex-shrink:0;cursor:pointer;
             }
           }
         }
-        
-        // 更新块级复选框状态
+
         const isAll = total > 0 && selected === total;
         const isNone = selected === 0;
         const isPart = !isAll && !isNone;
-        
+
         cb.checked = !isNone;
         cb.indeterminate = isPart;
         if (isPart) {
@@ -15345,7 +15437,7 @@ flex-shrink:0;cursor:pointer;
           cb.classList.remove('indet');
           cb.removeAttribute('data-indet');
         }
-      }
+      } catch (e) {}
     });
   }
 
@@ -15472,19 +15564,34 @@ flex-shrink:0;cursor:pointer;
         // 更新所有受影响行的复选框
         const commitCbs = view.querySelectorAll('.commit-cb');
         commitCbs.forEach(cb => {
-          // 从 onchange 属性中解析 hunkIdx 和 lineIdx
-          const onchangeAttr = cb.getAttribute('onchange') || '';
-          const match = onchangeAttr.match(/toggleCommitLine\('([^']+)',(\d+),(\d+),/) ||
-                        onchangeAttr.match(/toggleCommitBlock\('([^']+)',(\d+),(\d+),(\d+),/);
-          if (match) {
-            const cbHunkIdx = parseInt(match[2]);
-            const cbLineIdx = parseInt(match[3]);
-            if (cbHunkIdx === hunkIdx && cbLineIdx >= startLineIdx && cbLineIdx <= endLineIdx) {
-              cb.checked = checked;
-              cb.indeterminate = false;
-              cb.classList.remove('indet');
+          try {
+            const act = String(cb.getAttribute('data-action') || '');
+            if (act !== 'toggleCommitLine' && act !== 'toggleCommitBlock') return;
+            const cbHunkIdx = parseInt(String(cb.getAttribute('data-hunk') || ''), 10);
+            const cbLineIdx = parseInt(String(cb.getAttribute('data-line') || ''), 10);
+            const cbStartIdx = parseInt(String(cb.getAttribute('data-start') || ''), 10);
+            const cbEndIdx = parseInt(String(cb.getAttribute('data-end') || ''), 10);
+
+            if (act === 'toggleCommitLine') {
+              if (!Number.isFinite(Number(cbHunkIdx)) || !Number.isFinite(Number(cbLineIdx))) return;
+              if (cbHunkIdx === hunkIdx && cbLineIdx >= startLineIdx && cbLineIdx <= endLineIdx) {
+                cb.checked = checked;
+                cb.indeterminate = false;
+                cb.classList.remove('indet');
+              }
+              return;
             }
-          }
+
+            if (act === 'toggleCommitBlock') {
+              if (!Number.isFinite(Number(cbHunkIdx)) || !Number.isFinite(Number(cbStartIdx)) || !Number.isFinite(Number(cbEndIdx))) return;
+              if (cbHunkIdx === hunkIdx && cbStartIdx === startLineIdx && cbEndIdx === endLineIdx) {
+                cb.checked = checked;
+                cb.indeterminate = false;
+                cb.classList.remove('indet');
+              }
+              return;
+            }
+          } catch (e2) {}
         });
         
         // 更新所有块级复选框的半选状态
@@ -15543,7 +15650,7 @@ flex-shrink:0;cursor:pointer;
       return `<div class="dl context gm-gap-hint" style="opacity:.8" contenteditable="false">
       <span class="ls" contenteditable="false"></span>
       <span class="ln" contenteditable="false"></span>
-      <span class="lc" contenteditable="false" style="color:var(--text3)">... ${msg} <a href="#" contenteditable="false" onclick="expandChangeViewContext(5);return false;" style="color:var(--accent)">展开更多</a></span>
+      <span class="lc" contenteditable="false" style="color:var(--text3)">... ${msg} <a href="#" contenteditable="false" data-action="expandChangeViewContext" data-amount="5" style="color:var(--accent)">展开更多</a></span>
     </div>`;
     }
 
@@ -15553,7 +15660,7 @@ flex-shrink:0;cursor:pointer;
       return `<div class="dl context gm-gap-hint" style="opacity:.8" contenteditable="false">
       <span class="ls" contenteditable="false"></span>
       <span class="ln" contenteditable="false"></span>
-      <span class="lc" contenteditable="false" style="color:var(--text3)">... ${msg} <a href="#" contenteditable="false" onclick="expandChangeViewContext(5);return false;" style="color:var(--accent)">展开更多</a></span>
+      <span class="lc" contenteditable="false" style="color:var(--text3)">... ${msg} <a href="#" contenteditable="false" data-action="expandChangeViewContext" data-amount="5" style="color:var(--accent)">展开更多</a></span>
     </div>`;
     }
 
@@ -15774,11 +15881,11 @@ flex-shrink:0;cursor:pointer;
 
           const checkedAttr = lineCheckedAttr(ctl.hunkIndex, ctl.originalLineIndex);
           const commitCb = (showCommitCb && columnType === 'right' && !readonly && ctl.hunkIndex !== undefined && ctl.originalLineIndex !== undefined) ?
-                  `<input class="commit-cb" type="checkbox" ${checkedAttr} onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" onchange="event.stopPropagation();toggleCommitLine('${fpEsc}',${ctl.hunkIndex},${ctl.originalLineIndex},this.checked)">` : '';
+                  `<input class="commit-cb" type="checkbox" ${checkedAttr} data-action="toggleCommitLine" data-file="${fpEsc}" data-hunk="${ctl.hunkIndex}" data-line="${ctl.originalLineIndex}">` : '';
 
           const revertTitleNum = (ctl.num || line.num || '');
           const revertBtn = (showRevert && columnType === 'right' && !readonly && ctl.hunkIndex !== undefined && ctl.originalLineIndex !== undefined) ?
-                  `<button class="line-revert" onclick="askRevertLine('${fpEsc}',${ctl.hunkIndex},${ctl.originalLineIndex},'${file.status}')" title="撤回第${revertTitleNum}行"><span style="font-size:9px;font-weight:bold;">&gt;&gt;</span></button>`
+                  `<button class="line-revert" data-action="askRevertLine" data-file="${fpEsc}" data-hunk="${ctl.hunkIndex}" data-line="${ctl.originalLineIndex}" data-status="${file.status}" title="撤回第${revertTitleNum}行"><span style="font-size:9px;font-weight:bold;">&gt;&gt;</span></button>`
                   : '';
 
           // 右侧始终保留同宽 actions 槽位，保证行号列视觉对齐；左侧不占位
@@ -15817,9 +15924,9 @@ flex-shrink:0;cursor:pointer;
           const isPart = !isAll && !isNone;
           const checkedAttr = isAll ? 'checked' : '';
           const indetAttr = isPart ? 'data-indet="1"' : '';
-          const commitCb = (columnType === 'right' && !readonly) ? `<input class="commit-cb" type="checkbox" ${checkedAttr} ${indetAttr} onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" onchange="event.stopPropagation();toggleCommitBlock('${fpEsc}',${hunkIndex},${startIdx},${endIdx},this.checked)">` : '';
+          const commitCb = (columnType === 'right' && !readonly) ? `<input class="commit-cb" type="checkbox" ${checkedAttr} ${indetAttr} data-action="toggleCommitBlock" data-file="${fpEsc}" data-hunk="${hunkIndex}" data-start="${startIdx}" data-end="${endIdx}">` : '';
           const btn = (showBtn && columnType === 'right' && !readonly) ?
-                  `<button class="hint-btn" onclick="askRevertMultiLines('${fpEsc}',${hunkIndex},${startIdx},${endIdx},'${file.status}')">块撤回（${count}）</button>`
+                  `<button class="hint-btn" data-action="askRevertMultiLines" data-file="${fpEsc}" data-hunk="${hunkIndex}" data-start="${startIdx}" data-end="${endIdx}" data-status="${file.status}">块撤回（${count}）</button>`
                   : '';
           const actions = (columnType === 'right') ? `<span class="dl-actions">${commitCb}${btn}</span>` : '';
           const lsHtml = (columnType === 'left') ? '' : '<span class="ls"></span>';
@@ -16046,14 +16153,14 @@ flex-shrink:0;cursor:pointer;
         const canRevert = (line.type === 'added' || line.type === 'removed' || line.type === 'modified');
         const checkedAttr = (line.hunkIndex !== undefined && line.originalLineIndex !== undefined && selectedLinesSet.has(getLineKey(line.hunkIndex, line.originalLineIndex))) ? 'checked' : '';
         const commitCb = (!readonly && canRevert && line.hunkIndex !== undefined && line.originalLineIndex !== undefined) ?
-                `<input class="commit-cb" type="checkbox" ${checkedAttr} onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" onchange="event.stopPropagation();toggleCommitLine('${fpEsc}',${line.hunkIndex},${line.originalLineIndex},this.checked)">` : '';
+                `<input class="commit-cb" type="checkbox" ${checkedAttr} data-action="toggleCommitLine" data-file="${fpEsc}" data-hunk="${line.hunkIndex}" data-line="${line.originalLineIndex}">` : '';
         const revertBtn = (!readonly && canRevert && line.hunkIndex !== undefined && line.originalLineIndex !== undefined) ?
-                `<button class="line-revert" onclick="askRevertLine('${fpEsc}',${line.hunkIndex},${line.originalLineIndex},'${file.status}')" title="撤回">
+                `<button class="line-revert" data-action="askRevertLine" data-file="${fpEsc}" data-hunk="${line.hunkIndex}" data-line="${line.originalLineIndex}" data-status="${file.status}" title="撤回">
           <span style="font-size:9px;font-weight:bold;">&gt;&gt;</span>
         </button>` : '';
 
         const tipAttrs = line.tip ?
-                ` data-tip="${escHtmlAttr(line.tip)}" onmouseenter="showDiffTooltip(this.dataset.tip, event)" onmousemove="moveDiffTooltip(event)" onmouseleave="hideDiffTooltip()"` : '';
+                ` data-tip="${escHtmlAttr(line.tip)}"` : '';
 
         let content = esc(line.text);
 
@@ -16115,8 +16222,8 @@ flex-shrink:0;cursor:pointer;
           const isPart = !isAll && !isNone;
           const checkedAttr = isAll ? 'checked' : '';
           const indetAttr = isPart ? 'data-indet="1"' : '';
-          const commitCb = (!readonly) ? `<input class="commit-cb" type="checkbox" ${checkedAttr} ${indetAttr} onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" onchange="event.stopPropagation();toggleCommitBlock('${fpEsc}',${hunkIndex},${startIdx},${endIdx},this.checked)">` : '';
-          const btn = (!readonly) ? `<button class="hint-btn" onclick="askRevertMultiLines('${fpEsc}',${hunkIndex},${startIdx},${endIdx},'${file.status}')">块撤回（${count}）</button>` : '';
+          const commitCb = (!readonly) ? `<input class="commit-cb" type="checkbox" ${checkedAttr} ${indetAttr} data-action="toggleCommitBlock" data-file="${fpEsc}" data-hunk="${hunkIndex}" data-start="${startIdx}" data-end="${endIdx}">` : '';
+          const btn = (!readonly) ? `<button class="hint-btn" data-action="askRevertMultiLines" data-file="${fpEsc}" data-hunk="${hunkIndex}" data-start="${startIdx}" data-end="${endIdx}" data-status="${file.status}">块撤回（${count}）</button>` : '';
           const actions = `<span class="dl-actions">${commitCb}${btn}</span>`;
           return `<div class="dl revert-block-hint">${actions}<span class="ls"></span><span class="ln"></span><span class="lc" contenteditable="false"><span class="hint-tag" contenteditable="false">块撤回</span><span class="hint-text" contenteditable="false">已识别为连续变更块（${count}行），可一键撤回</span></span></div>`;
         };
@@ -16237,14 +16344,14 @@ flex-shrink:0;cursor:pointer;
         const canRevert = (line.type === 'added' || line.type === 'removed' || line.type === 'modified');
         const checkedAttr = (line.hunkIndex !== undefined && line.originalLineIndex !== undefined && selectedLinesSet.has(getLineKey(line.hunkIndex, line.originalLineIndex))) ? 'checked' : '';
         const commitCb = (!readonly && canRevert && line.hunkIndex !== undefined && line.originalLineIndex !== undefined) ?
-                `<input class="commit-cb" type="checkbox" ${checkedAttr} onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" onchange="event.stopPropagation();toggleCommitLine('${fpEsc}',${line.hunkIndex},${line.originalLineIndex},this.checked)">` : '';
+                `<input class="commit-cb" type="checkbox" ${checkedAttr} data-action="toggleCommitLine" data-file="${fpEsc}" data-hunk="${line.hunkIndex}" data-line="${line.originalLineIndex}">` : '';
         const revertBtn = (!readonly && canRevert && line.hunkIndex !== undefined && line.originalLineIndex !== undefined) ?
-                `<button class="line-revert" onclick="askRevertLine('${fpEsc}',${line.hunkIndex},${line.originalLineIndex},'${file.status}')" title="撤回">
+                `<button class="line-revert" data-action="askRevertLine" data-file="${fpEsc}" data-hunk="${line.hunkIndex}" data-line="${line.originalLineIndex}" data-status="${file.status}" title="撤回">
           <span style="font-size:9px;font-weight:bold;">&gt;&gt;</span>
         </button>` : '';
 
         const tipAttrs = line.tip ?
-                ` data-tip="${escHtmlAttr(line.tip)}" onmouseenter="showDiffTooltip(this.dataset.tip, event)" onmousemove="moveDiffTooltip(event)" onmouseleave="hideDiffTooltip()"` : '';
+                ` data-tip="${escHtmlAttr(line.tip)}"` : '';
 
         const canEdit = (!readonly) && (line.type !== 'removed');
         const lcAttrs = canEdit ? ' class="lc editable-line" tabindex="0"' : ' class="lc" contenteditable="false"';
@@ -16297,8 +16404,8 @@ flex-shrink:0;cursor:pointer;
           const isPart = !isAll && !isNone;
           const checkedAttr = isAll ? 'checked' : '';
           const indetAttr = isPart ? 'data-indet="1"' : '';
-          const commitCb = (!readonly) ? `<input class="commit-cb" type="checkbox" ${checkedAttr} ${indetAttr} onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" onchange="event.stopPropagation();toggleCommitBlock('${fpEsc}',${hunkIndex},${startIdx},${endIdx},this.checked)">` : '';
-          const btn = (!readonly) ? `<button class="hint-btn" onclick="askRevertMultiLines('${fpEsc}',${hunkIndex},${startIdx},${endIdx},'${file.status}')">块撤回（${count}）</button>` : '';
+          const commitCb = (!readonly) ? `<input class="commit-cb" type="checkbox" ${checkedAttr} ${indetAttr} data-action="toggleCommitBlock" data-file="${fpEsc}" data-hunk="${hunkIndex}" data-start="${startIdx}" data-end="${endIdx}">` : '';
+          const btn = (!readonly) ? `<button class="hint-btn" data-action="askRevertMultiLines" data-file="${fpEsc}" data-hunk="${hunkIndex}" data-start="${startIdx}" data-end="${endIdx}" data-status="${file.status}">块撤回（${count}）</button>` : '';
           const actions = `<span class="dl-actions">${commitCb}${btn}</span>`;
           return `<div class="dl revert-block-hint">${actions}<span class="ls"></span><span class="ln"></span><span class="lc"><span class="hint-tag">块撤回</span><span class="hint-text">已识别为连续变更块（${count}行），可一键撤回</span></span></div>`;
         };
@@ -17001,7 +17108,7 @@ flex-shrink:0;cursor:pointer;
           else if (l.type === 'modified') s = '~';
 
           const revertBtn = !readonly && (l.type === 'added' || l.type === 'removed' || l.type === 'modified') ?
-                  `<button class="line-revert" contenteditable="false" onclick="askRevertLine('${escJsString(file.path)}',${hunkIndex},${lineIndex},'${file.status}')">
+                  `<button class="line-revert" contenteditable="false" data-action="askRevertLine" data-file="${escJsString(file.path)}" data-hunk="${hunkIndex}" data-line="${lineIndex}" data-status="${file.status}">
             <span style="font-size:9px;font-weight:bold;">&gt;&gt;</span>
           </button>` : '';
 
@@ -17061,7 +17168,7 @@ flex-shrink:0;cursor:pointer;
 
         const canRevert = (!readonly) && (l.type === 'added' || l.type === 'removed' || l.type === 'modified');
         const revertBtn = canRevert ?
-                `<button class="line-revert" contenteditable="false" onclick="askRevertLine('${fpEsc}',${hi},${li},'${file.status}')" title="撤回">
+                `<button class="line-revert" contenteditable="false" data-action="askRevertLine" data-file="${fpEsc}" data-hunk="${hi}" data-line="${li}" data-status="${file.status}" title="撤回">
             <span style="font-size:9px;font-weight:bold;">&gt;&gt;</span>
           </button>` : '';
 
@@ -17176,11 +17283,11 @@ flex-shrink:0;cursor:pointer;
           const startLineNum = group.lines[0].line.num;
           const endLineNum = group.lines[group.lines.length - 1].line.num;
 
-          const hintRow = (!readonly && !isSingleLine) ?
+          const blockHint = (!readonly && group && group.lines && group.lines.length > 1) ?
                   `<div class="dl revert-block-hint" data-line-id="${hi}-${startLi}" data-hunk="${hi}" data-line="${startLi}">
             <span class="ls"></span>
             <span class="ln"></span>
-            <span class="lc"><span class="hint-tag">块撤回</span><span class="hint-text">已识别为连续变更块（${group.lines.length}行），可一键撤回</span><span class="hint-actions"><button class="hint-btn" onclick="askRevertMultiLines('${escJsString(file.path)}',${hi},${startLi},${endLi},'${file.status}')">撤回该块（${group.lines.length}）</button></span></span>
+            <span class="lc"><span class="hint-tag">块撤回</span><span class="hint-text">已识别为连续变更块（${group.lines.length}行），可一键撤回</span><span class="hint-actions"><button class="hint-btn" data-action="askRevertMultiLines" data-file="${escJsString(file.path)}" data-hunk="${hi}" data-start="${startLi}" data-end="${endLi}" data-status="${file.status}">撤回该块（${group.lines.length}）</button></span></span>
           </div>` : '';
 
           const lineRows = group.lines.map(({line: l, index: li}) => {
@@ -17190,7 +17297,7 @@ flex-shrink:0;cursor:pointer;
             else if (l.type === 'empty') s = '';
 
             const revertBtn = (!readonly && l.type !== 'empty') ?
-                    `<button class="line-revert" onclick="askRevertLine('${escJsString(file.path)}',${hi},${li},'${file.status}')" title="撤回第${__nn(l.num,'')}行">
+                    `<button class="line-revert" data-action="askRevertLine" data-file="${escJsString(file.path)}" data-hunk="${hi}" data-line="${li}" data-status="${file.status}" title="撤回第${__nn(l.num,'')}行">
               <span style="font-size:9px;font-weight:bold;">&gt;&gt;</span>
             </button>` : '';
 
@@ -17308,7 +17415,7 @@ flex-shrink:0;cursor:pointer;
                   `<div class="dl revert-block-hint" data-line-id="${hi}-${startLi}" data-hunk="${hi}" data-line="${startLi}">
             <span class="ls"></span>
             <span class="ln"></span>
-            <span class="lc"><span class="hint-tag">块撤回</span><span class="hint-text">已识别为连续变更块（${group.lines.length}行），可一键撤回</span><span class="hint-actions"><button class="hint-btn" onclick="askRevertMultiLines('${escJsString(file.path)}',${hi},${startLi},${endLi},'${file.status}')">撤回该块（${group.lines.length}）</button></span></span>
+            <span class="lc"><span class="hint-tag">块撤回</span><span class="hint-text">已识别为连续变更块（${group.lines.length}行），可一键撤回</span><span class="hint-actions"><button class="hint-btn" data-action="askRevertMultiLines" data-file="${escJsString(file.path)}" data-hunk="${hi}" data-start="${startLi}" data-end="${endLi}" data-status="${file.status}">撤回该块（${group.lines.length}）</button></span></span>
           </div>` : '';
 
           const lineRows = group.lines.map(({line: l, index: li}) => {
@@ -17319,7 +17426,7 @@ flex-shrink:0;cursor:pointer;
             else if (l.type === 'empty') s = '';
 
             const revertBtn = (!readonly && l.type !== 'removed' && l.type !== 'empty') ?
-                    `<button class="line-revert" onclick="askRevertLine('${escJsString(file.path)}',${hi},${li},'${file.status}')" title="撤回第${__nn(l.num,'')}行">
+                    `<button class="line-revert" data-action="askRevertLine" data-file="${escJsString(file.path)}" data-hunk="${hi}" data-line="${li}" data-status="${file.status}" title="撤回第${__nn(l.num,'')}行">
               <span style="font-size:9px;font-weight:bold;">&gt;&gt;</span>
             </button>` : '';
 
@@ -17362,8 +17469,7 @@ flex-shrink:0;cursor:pointer;
   function revertBtn(file, hunkIdx) {
     const fp  = escJsString(file.path);
     const st  = file.status;
-    return `<button class="hunk-revert"
-    onclick="askRevertHunk('${fp}',${hunkIdx},'${st}')">
+    return `<button class="hunk-revert" data-action="askRevertHunk" data-file="${fp}" data-hunk="${hunkIdx}" data-status="${st}">
     <span style="font-size:10px;font-weight:bold;">&gt;&gt;</span>
   </button>`;
   }
@@ -19025,12 +19131,9 @@ flex-shrink:0;cursor:pointer;
       fl.innerHTML = '<div style="padding:16px;color:var(--text3);font-size:12px">无变更文件</div>';
       return;
     }
-    try { __gmBindLogDetailFileListDelegation(); } catch (e) {}
     fl.innerHTML = curCommitFiles.map((f,i) => {
       const segs = f.path.replace(/\\/g,'/').split('/');
       const name = segs[segs.length-1];
-      const h = esc(c.full_hash||fullHash);
-      const p = esc(f.path);
       return `<div class="lf" data-action="selectLogFile" data-idx="${i}">
       <span class="lf-st ${f.status||'M'}">${f.status||'M'}</span>
       <span class="lf-name" title="${esc(f.path)}">${esc(name)}</span>
@@ -19038,7 +19141,7 @@ flex-shrink:0;cursor:pointer;
         ${f.added   > 0 ? `<span class="a">+${f.added}</span>`   : ''}
         ${f.removed > 0 ? `<span class="r">-${f.removed}</span>` : ''}
       </span>
-      <button class="btn" style="margin-left:auto;padding:2px 8px" title="将工作区该文件覆盖为此提交的完整内容" data-action="restoreFromCommit" data-hash="${h}" data-path="${p}">整文件恢复</button>
+      <button class="btn" style="margin-left:auto;padding:2px 8px" title="将工作区该文件覆盖为此提交的完整内容" data-action="restoreFromCommit" data-hash="${esc((c.full_hash||fullHash).replace(/'/g,"\\'"))}" data-path="${escJsString(f.path)}">整文件恢复</button>
     </div>`;
     }).join('');
   }
@@ -20401,11 +20504,155 @@ flex-shrink:0;cursor:pointer;
     }, { passive: false });
   }
 
+  function __gmBindDiffViewDelegation() {
+    const view = document.getElementById('diffView');
+    if (!view) return;
+    if (view.__gmDelegationBound) return;
+    view.__gmDelegationBound = true;
+
+    view.addEventListener('mousedown', (e) => {
+      try {
+        const t = e && e.target ? e.target : null;
+        if (!t) return;
+        if (t.closest && (t.closest('input.commit-cb') || t.closest('button.line-revert') || t.closest('button.hint-btn') || t.closest('button.hunk-revert'))) {
+          e.stopPropagation();
+        }
+      } catch (e2) {}
+    });
+
+    view.addEventListener('click', (e) => {
+      try {
+        const el = e.target && e.target.closest ? e.target.closest('[data-action]') : null;
+        if (!el) return;
+        const act = String(el.getAttribute('data-action') || '');
+        if (!act) return;
+
+        if (act === 'scrollToLine') {
+          e.preventDefault();
+          const ln = parseInt(String(el.getAttribute('data-line') || ''), 10);
+          if (!Number.isFinite(Number(ln))) return;
+          scrollToLine(ln);
+          return;
+        }
+
+        if (act === 'expandChangeViewContext') {
+          e.preventDefault();
+          const amt = parseInt(String(el.getAttribute('data-amount') || ''), 10);
+          const n = Number.isFinite(Number(amt)) ? Number(amt) : 5;
+          expandChangeViewContext(n);
+          return;
+        }
+
+        if (act === 'askRevertLine') {
+          e.preventDefault();
+          try { e.stopPropagation(); } catch (e2) {}
+          const fp = String(el.getAttribute('data-file') || '');
+          const hi = parseInt(String(el.getAttribute('data-hunk') || ''), 10);
+          const li = parseInt(String(el.getAttribute('data-line') || ''), 10);
+          const st = String(el.getAttribute('data-status') || '');
+          if (!fp) return;
+          if (!Number.isFinite(Number(hi)) || !Number.isFinite(Number(li))) return;
+          askRevertLine(fp, hi, li, st);
+          return;
+        }
+
+        if (act === 'askRevertMultiLines') {
+          e.preventDefault();
+          try { e.stopPropagation(); } catch (e2) {}
+          const fp = String(el.getAttribute('data-file') || '');
+          const hi = parseInt(String(el.getAttribute('data-hunk') || ''), 10);
+          const s = parseInt(String(el.getAttribute('data-start') || ''), 10);
+          const en = parseInt(String(el.getAttribute('data-end') || ''), 10);
+          const st = String(el.getAttribute('data-status') || '');
+          if (!fp) return;
+          if (!Number.isFinite(Number(hi)) || !Number.isFinite(Number(s)) || !Number.isFinite(Number(en))) return;
+          askRevertMultiLines(fp, hi, s, en, st);
+          return;
+        }
+
+        if (act === 'askRevertHunk') {
+          e.preventDefault();
+          try { e.stopPropagation(); } catch (e2) {}
+          const fp = String(el.getAttribute('data-file') || '');
+          const hi = parseInt(String(el.getAttribute('data-hunk') || ''), 10);
+          const st = String(el.getAttribute('data-status') || '');
+          if (!fp) return;
+          if (!Number.isFinite(Number(hi))) return;
+          askRevertHunk(fp, hi, st);
+          return;
+        }
+      } catch (e2) {}
+    });
+
+    view.addEventListener('mouseover', (e) => {
+      try {
+        const el = e.target && e.target.closest ? e.target.closest('[data-tip]') : null;
+        if (!el) return;
+        const tip = String(el.getAttribute('data-tip') || '');
+        if (!tip) return;
+        showDiffTooltip(tip, e);
+      } catch (e2) {}
+    });
+
+    view.addEventListener('mousemove', (e) => {
+      try {
+        const el = e.target && e.target.closest ? e.target.closest('[data-tip]') : null;
+        if (!el) return;
+        const tip = String(el.getAttribute('data-tip') || '');
+        if (!tip) return;
+        moveDiffTooltip(e);
+      } catch (e2) {}
+    });
+
+    view.addEventListener('mouseout', (e) => {
+      try {
+        const el = e.target && e.target.closest ? e.target.closest('[data-tip]') : null;
+        if (!el) return;
+        hideDiffTooltip();
+      } catch (e2) {}
+    });
+
+    view.addEventListener('change', (e) => {
+      try {
+        const t = e && e.target ? e.target : null;
+        if (!t) return;
+        if (!t.matches || !t.matches('input[data-action]')) return;
+        const act = String(t.getAttribute('data-action') || '');
+        if (!act) return;
+
+        if (act === 'toggleCommitLine') {
+          try { e.stopPropagation(); } catch (e2) {}
+          const fp = String(t.getAttribute('data-file') || '');
+          const hi = parseInt(String(t.getAttribute('data-hunk') || ''), 10);
+          const li = parseInt(String(t.getAttribute('data-line') || ''), 10);
+          if (!fp) return;
+          if (!Number.isFinite(Number(hi)) || !Number.isFinite(Number(li))) return;
+          toggleCommitLine(fp, hi, li, !!t.checked);
+          return;
+        }
+
+        if (act === 'toggleCommitBlock') {
+          try { e.stopPropagation(); } catch (e2) {}
+          const fp = String(t.getAttribute('data-file') || '');
+          const hi = parseInt(String(t.getAttribute('data-hunk') || ''), 10);
+          const s = parseInt(String(t.getAttribute('data-start') || ''), 10);
+          const en = parseInt(String(t.getAttribute('data-end') || ''), 10);
+          if (!fp) return;
+          if (!Number.isFinite(Number(hi)) || !Number.isFinite(Number(s)) || !Number.isFinite(Number(en))) return;
+          toggleCommitBlock(fp, hi, s, en, !!t.checked);
+          return;
+        }
+      } catch (e2) {}
+    });
+  }
+
   makeResizer('r1','.sidebar','right', false);
   makeResizer('r2','#rightPanel','left', false);
   makeSplitResizer();
   updatePanelToggleButtons();
   initChangeNavigationWheelScroll();
+  __gmBindDiffViewDelegation();
+  __gmBindStaticUiDelegation();
 
   // ── Theme Toggle ──────────────────────────────────────────────────────────────
   function initTheme() {
