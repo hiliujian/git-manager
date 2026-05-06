@@ -880,7 +880,7 @@
     }
     .autosave-switch input:checked + .autosave-slider:before{transform:translateX(16px) translateY(-50%);background: var(--accent);border-color:#25508a;box-shadow:0 0 0 2px rgba(110,180,247,.16), 0 2px 10px rgba(0,0,0,.35);}
     .autosave-switch input:focus-visible + .autosave-slider{outline:2px solid rgba(110,180,247,.22);outline-offset:2px;}
-    .diff-view{flex:1;overflow:auto;background:var(--bg2);padding:0 8px;position:relative;overflow-anchor:none;}
+    .diff-view{flex:1;overflow:auto;background:var(--bg2);padding:0 8px;position:relative;overflow-anchor:none;display:flex;flex-direction:column;}
     .diff-view[contenteditable="true"]:focus{outline:none;}
     .diff-view[contenteditable="true"]{caret-color:transparent;}
     .diff-view[contenteditable="true"] .editable-line{caret-color:auto;}
@@ -1212,12 +1212,15 @@
     /* ── DIFF CONTENT ── */
     .empty-state{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;
       gap:12px;color:var(--text3);}
+    .diff-view > .empty-state{flex:1;}
     .empty-state svg{opacity:.2;}
     .empty-state p{font-size:13px;}
 
     /* Split layout */
+    .diff-view > .split-wrap{flex:1;min-height:0;}
     .split-wrap{display:grid;grid-template-columns:1fr 3px 1fr;min-height:100%;overflow-x:auto;}
-    .sp{overflow:auto;border-right:2px solid var(--border);min-width:0;tab-size:4;-moz-tab-size:4;}
+    .sp{overflow:auto;border-right:2px solid var(--border);min-width:0;tab-size:4;-moz-tab-size:4;display:flex;flex-direction:column;}
+    .sp > .empty-state{flex:1;}
     .sp:last-child{border-right:none;}
     .sp-hdr{padding:4px 10px;background:var(--bg3);border-bottom:1px solid var(--border);font-size:11px;position:sticky;top:0;z-index:1;font-family:'JetBrains Mono',monospace;}
     
@@ -2764,6 +2767,7 @@ flex-shrink:0;cursor:pointer;
   function __gmRenderStagedList() {
     const box = document.getElementById('stagedList');
     if (!box) return;
+    try { __gmBindStagedListDelegation(); } catch (e) {}
     const files0 = Array.isArray(__gmStagedPanelFiles) ? __gmStagedPanelFiles : [];
     if (!files0.length) {
       box.innerHTML = '<div style="padding:12px;color:var(--text3);">暂无暂存区文件</div>';
@@ -2784,8 +2788,8 @@ flex-shrink:0;cursor:pointer;
   <div style="flex:1;min-width:0;">
     <div style="font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${p} <span style="color:var(--text3)">${stTxt}</span></div>
   </div>
-  <button class="btn" style="padding:2px 10px" onclick="unstageOneStagedFromPanel(${idx})">恢复</button>
-  <button class="btn red" style="padding:2px 10px" onclick="discardOneStagedFromPanel(${idx})">丢弃</button>
+  <button class="btn" style="padding:2px 10px" data-action="unstageOneStagedFromPanel" data-idx="${idx}">恢复</button>
+  <button class="btn red" style="padding:2px 10px" data-action="discardOneStagedFromPanel" data-idx="${idx}">丢弃</button>
 </div>`;
     }).join('');
 
@@ -3088,6 +3092,7 @@ flex-shrink:0;cursor:pointer;
     try {
       const box = document.getElementById('aiSearchProfileList');
       if (!box) return;
+      try { __gmBindAiDelegation(); } catch (e) {}
       const c = (__gmAiConfig && typeof __gmAiConfig === 'object') ? __gmAiConfig : {};
       const ws = (c.web_search && typeof c.web_search === 'object') ? c.web_search : {};
       const profiles = Array.isArray(ws.profiles) ? ws.profiles : [];
@@ -3099,7 +3104,7 @@ flex-shrink:0;cursor:pointer;
         const prov = String(p && p.provider || '');
         const nm = prov ? prov : '未命名';
         const cls = 'ai-item' + (id && id === selected ? ' active' : '');
-        items.push(`<div class="${cls}" onclick="editAiSearchProfile('${esc(id)}')"><div class="nm">${esc(nm)}</div><div class="tag">${id===act?'当前':''}</div></div>`);
+        items.push(`<div class="${cls}" data-action="editAiSearchProfile" data-id="${esc(id)}"><div class="nm">${esc(nm)}</div><div class="tag">${id===act?'当前':''}</div></div>`);
       });
       box.innerHTML = items.join('') || '<div style="padding:12px;color:var(--text3);font-size:12px">暂无配置</div>';
     } catch (e) {}
@@ -9988,6 +9993,7 @@ flex-shrink:0;cursor:pointer;
       closeAiModelMenu();
     });
     __gmAiModelMenuEl = el;
+    try { __gmBindAiDelegation(); } catch (e) {}
     return el;
   }
 
@@ -10002,10 +10008,10 @@ flex-shrink:0;cursor:pointer;
         if (!id) return;
         const nm = String(p && p.name || id);
         const cls = 'ai-model-mi' + (id === act ? ' selected' : '');
-        items.push(`<div class="${cls}" onclick="selectAiProfile('${esc(id)}')"><div class="nm">${esc(nm)}</div><div class="sub"></div></div>`);
+        items.push(`<div class="${cls}" data-action="selectAiProfile" data-id="${esc(id)}"><div class="nm">${esc(nm)}</div><div class="sub"></div></div>`);
       });
       items.push('<div class="ai-model-sep"></div>');
-      items.push('<div class="ai-model-mi" onclick="closeAiModelMenu();showAiConfigPanel()"><div class="nm">打开模型配置</div><div class="sub">管理</div></div>');
+      items.push('<div class="ai-model-mi" data-action="showAiConfigPanel"><div class="nm">打开模型配置</div><div class="sub">管理</div></div>');
       el.innerHTML = items.join('');
     } catch (e) {}
   }
@@ -10087,6 +10093,7 @@ flex-shrink:0;cursor:pointer;
     try {
       const list = document.getElementById('aiChatInner') || document.getElementById('aiChatList');
       if (!list) return;
+      try { __gmBindAiDelegation(); } catch (e) {}
       if (!Array.isArray(__gmAiChatMessages) || __gmAiChatMessages.length === 0) {
         try { list.__gmAiMsgCache = []; } catch (e0) {}
         list.innerHTML = `<div class="ai-empty"><div class="ai-empty-card">
@@ -10149,7 +10156,7 @@ flex-shrink:0;cursor:pointer;
         }
 
         node.className = 'ai-msg ' + (isUser ? 'user' : 'assistant');
-        node.innerHTML = `<div class="ai-meta">${esc(isUser ? '你' : 'AI')}</div><div class="ai-bubble${userLoading ? ' user-loading' : ''}${isPending ? ' pending' : ''}"><div class="ai-msg-actions"><button title="删除" onclick="aiDeleteMsg(${idx})">×</button></div><div class="ai-md">${isPending ? esc(content) : aiRenderMarkdown(content)}</div></div>`;
+        node.innerHTML = `<div class="ai-meta">${esc(isUser ? '你' : 'AI')}</div><div class="ai-bubble${userLoading ? ' user-loading' : ''}${isPending ? ' pending' : ''}"><div class="ai-msg-actions"><button title="删除" data-action="aiDeleteMsg" data-idx="${idx}">×</button></div><div class="ai-md">${isPending ? esc(content) : aiRenderMarkdown(content)}</div></div>`;
         try { __gmAiEnhanceCodeBlocks(node); } catch (eEnh) {}
       }
 
@@ -10808,9 +10815,10 @@ flex-shrink:0;cursor:pointer;
     const html = items.map((it, i) => {
       const cls = 'ai-mention-item' + (i === __gmAiMentionIndex ? ' active' : '');
       const nm = String(it && it.name || '');
-      return `<div class="${cls}" onclick="aiPickMention(${i})"><div style="min-width:0;flex:1;display:flex;flex-direction:column;gap:2px;"><div class="nm">${esc(nm)}</div></div></div>`;
+      return `<div class="${cls}" data-action="aiPickMention" data-idx="${i}"><div style="min-width:0;flex:1;display:flex;flex-direction:column;gap:2px;"><div class="nm">${esc(nm)}</div></div></div>`;
     }).join('');
     el.innerHTML = html;
+    try { __gmBindAiDelegation(); } catch (e) {}
     const ta = document.getElementById('aiChatInput');
     try {
       const w = __gmAiGetChatPanelWidth();
@@ -11244,6 +11252,7 @@ flex-shrink:0;cursor:pointer;
     try {
       const el = document.getElementById('aiProfileList');
       if (!el) return;
+      try { __gmBindAiDelegation(); } catch (e) {}
       const profiles = Array.isArray(__gmAiConfig.profiles) ? __gmAiConfig.profiles : [];
       const active = String(__gmAiConfig.active_profile_id || '');
       const selected = String(__gmAiEditingProfileId || '');
@@ -11252,7 +11261,7 @@ flex-shrink:0;cursor:pointer;
         const nm = __gmAiPrettyModelName(String((p && p.model) || '')) || '未命名';
         const cls = 'ai-item' + (id && id === selected ? ' active' : '');
         const tag = (id === active) ? '<div class="tag">当前</div>' : '<div class="tag"></div>';
-        return `<div class="${cls}" onclick="editAiProfile('${esc(id)}')"><div class="nm">${esc(nm)}</div>${tag}</div>`;
+        return `<div class="${cls}" data-action="editAiProfile" data-id="${esc(id)}"><div class="nm">${esc(nm)}</div>${tag}</div>`;
       }).join('') || '<div style="padding:12px;color:var(--text3);font-size:12px">暂无配置</div>';
     } catch (e) {}
   }
@@ -12887,6 +12896,10 @@ flex-shrink:0;cursor:pointer;
     document.getElementById('changeBtn').style.display  = 'flex';
     initBranchDropdown();
     try { __gmBindDiffLabelDelegation(); } catch (e) {}
+    try { __gmBindDiffViewDelegation(); } catch (e) {}
+    try { __gmBindStagedListDelegation(); } catch (e) {}
+    try { __gmBindAiDelegation(); } catch (e) {}
+    try { __gmBindLogDetailFileListDelegation(); } catch (e) {}
 
     // 启动WebSocket连接
     connectWebSocket();
@@ -12894,6 +12907,89 @@ flex-shrink:0;cursor:pointer;
     // 不再需要轮询模式，WebSocket会实时推送更新
     // 但保留作为备份
     startRealTimeRefresh();
+  }
+
+  function __gmBindLogDetailFileListDelegation() {
+    const fl = document.getElementById('ldFileList');
+    if (!fl) return;
+    if (fl.__gmDelegationBound) return;
+    fl.__gmDelegationBound = true;
+    fl.addEventListener('click', (e) => {
+      const el = e.target && e.target.closest ? e.target.closest('[data-action]') : null;
+      if (!el) return;
+      const act = String(el.getAttribute('data-action') || '');
+      if (act !== 'selectLogFile' && act !== 'restoreFromCommit') return;
+      try { e.preventDefault(); e.stopPropagation(); } catch (e2) {}
+      if (act === 'selectLogFile') {
+        const idx = Number(el.getAttribute('data-idx'));
+        if (!Number.isFinite(idx)) return;
+        return selectLogFile(idx);
+      }
+      const hash = String(el.getAttribute('data-hash') || '');
+      const path = String(el.getAttribute('data-path') || '');
+      if (!hash || !path) return;
+      return restoreFromCommit(hash, path, el);
+    });
+  }
+
+  function __gmBindStagedListDelegation() {
+    const box = document.getElementById('stagedList');
+    if (!box) return;
+    if (box.__gmDelegationBound) return;
+    box.__gmDelegationBound = true;
+    box.addEventListener('click', (e) => {
+      const el = e.target && e.target.closest ? e.target.closest('[data-action]') : null;
+      if (!el) return;
+      const act = String(el.getAttribute('data-action') || '');
+      if (act !== 'unstageOneStagedFromPanel' && act !== 'discardOneStagedFromPanel') return;
+      try { e.preventDefault(); e.stopPropagation(); } catch (e2) {}
+      const idx = Number(el.getAttribute('data-idx'));
+      if (!Number.isFinite(idx)) return;
+      if (act === 'unstageOneStagedFromPanel') return unstageOneStagedFromPanel(idx);
+      return discardOneStagedFromPanel(idx);
+    });
+  }
+
+  function __gmBindAiDelegation() {
+    const bind = (root) => {
+      if (!root) return;
+      if (root.__gmDelegationBound) return;
+      root.__gmDelegationBound = true;
+      root.addEventListener('click', (e) => {
+        const el = e.target && e.target.closest ? e.target.closest('[data-action]') : null;
+        if (!el) return;
+        const act = String(el.getAttribute('data-action') || '');
+        try { e.preventDefault(); e.stopPropagation(); } catch (e2) {}
+        if (act === 'aiDeleteMsg') return aiDeleteMsg(Number(el.getAttribute('data-idx')));
+        if (act === 'selectAiProfile') return selectAiProfile(String(el.getAttribute('data-id') || ''));
+        if (act === 'showAiConfigPanel') return showAiConfigPanel();
+        if (act === 'editAiProfile') return editAiProfile(String(el.getAttribute('data-id') || ''));
+        if (act === 'editAiSearchProfile') return editAiSearchProfile(String(el.getAttribute('data-id') || ''));
+        if (act === 'aiPickMention') return aiPickMention(Number(el.getAttribute('data-idx')));
+      });
+    };
+
+    try { bind(document.getElementById('aiChatInner')); } catch (e) {}
+    try { bind(__gmAiModelMenuEl || document.getElementById('aiModelMenu')); } catch (e) {}
+    try { bind(document.getElementById('aiProfileList')); } catch (e) {}
+    try { bind(__gmAiMentionMenuEl || document.getElementById('aiMentionMenu')); } catch (e) {}
+  }
+
+  function __gmBindDiffViewDelegation() {
+    const dv = document.getElementById('diffView');
+    if (!dv) return;
+    if (dv.__gmDelegationBound) return;
+    dv.__gmDelegationBound = true;
+    dv.addEventListener('click', (e) => {
+      const el = e.target && e.target.closest ? e.target.closest('[data-action]') : null;
+      if (!el) return;
+      const act = String(el.getAttribute('data-action') || '');
+      if (act !== 'scrollToLine') return;
+      try { e.preventDefault(); e.stopPropagation(); } catch (e2) {}
+      const ln = Number(el.getAttribute('data-line'));
+      if (!Number.isFinite(ln)) return;
+      scrollToLine(ln);
+    });
   }
 
   function __gmBindDiffLabelDelegation() {
@@ -15547,7 +15643,7 @@ flex-shrink:0;cursor:pointer;
         else if (change.type === 'modified') typeClass = 'change-modified';
 
         const anchor = Number.isFinite(Number(change._anchorStart)) ? Number(change._anchorStart) : Number(__nn(change.anchorLineNumber, change.lineNumber));
-        return `<a href="#" class="change-nav-item ${typeClass}" contenteditable="false" tabindex="-1" onclick="scrollToLine(${anchor}); return false;">
+        return `<a href="#" class="change-nav-item ${typeClass}" contenteditable="false" tabindex="-1" data-action="scrollToLine" data-line="${anchor}">
           ${change.displayText || change.lineNumber}
         </a>`;
       }).join('')}
@@ -18929,17 +19025,20 @@ flex-shrink:0;cursor:pointer;
       fl.innerHTML = '<div style="padding:16px;color:var(--text3);font-size:12px">无变更文件</div>';
       return;
     }
+    try { __gmBindLogDetailFileListDelegation(); } catch (e) {}
     fl.innerHTML = curCommitFiles.map((f,i) => {
       const segs = f.path.replace(/\\/g,'/').split('/');
       const name = segs[segs.length-1];
-      return `<div class="lf" onclick="selectLogFile(${i})">
+      const h = esc(c.full_hash||fullHash);
+      const p = esc(f.path);
+      return `<div class="lf" data-action="selectLogFile" data-idx="${i}">
       <span class="lf-st ${f.status||'M'}">${f.status||'M'}</span>
       <span class="lf-name" title="${esc(f.path)}">${esc(name)}</span>
       <span class="lf-delta">
         ${f.added   > 0 ? `<span class="a">+${f.added}</span>`   : ''}
         ${f.removed > 0 ? `<span class="r">-${f.removed}</span>` : ''}
       </span>
-      <button class="btn" style="margin-left:auto;padding:2px 8px" title="将工作区该文件覆盖为此提交的完整内容" onclick="event.stopPropagation();restoreFromCommit('${(c.full_hash||fullHash).replace(/'/g,"\\'")}', '${escJsString(f.path)}', this)">整文件恢复</button>
+      <button class="btn" style="margin-left:auto;padding:2px 8px" title="将工作区该文件覆盖为此提交的完整内容" data-action="restoreFromCommit" data-hash="${h}" data-path="${p}">整文件恢复</button>
     </div>`;
     }).join('');
   }
