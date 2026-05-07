@@ -3866,12 +3866,6 @@ flex-shrink:0;cursor:pointer;
           const act = String(el.getAttribute('data-action') || '');
           if (!act) return;
 
-          if (act === 'refreshBranchMenu') {
-            e.preventDefault();
-            refreshBranchMenu(e);
-            return;
-          }
-
           if (act === 'showStagedPanel') { e.preventDefault(); showStagedPanel(); return; }
           if (act === 'pullUpdate') { e.preventDefault(); pullUpdate(); return; }
           if (act === 'refresh') { e.preventDefault(); refresh(); return; }
@@ -3892,7 +3886,7 @@ flex-shrink:0;cursor:pointer;
           if (act === 'sendAiChat') { e.preventDefault(); sendAiChat(); return; }
           if (act === 'aiAddContext') { e.preventDefault(); aiAddContext(); return; }
           if (act === 'aiUndoLastTurn') { e.preventDefault(); aiUndoLastTurn(); return; }
-          if (act === 'openAiModelMenu') { e.preventDefault(); openAiModelMenu(e); return; }
+          if (act === 'openAiModelMenu') { e.preventDefault(); try { e.stopPropagation(); } catch (e3) {} openAiModelMenu(e, el); return; }
           if (act === 'showAiConfigPanel') { e.preventDefault(); showAiConfigPanel(); return; }
           if (act === 'showAiSearchPanel') { e.preventDefault(); showAiSearchPanel(); return; }
           if (act === 'showAiChatPanel') { e.preventDefault(); showAiChatPanel(); return; }
@@ -10210,11 +10204,31 @@ flex-shrink:0;cursor:pointer;
     el.className = 'ai-model-menu';
     el.addEventListener('click', (e) => {
       try { e.stopPropagation(); } catch (e2) {}
+      const ael = e && e.target && e.target.closest ? e.target.closest('[data-action]') : null;
+      if (!ael) return;
+      const act = String(ael.getAttribute('data-action') || '');
+      if (!act) return;
+      try { e.preventDefault(); } catch (e3) {}
+      if (act === 'selectAiProfile') return void selectAiProfile(String(ael.getAttribute('data-id') || ''));
+      if (act === 'showAiConfigPanel') {
+        closeAiModelMenu();
+        return void showAiConfigPanel();
+      }
     });
     document.body.appendChild(el);
-    document.addEventListener('click', () => {
-      closeAiModelMenu();
-    });
+    if (!document.__gmAiModelMenuCloseBound) {
+      document.__gmAiModelMenuCloseBound = true;
+      document.addEventListener('click', (e) => {
+        try {
+          const t = e && e.target;
+          if (t && t.closest) {
+            if (t.closest('.ai-model-menu')) return;
+            if (t.closest('.ai-model-selector')) return;
+          }
+        } catch (e2) {}
+        closeAiModelMenu();
+      });
+    }
     __gmAiModelMenuEl = el;
     return el;
   }
@@ -10258,7 +10272,7 @@ flex-shrink:0;cursor:pointer;
     return Math.min(520, window.innerHeight - 16);
   }
 
-  function openAiModelMenu(ev) {
+  function openAiModelMenu(ev, anchorEl=null) {
     try { if (ev) ev.stopPropagation(); } catch (e) {}
     const el = __gmAiEnsureModelMenu();
     __gmAiRenderModelMenu();
@@ -10271,8 +10285,8 @@ flex-shrink:0;cursor:pointer;
         el.style.maxWidth = w + 'px';
         el.style.maxHeight = maxH + 'px';
       } catch (e0) {}
-      let anchor = null;
-      if (ev && ev.currentTarget) {
+      let anchor = anchorEl;
+      if (!anchor && ev && ev.currentTarget && ev.currentTarget !== document) {
         anchor = ev.currentTarget;
       }
       const r = (anchor && anchor.getBoundingClientRect) ? anchor.getBoundingClientRect() : null;
@@ -10952,11 +10966,26 @@ flex-shrink:0;cursor:pointer;
     el.className = 'ai-mention-menu';
     el.addEventListener('click', (e) => {
       try { e.stopPropagation(); } catch (e2) {}
+      const ael = e && e.target && e.target.closest ? e.target.closest('[data-action]') : null;
+      if (!ael) return;
+      const act = String(ael.getAttribute('data-action') || '');
+      if (!act) return;
+      try { e.preventDefault(); } catch (e3) {}
+      if (act === 'aiPickMention') return void aiPickMention(parseInt(String(ael.getAttribute('data-idx') || ''), 10));
     });
     document.body.appendChild(el);
-    document.addEventListener('click', () => {
-      __gmAiCloseMentionMenu();
-    });
+    if (!document.__gmAiMentionMenuCloseBound) {
+      document.__gmAiMentionMenuCloseBound = true;
+      document.addEventListener('click', (e) => {
+        try {
+          const t = e && e.target;
+          if (t && t.closest) {
+            if (t.closest('.ai-mention-menu')) return;
+          }
+        } catch (e2) {}
+        __gmAiCloseMentionMenu();
+      });
+    }
     __gmAiMentionMenuEl = el;
     return el;
   }
@@ -13101,6 +13130,11 @@ flex-shrink:0;cursor:pointer;
         repoLabelEl.title = '点击复制路径';
         repoLabelEl.style.cursor = 'pointer';
         repoLabelEl.addEventListener('click', async (e) => {
+          try {
+            const t = e && e.target;
+            const a = t && t.closest ? t.closest('a.origin-link-btn') : null;
+            if (a && repoLabelEl.contains(a)) return;
+          } catch (e0) {}
           try { e.preventDefault(); e.stopPropagation(); } catch (e2) {}
           const p = String(repoLabelEl.getAttribute('data-repo') || repoLabelEl.textContent || '').trim();
           if (!p) return;
@@ -16809,14 +16843,16 @@ flex-shrink:0;cursor:pointer;
                   } catch (e) { return false; }
                 };
 
-                let leading = 0;
-                for (let i = 0; i < domLines.length; i++) {
-                  if (__gmIsBlankLine(domLines[i])) leading++;
-                  else break;
-                }
-                while (leading > originalLeadingEmptyLines && domLines.length) {
-                  domLines.shift();
-                  leading--;
+                if (!isNewFile) {
+                  let leading = 0;
+                  for (let i = 0; i < domLines.length; i++) {
+                    if (__gmIsBlankLine(domLines[i])) leading++;
+                    else break;
+                  }
+                  while (leading > originalLeadingEmptyLines && domLines.length) {
+                    domLines.shift();
+                    leading--;
+                  }
                 }
               } catch (e3) {}
 
@@ -19764,7 +19800,19 @@ flex-shrink:0;cursor:pointer;
     if (!document.body.getAttribute('data-branch-body-inited')) {
       document.body.setAttribute('data-branch-body-inited','1');
       document.addEventListener('click', () => closeBranchMenu());
-      menu.addEventListener('click', (e) => e.stopPropagation());
+      menu.addEventListener('click', (e) => {
+        try {
+          const el = e && e.target && e.target.closest ? e.target.closest('[data-action]') : null;
+          if (el && menu.contains(el)) {
+            const act = String(el.getAttribute('data-action') || '');
+            if (act) {
+              try { e.preventDefault(); e.stopPropagation(); } catch (e2) {}
+              if (act === 'refreshBranchMenu') return void refreshBranchMenu(e);
+            }
+          }
+        } catch (e0) {}
+        try { e.stopPropagation(); } catch (e1) {}
+      });
 
       try {
         const list = document.getElementById('branchMenuList');
