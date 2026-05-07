@@ -3909,7 +3909,13 @@ flex-shrink:0;cursor:pointer;
             return;
           }
 
-          if (act === 'showRecentFilesDropdown') { e.preventDefault(); showRecentFilesDropdown(); return; }
+          if (act === 'showRecentFilesDropdown') { e.preventDefault(); try { e.stopPropagation(); } catch (e3) {} showRecentFilesDropdown(); return; }
+          if (act === 'removeRecentFileByPath') {
+            e.preventDefault();
+            try { e.stopPropagation(); } catch (e3) {}
+            removeRecentFileByPath(String(el.getAttribute('data-path') || ''));
+            return;
+          }
 
           if (act === 'editAiProfile') { e.preventDefault(); editAiProfile(String(el.getAttribute('data-id') || '')); return; }
           if (act === '__gmAiUndoByGroupId') { e.preventDefault(); __gmAiUndoByGroupId(String(el.getAttribute('data-gid') || '')); return; }
@@ -9549,7 +9555,18 @@ flex-shrink:0;cursor:pointer;
   // 动态获取WebSocket端口号
   async function getWebSocketPort() {
     try {
-      const res = await GET('/api/status');
+      const controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+      const timer = setTimeout(() => {
+        try { if (controller) controller.abort(); } catch (e0) {}
+      }, 3000);
+
+      const sep = '/api/status'.includes('?') ? '&' : '?';
+      const res = await api('/api/status' + sep + '_ts=' + Date.now(), controller ? { signal: controller.signal } : {});
+      try { clearTimeout(timer); } catch (e1) {}
+
+      if (!res || res.ok === false) {
+        return;
+      }
       if (res.ws_port) {
         WS_URL = `ws://localhost:${res.ws_port}`;
         console.log('WebSocket端口已更新:', WS_URL);
@@ -9610,10 +9627,28 @@ flex-shrink:0;cursor:pointer;
     try {
       ws = new WebSocket(WS_URL);
 
+      const connectingWs = ws;
+      let openTimer = null;
+      try {
+        openTimer = setTimeout(() => {
+          try {
+            if (connectingWs !== ws) return;
+            if (connectingWs && connectingWs.readyState === WebSocket.CONNECTING) {
+              console.warn('WebSocket 连接超时，强制关闭并重连');
+              try { connectingWs.close(); } catch (e0) {}
+              wsConnected = false;
+              wsConnecting = false;
+              __gmWsScheduleReconnect();
+            }
+          } catch (e1) {}
+        }, 5000);
+      } catch (eT0) {}
+
       ws.onopen = () => {
         console.log('WebSocket 连接成功');
         wsConnected = true;
         wsConnecting = false;
+        try { if (openTimer) { clearTimeout(openTimer); openTimer = null; } } catch (eT1) {}
         __gmWsResetReconnectDelay();
         if (wsReconnectTimer) {
           clearTimeout(wsReconnectTimer);
@@ -9638,6 +9673,7 @@ flex-shrink:0;cursor:pointer;
         console.log('WebSocket 连接关闭');
         wsConnected = false;
         wsConnecting = false;
+        try { if (openTimer) { clearTimeout(openTimer); openTimer = null; } } catch (eT2) {}
         try {
           if (__gmAiIsResponding) {
             const msgs = Array.isArray(__gmAiChatMessages) ? __gmAiChatMessages : [];
@@ -9662,6 +9698,7 @@ flex-shrink:0;cursor:pointer;
     } catch (e) {
       console.error('WebSocket 连接失败:', e);
       wsConnecting = false;
+      try { if (openTimer) { clearTimeout(openTimer); openTimer = null; } } catch (eT3) {}
       __gmWsScheduleReconnect();
       // 回退到轮询模式
       console.log('回退到轮询模式');
@@ -13077,7 +13114,6 @@ flex-shrink:0;cursor:pointer;
     document.getElementById('refreshBtn').style.display = 'flex';
     document.getElementById('changeBtn').style.display  = 'flex';
     initBranchDropdown();
-    try { __gmBindDiffLabelDelegation(); } catch (e) {}
 
     // 启动WebSocket连接
     connectWebSocket();
@@ -13085,21 +13121,6 @@ flex-shrink:0;cursor:pointer;
     // 不再需要轮询模式，WebSocket会实时推送更新
     // 但保留作为备份
     startRealTimeRefresh();
-  }
-
-  function __gmBindDiffLabelDelegation() {
-    const dl = document.getElementById('diffLabel');
-    if (!dl) return;
-    if (dl.__gmDelegationBound) return;
-    dl.__gmDelegationBound = true;
-    dl.addEventListener('click', (e) => {
-      const el = e.target && e.target.closest ? e.target.closest('[data-action]') : null;
-      if (!el) return;
-      const act = String(el.getAttribute('data-action') || '');
-      try { e.preventDefault(); e.stopPropagation(); } catch (e2) {}
-      if (act === 'showRecentFilesDropdown') return showRecentFilesDropdown();
-      if (act === 'removeRecentFileByPath') return removeRecentFileByPath(String(el.getAttribute('data-path') || ''));
-    });
   }
 
   function __gmResetRepoScopedState() {
