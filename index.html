@@ -1221,12 +1221,10 @@
     .sp:last-child{border-right:none;}
     .sp-hdr{padding:4px 10px;background:var(--bg3);border-bottom:1px solid var(--border);font-size:11px;position:sticky;top:0;z-index:1;font-family:'JetBrains Mono',monospace;}
     
-    /* 只读面板及其所有子元素不可选 */
     .sp-readonly{border-right:none;}
-    .sp-readonly,
-    .sp-readonly *{user-select:none;-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;cursor:default;}
-    .sp-readonly .lc,
-    .sp-readonly .lc *{user-select:text;-webkit-user-select:text;-moz-user-select:text;-ms-user-select:text;cursor:text;}
+    .sp-readonly > .sp-hdr{user-select:none;-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;cursor:default;}
+    .sp-readonly .lc{user-select:text !important;-webkit-user-select:text !important;-moz-user-select:text !important;cursor:text !important;}
+    .sp-readonly .dl{cursor:default !important;}
     
     /* 可编辑面板的标题也不可选 */
     .sp-editable > .sp-hdr{user-select:none;-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;cursor:default;}
@@ -1980,6 +1978,12 @@ flex-shrink:0;cursor:pointer;
       flex-shrink:0;line-height:20px;user-select:none;-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;}
     .ls{width:16px;min-width:16px;text-align:center;font-weight:700;flex-shrink:0;line-height:20px;user-select:none;-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;}
     .lc{padding:0 8px;white-space:pre;flex:1;min-width:0;overflow:visible;line-height:20px;user-select:text;cursor:default;}
+    .lc::selection{background:rgba(110,180,247,.25);}
+    .lc *::selection{background:rgba(110,180,247,.25);}
+    
+    /* 确保原始版本窗口也有选中高亮效果 */
+    .sp-readonly .lc::selection{background:rgba(110,180,247,.35) !important;}
+    .sp-readonly .lc *::selection{background:rgba(110,180,247,.35) !important;}
 
     /* Split view: left panel (original version) does not show +/-/~ markers and should not reserve space */
     #__gmSplitLeft .ls{display:none;width:0;min-width:0;padding:0;margin:0;}
@@ -6550,8 +6554,6 @@ flex-shrink:0;cursor:pointer;
                   return false;
                 }
               } else {
-                // 不在代码区域，阻止复制
-                e.preventDefault();
                 return false;
               }
             }
@@ -6860,7 +6862,8 @@ flex-shrink:0;cursor:pointer;
           // 左侧“原始版本”面板是只读区域：允许正常选择/复制，不要把焦点重定向到可编辑行
           // 否则会导致点击后滚动跳回顶部、无法选中文本等异常。
           const sp = t.closest('.sp');
-          if (sp && sp.getAttribute && sp.getAttribute('contenteditable') === 'false') {
+          if (sp && sp.classList && sp.classList.contains('sp-readonly')) {
+            // 完全跳过原始版本窗口的任何焦点处理
             return;
           }
 
@@ -6937,8 +6940,16 @@ flex-shrink:0;cursor:pointer;
           const t = e.target;
           if (!t) return;
           
-          // 检查焦点是否在不可编辑的 .lc 元素上
-          if (t.classList && t.classList.contains('lc') && t.getAttribute('contenteditable') === 'false') {
+          // 跳过原始版本窗口内的任何焦点处理
+          const sp = t.closest('.sp');
+          if (sp && sp.classList && sp.classList.contains('sp-readonly')) {
+            return;
+          }
+          
+          // 检查焦点是否在右侧不可编辑的 .lc 元素上（removed/empty行）
+          if (t.classList && t.classList.contains('lc') && 
+              t.getAttribute('contenteditable') === 'false' && 
+              !t.classList.contains('editable-line')) {
             // 这是不可编辑元素,重定向焦点到最近的可编辑行
             e.preventDefault();
             try { e.stopImmediatePropagation(); } catch (e) {}
@@ -15946,7 +15957,14 @@ flex-shrink:0;cursor:pointer;
           // 右侧始终保留同宽 actions 槽位，保证行号列视觉对齐；左侧不占位
           const actions = (columnType === 'right') ? `<span class="dl-actions" contenteditable="false">${commitCb}${revertBtn}</span>` : '';
           const canEdit = (!readonly) && (columnType === 'right') && (line.type !== 'empty') && (line.type !== 'removed');
-          const lcAttrs = canEdit ? ' class="lc editable-line" tabindex="0"' : ' class="lc" contenteditable="false"';
+          // 左侧只读窗口：不设置contenteditable属性，使用CSS user-select:text允许选择
+          // 右侧可编辑行：使用editable-line类和tabindex
+          // 右侧不可编辑行：设置contenteditable="false"
+          const lcAttrs = canEdit 
+            ? ' class="lc editable-line" tabindex="0"' 
+            : (columnType === 'left' 
+              ? ' class="lc"' 
+              : ' class="lc" contenteditable="false"');
 
           let cellText = (line.type === 'empty') ? '' : (line.type !== 'empty' ? esc(line.text) : '');
           if (!canEdit && line.type === 'modified') {
@@ -15985,7 +16003,8 @@ flex-shrink:0;cursor:pointer;
                   : '';
           const actions = (columnType === 'right') ? `<span class="dl-actions">${commitCb}${btn}</span>` : '';
           const lsHtml = (columnType === 'left') ? '' : '<span class="ls"></span>';
-          return `<div class="dl revert-block-hint">${actions}${lsHtml}<span class="ln"></span><span class="lc" contenteditable="false"><span class="hint-tag" contenteditable="false">块撤回</span><span class="hint-text" contenteditable="false">已识别为连续变更块（${count}行），可一键撤回</span></span></div>`;
+          const lcAttr = (columnType === 'left') ? '' : ' contenteditable="false"';
+          return `<div class="dl revert-block-hint">${actions}${lsHtml}<span class="ln"></span><span class="lc"${lcAttr}><span class="hint-tag" contenteditable="false">块撤回</span><span class="hint-text" contenteditable="false">已识别为连续变更块（${count}行），可一键撤回</span></span></div>`;
         };
 
         while (i < Math.max(leftLines.length, rightLines.length)) {
@@ -20350,6 +20369,7 @@ flex-shrink:0;cursor:pointer;
   function makeResizer(id, targetSel, dir='right', doRefresh=true) {
     const rz = document.getElementById(id);
     let drag=false, startX, startW;
+    let activePointerId = null;
 
     const __gmScheduleSplitLayoutReflow = () => {
       try {
@@ -20362,12 +20382,33 @@ flex-shrink:0;cursor:pointer;
       } catch (e) {}
     };
 
-    rz.addEventListener('mousedown', e => {
-      drag=true; startX=e.clientX;
-      startW=document.querySelector(targetSel).offsetWidth;
-      rz.classList.add('drag');
-      document.body.style.cursor='col-resize';
-      document.body.style.userSelect='none';
+    const cleanupDrag = () => {
+      if (!drag) return;
+      drag = false;
+      activePointerId = null;
+      try { rz.classList.remove('drag'); } catch (e) {}
+      try { document.body.style.cursor=''; } catch (e) {}
+      try { document.body.style.userSelect=''; } catch (e) {}
+      if (doRefresh) setTimeout(() => { try { refresh(); } catch(e) {} }, 0);
+      __gmScheduleSplitLayoutReflow();
+    };
+
+    rz.addEventListener('pointerdown', e => {
+      try {
+        if (!e || e.button !== 0) return;
+        const el0 = document.querySelector(targetSel);
+        if (!el0) return;
+        cleanupDrag();
+        drag=true;
+        activePointerId = e.pointerId;
+        startX=e.clientX;
+        startW=el0.offsetWidth;
+        try { rz.classList.add('drag'); } catch (e2) {}
+        try { document.body.style.cursor='col-resize'; } catch (e2) {}
+        try { document.body.style.userSelect='none'; } catch (e2) {}
+        try { rz.setPointerCapture(e.pointerId); } catch (e2) {}
+        try { e.preventDefault(); } catch (e2) {}
+      } catch (e2) {}
     });
     rz.addEventListener('dblclick', (e) => {
       const el = document.querySelector(targetSel);
@@ -20378,22 +20419,30 @@ flex-shrink:0;cursor:pointer;
       if (doRefresh) setTimeout(() => { try { refresh(); } catch(e) {} }, 0);
       __gmScheduleSplitLayoutReflow();
     });
-    document.addEventListener('mousemove', e => {
-      if (!drag) return;
-      const dx = dir==='right' ? e.clientX-startX : startX-e.clientX;
-      const el = document.querySelector(targetSel);
-      const w  = Math.max(160, Math.min(520, startW+dx));
-      el.style.width=el.style.minWidth=el.style.maxWidth=w+'px';
-      __gmScheduleSplitLayoutReflow();
+    rz.addEventListener('pointermove', e => {
+      try {
+        if (!drag) return;
+        if (activePointerId !== null && e.pointerId !== activePointerId) return;
+        const dx = dir==='right' ? e.clientX-startX : startX-e.clientX;
+        const el = document.querySelector(targetSel);
+        if (!el) return;
+        const w  = Math.max(160, Math.min(520, startW+dx));
+        el.style.width=el.style.minWidth=el.style.maxWidth=w+'px';
+        __gmScheduleSplitLayoutReflow();
+        try { e.preventDefault(); } catch (e2) {}
+      } catch (e2) {}
     });
-    document.addEventListener('mouseup', ()=>{
-      if (!drag) return;
-      drag=false;
-      rz.classList.remove('drag');
-      document.body.style.cursor='';
-      document.body.style.userSelect='';
-      if (doRefresh) setTimeout(() => { try { refresh(); } catch(e) {} }, 0);
-      __gmScheduleSplitLayoutReflow();
+
+    rz.addEventListener('pointerup', () => {
+      cleanupDrag();
+    });
+
+    rz.addEventListener('pointercancel', () => {
+      cleanupDrag();
+    });
+
+    window.addEventListener('blur', () => {
+      cleanupDrag();
     });
   }
 
@@ -20447,6 +20496,16 @@ flex-shrink:0;cursor:pointer;
     let drag = false;
     let startX = 0;
     let startLeft = 0;
+    let activePointerId = null;
+
+    const cleanupDrag = () => {
+      if (!drag) return;
+      drag = false;
+      activePointerId = null;
+      try { rz.classList.remove('drag'); } catch (e) {}
+      try { document.body.style.cursor = ''; } catch (e) {}
+      try { document.body.style.userSelect = ''; } catch (e) {}
+    };
 
     rz.addEventListener('dblclick', (e) => {
       const wrap = view.querySelector('.split-wrap');
@@ -20455,47 +20514,63 @@ flex-shrink:0;cursor:pointer;
       applyRatio(wrap, defaultRatio);
     });
 
-    rz.addEventListener('mousedown', (e) => {
-      const wrap = view.querySelector('.split-wrap');
-      if (!wrap) return;
-      const left = wrap.querySelector('.sp:first-child');
-      if (!left) return;
-      drag = true;
-      startX = e.clientX;
-      startLeft = left.getBoundingClientRect().width;
-      rz.classList.add('drag');
-      document.body.style.cursor = 'col-resize';
-      document.body.style.userSelect = 'none';
+    rz.addEventListener('pointerdown', (e) => {
+      try {
+        if (!e || e.button !== 0) return;
+        const wrap = view.querySelector('.split-wrap');
+        if (!wrap) return;
+        const left = wrap.querySelector('.sp:first-child');
+        if (!left) return;
+
+        cleanupDrag();
+        drag = true;
+        activePointerId = e.pointerId;
+        startX = e.clientX;
+        startLeft = left.getBoundingClientRect().width;
+        try { rz.classList.add('drag'); } catch (e2) {}
+        try { document.body.style.cursor = 'col-resize'; } catch (e2) {}
+        try { document.body.style.userSelect = 'none'; } catch (e2) {}
+        try { rz.setPointerCapture(e.pointerId); } catch (e2) {}
+        try { e.preventDefault(); } catch (e2) {}
+      } catch (e2) {}
     });
 
-    document.addEventListener('mousemove', (e) => {
-      if (!drag) return;
-      const wrap = view.querySelector('.split-wrap');
-      if (!wrap) return;
-      const rect = wrap.getBoundingClientRect();
-      const total = Math.max(0, Math.floor(rect.width || 0));
-      const bar = 3;
-      const minPane = 160;
-      const usable = Math.max(0, total - bar);
+    rz.addEventListener('pointermove', (e) => {
+      try {
+        if (!drag) return;
+        if (activePointerId !== null && e.pointerId !== activePointerId) return;
+        const wrap = view.querySelector('.split-wrap');
+        if (!wrap) return;
+        const rect = wrap.getBoundingClientRect();
+        const total = Math.max(0, Math.floor(rect.width || 0));
+        const bar = 3;
+        const minPane = 160;
+        const usable = Math.max(0, total - bar);
 
-      const lockedLeft = Math.floor(usable / 2);
-      const minLeft = (usable <= (minPane * 2)) ? lockedLeft : minPane;
-      const maxLeft = (usable <= (minPane * 2)) ? lockedLeft : (usable - minPane);
+        const lockedLeft = Math.floor(usable / 2);
+        const minLeft = (usable <= (minPane * 2)) ? lockedLeft : minPane;
+        const maxLeft = (usable <= (minPane * 2)) ? lockedLeft : (usable - minPane);
 
-      const dx = e.clientX - startX;
-      const left = Math.max(minLeft, Math.min(maxLeft, Math.round(startLeft + dx)));
-      const right = Math.max(0, usable - left);
+        const dx = e.clientX - startX;
+        const left = Math.max(minLeft, Math.min(maxLeft, Math.round(startLeft + dx)));
+        const right = Math.max(0, usable - left);
 
-      wrap.style.gridTemplateColumns = `${left}px ${bar}px ${right}px`;
-      window.__gmSplitRatio = usable > 0 ? (left / usable) : defaultRatio;
+        wrap.style.gridTemplateColumns = `${left}px ${bar}px ${right}px`;
+        window.__gmSplitRatio = usable > 0 ? (left / usable) : defaultRatio;
+        try { e.preventDefault(); } catch (e2) {}
+      } catch (e2) {}
     });
 
-    document.addEventListener('mouseup', () => {
-      if (!drag) return;
-      drag = false;
-      rz.classList.remove('drag');
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
+    rz.addEventListener('pointerup', () => {
+      cleanupDrag();
+    });
+
+    rz.addEventListener('pointercancel', () => {
+      cleanupDrag();
+    });
+
+    window.addEventListener('blur', () => {
+      cleanupDrag();
     });
   }
 
