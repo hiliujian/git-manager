@@ -2319,6 +2319,7 @@ flex-shrink:0;cursor:pointer;
             <path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/>
           </svg>保存
         </button>
+        <button class="btn" id="foldBtn" style="display:none" data-action="applyCodeFolding">折叠</button>
       </div>
     </div>
     <div class="statsbar">
@@ -3990,6 +3991,13 @@ flex-shrink:0;cursor:pointer;
             return;
           }
 
+          if (act === 'applyCodeFolding') {
+            e.preventDefault();
+            try { if (typeof window.__gmApplyCodeFolding === 'function') window.__gmApplyCodeFolding(true); } catch (e2) {}
+            try { if (typeof window.updateLineNumbers === 'function') window.updateLineNumbers(); } catch (e2) {}
+            return;
+          }
+
           if (act === 'doCommit') {
             e.preventDefault();
             const push = String(el.getAttribute('data-push') || '0');
@@ -5530,7 +5538,7 @@ flex-shrink:0;cursor:pointer;
     window.setEditStatus = setEditStatus;
 
     // 实时更新行号的函数
-    const updateLineNumbers = () => {
+    const updateLineNumbersNow = () => {
       try {
         const host = document.getElementById('diffView');
         if (!host) return;
@@ -5614,6 +5622,24 @@ flex-shrink:0;cursor:pointer;
         }
       } catch (e) {
         console.error('Error updating line numbers:', e);
+      }
+    };
+
+    const updateLineNumbers = (force = false) => {
+      try {
+        if (force) {
+          updateLineNumbersNow();
+          return;
+        }
+
+        if (!window.__gmUpdateLineNumbersRaf) window.__gmUpdateLineNumbersRaf = 0;
+        if (window.__gmUpdateLineNumbersRaf) return;
+        window.__gmUpdateLineNumbersRaf = requestAnimationFrame(() => {
+          window.__gmUpdateLineNumbersRaf = 0;
+          updateLineNumbersNow();
+        });
+      } catch (e2) {
+        try { updateLineNumbersNow(); } catch (e3) {}
       }
     };
     
@@ -5980,12 +6006,18 @@ flex-shrink:0;cursor:pointer;
       } catch (e) {}
     };
 
-    const __gmApplyCodeFolding = () => {
+    const __gmApplyCodeFolding = (force = false) => {
       try {
         if (window.__plainEditorFilename) return;
         if (curFile === null || !files || !files[curFile] || !files[curFile].path) return;
         const host = document.getElementById('diffView');
         if (!host) return;
+
+        try {
+          const heavy = !!(host && String(host.dataset.gmHeavyDiff || '') === '1');
+          if (heavy && !force) return;
+        } catch (e2) {}
+
         const scope = __gmGetFoldScope(host);
         if (!scope) return;
 
@@ -6020,7 +6052,7 @@ flex-shrink:0;cursor:pointer;
               if (!state) return;
               if (state.has(foldId)) state.delete(foldId);
               else state.add(foldId);
-              __gmApplyCodeFolding();
+              __gmApplyCodeFolding(true);
               if (typeof window.updateLineNumbers === 'function') window.updateLineNumbers();
             } catch (e) {}
           };
@@ -15828,6 +15860,11 @@ flex-shrink:0;cursor:pointer;
       const heavy = (__gmWorkingLineCount >= 5000);
       view.dataset.gmHeavyDiff = heavy ? '1' : '0';
       view.dataset.gmLineCount = String(__gmWorkingLineCount);
+
+      try {
+        const btn = document.getElementById('foldBtn');
+        if (btn) btn.style.display = heavy ? '' : 'none';
+      } catch (e2) {}
     } catch (e) {}
 
     // Build change navigation bar
