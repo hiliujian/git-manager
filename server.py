@@ -5086,6 +5086,7 @@ def get_capabilities_spec():
     endpoints = [
         # Repo/Workspace
         {"method": "GET", "path": "/api/status"},
+        {"method": "GET", "path": "/api/sync_status", "query": {"fetch": "0|1"}},
         {"method": "POST", "path": "/api/open_repo", "body": {"path": "<abs path>"}},
         {"method": "GET", "path": "/api/staged_files"},
         {"method": "POST", "path": "/api/unstage_file", "body": {"path": "<rel path>"}},
@@ -7940,6 +7941,67 @@ def fetch_remotes():
         return False, (err or out or "fetch 失败"), (out or "")
     return True, "", (out or "")
 
+
+def get_sync_status(do_fetch: bool = False):
+    """Return (ok: bool, data: dict, error: str|None).
+
+    Compute ahead/behind between local HEAD and upstream remote-tracking ref.
+    Prefer @{u} (configured upstream). Fallback to origin/<branch> when possible.
+    """
+    if not REPO_PATH:
+        return False, {}, "未打开仓库"
+
+    if do_fetch:
+        ok, msg, _out = fetch_remotes()
+        if not ok:
+            return False, {}, (msg or "fetch 失败")
+
+    bout, berr, bcode = run_git(["branch", "--show-current"], timeout=30)
+    branch = (bout or "").strip() if bcode == 0 else ""
+    if not branch:
+        return False, {}, (berr or "无法获取当前分支")
+
+    upstream = ""
+    uout, uerr, ucode = run_git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], timeout=30)
+    if ucode == 0:
+        upstream = (uout or "").strip()
+    else:
+        cand = f"origin/{branch}"
+        if _remote_ref_exists(cand):
+            upstream = cand
+
+    if not upstream:
+        return True, {
+            "branch": branch,
+            "upstream": None,
+            "ahead": 0,
+            "behind": 0,
+            "has_upstream": False,
+        }, None
+
+    out, err, code = run_git(["rev-list", "--left-right", "--count", f"HEAD...{upstream}"], timeout=60)
+    if code != 0:
+        return False, {}, (err or out or "无法计算同步状态")
+
+    ahead = 0
+    behind = 0
+    try:
+        parts = (out or "").strip().split()
+        if len(parts) >= 2:
+            ahead = int(parts[0])
+            behind = int(parts[1])
+    except Exception:
+        ahead = 0
+        behind = 0
+
+    return True, {
+        "branch": branch,
+        "upstream": upstream,
+        "ahead": max(0, ahead),
+        "behind": max(0, behind),
+        "has_upstream": True,
+    }, None
+
 def is_commit_pushed(commit_hash):
     """判断某个提交是否已经存在于任意远端分支（基于本地 remote refs）。"""
     commit_hash = (commit_hash or "").strip()
@@ -8372,6 +8434,21 @@ class Handler(BaseHTTPRequestHandler):
                 "has_staged_changes": has_staged,
                 "staged_count": staged_count,
             })
+
+        elif p == "/api/sync_status":
+            logger.debug("处理 /api/sync_status 请求")
+            if not self._require_repo():
+                return
+            try:
+                fetch_flag = str(qget("fetch") or "0").strip()
+                do_fetch = fetch_flag in ("1", "true", "True")
+            except Exception:
+                do_fetch = False
+            ok, data, err = get_sync_status(do_fetch=do_fetch)
+            if not ok:
+                self.send_json({"ok": False, "error": err or "获取同步状态失败"}, 400)
+                return
+            self.send_json({"ok": True, **(data or {})})
 
         elif p == "/api/capabilities":
             logger.debug("处理 /api/capabilities 请求")

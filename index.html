@@ -524,6 +524,16 @@
     .branch-tag{display:flex;align-items:center;gap:4px;background:var(--bg4);
       border:1px solid var(--border2);border-radius:20px;padding:2px 10px;
       font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--accent2);cursor:default;}
+    .sync-ind{display:inline-flex;align-items:center;gap:6px;margin-left:8px;
+      font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--text2);
+      background:transparent;border:1px solid transparent;border-radius:20px;
+      padding:2px 8px;cursor:default;}
+    .sync-ind .sync-arrow{display:inline-flex;align-items:center;gap:2px;
+      padding:0 6px;border-radius:999px;border:1px solid var(--border2);
+      background:var(--bg4);color:var(--text2);cursor:pointer;user-select:none;
+      -webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;}
+    .sync-ind .sync-up{color:#7dd3fc;}
+    .sync-ind .sync-down{color:#fbbf24;}
     .branch-wrap{position:relative;display:flex;align-items:center;}
     .branch-menu{position:absolute;top:34px;left:0;min-width:260px;max-width:420px;
       background:rgba(26,28,36,.94);border:1px solid rgba(61,66,98,.85);border-radius:12px;
@@ -2192,6 +2202,7 @@ flex-shrink:0;cursor:pointer;
       </svg>
       <span id="branchName"></span>
     </div>
+    <div class="sync-ind" id="syncIndicator" style="display:none"></div>
     <div class="branch-menu" id="branchMenu">
       <div class="bm-title">切换分支 <span class="bm-kbd">Esc</span></div>
       <div class="bm-search">
@@ -3995,6 +4006,20 @@ flex-shrink:0;cursor:pointer;
             e.preventDefault();
             try { if (typeof window.__gmApplyCodeFolding === 'function') window.__gmApplyCodeFolding(true); } catch (e2) {}
             try { if (typeof window.updateLineNumbers === 'function') window.updateLineNumbers(); } catch (e2) {}
+            return;
+          }
+
+          if (act === 'syncPush') {
+            e.preventDefault();
+            try { refreshSyncStatus(false); } catch (e2) {}
+            try { pushFromHistory(); } catch (e2) {}
+            return;
+          }
+
+          if (act === 'syncPull') {
+            e.preventDefault();
+            try { refreshSyncStatus(false); } catch (e2) {}
+            try { pullUpdate(); } catch (e2) {}
             return;
           }
 
@@ -13474,6 +13499,8 @@ flex-shrink:0;cursor:pointer;
       }
     }
 
+    try { refreshSyncStatus(false); } catch (e) {}
+
     btn.style.opacity = '';
     btn.style.pointerEvents = '';
     refreshBusy = false;
@@ -13640,6 +13667,7 @@ flex-shrink:0;cursor:pointer;
       return;
     } finally {
       setButtonBusy(btn, false);
+      try { refreshSyncStatus(true); } catch (e) {}
     }
   }
 
@@ -14087,6 +14115,8 @@ flex-shrink:0;cursor:pointer;
         if (!wsConnected) {
           await refreshFilesOnly(false, true);
         }
+
+        try { refreshSyncStatus(false); } catch (e) {}
       } catch (e) {
       } finally {
         refreshTimer = setTimeout(tick, getDelayMs());
@@ -19060,6 +19090,7 @@ flex-shrink:0;cursor:pointer;
         else __gmToastApiError('Push 失败', pRes, (pRes && (pRes.msg || pRes.error)) ? (pRes.msg || pRes.error) : 'Push 失败');
       }
       await refresh();
+      try { refreshSyncStatus(true); } catch (e) {}
     } catch (error) {
       __gmToastApiError('提交失败', null, error.message);
     } finally {
@@ -19344,7 +19375,8 @@ flex-shrink:0;cursor:pointer;
         // 恢复后优先展示工作区 diff（如果该文件在变更列表里）
         const idx = files.findIndex(x => x.path === filepath);
         if (idx >= 0) await selectFile(idx);
-        else clearDiff();
+        await refresh();
+        try { refreshSyncStatus(true); } catch (e) {}
       } else {
         __gmToastApiError('恢复失败', res, (res && (res.msg || res.error)) ? (res.msg || res.error) : '恢复失败');
       }
@@ -19729,6 +19761,7 @@ flex-shrink:0;cursor:pointer;
           toast(msg, 'ok');
           closeBranchMenu();
           await refresh();
+          try { refreshSyncStatus(true); } catch (e) {}
           return;
         }
         // fall through to existing error handling below
@@ -19747,6 +19780,7 @@ flex-shrink:0;cursor:pointer;
       toast(msg, 'ok');
       closeBranchMenu();
       await refresh();
+      try { refreshSyncStatus(true); } catch (e) {}
       return;
     }
 
@@ -20900,6 +20934,73 @@ flex-shrink:0;cursor:pointer;
   initChangeNavigationWheelScroll();
   __gmBindDiffViewDelegation();
   __gmBindStaticUiDelegation();
+
+  // ── Git Sync Status Indicator ───────────────────────────────────────────────
+  let __gmSyncStatusInFlight = false;
+  let __gmSyncStatusLastFetchAt = 0;
+
+  async function refreshSyncStatus(fetch = false) {
+    try {
+      const ind = document.getElementById('syncIndicator');
+      if (!ind) return;
+
+      // Only show when repo is opened (branchTag visible)
+      const bt = document.getElementById('branchTag');
+      const repoOpened = !!(bt && bt.style && bt.style.display !== 'none');
+      if (!repoOpened) {
+        ind.style.display = 'none';
+        return;
+      }
+
+      if (__gmSyncStatusInFlight) return;
+
+      const now = Date.now();
+      const doFetch = !!fetch;
+      // Avoid frequent `git fetch` (expensive): at most once per 60s unless explicitly requested.
+      const allowFetch = doFetch && (!__gmSyncStatusLastFetchAt || (now - __gmSyncStatusLastFetchAt) > 60000);
+
+      __gmSyncStatusInFlight = true;
+      const res = await GET(`/api/sync_status?fetch=${allowFetch ? '1' : '0'}`);
+      if (allowFetch) __gmSyncStatusLastFetchAt = now;
+
+      if (!res || res.error || res.ok === false) {
+        ind.style.display = 'none';
+        return;
+      }
+
+      const branch = String(res.branch || '').trim();
+      const ahead = Math.max(0, Number(res.ahead) || 0);
+      const behind = Math.max(0, Number(res.behind) || 0);
+      const hasUp = !!res.has_upstream;
+
+      if (!branch) {
+        ind.style.display = 'none';
+        return;
+      }
+
+      if (!hasUp) {
+        ind.style.display = 'none';
+        return;
+      }
+
+      if (!ahead && !behind) {
+        ind.style.display = 'none';
+        return;
+      }
+
+      const parts = [];
+      if (ahead > 0) parts.push(`<span class="sync-arrow sync-up" data-action="syncPush" data-count="${ahead}">↑${ahead}</span>`);
+      if (behind > 0) parts.push(`<span class="sync-arrow sync-down" data-action="syncPull" data-count="${behind}">↓${behind}</span>`);
+      ind.innerHTML = parts.join(' ');
+      ind.setAttribute('data-tip', `与远端同步状态：本地领先 ${ahead} / 远端领先 ${behind}\n点击 ↑ 推送，点击 ↓ 拉取`);
+      ind.style.display = '';
+    } catch (e) {
+    } finally {
+      __gmSyncStatusInFlight = false;
+    }
+  }
+
+  try { refreshSyncStatus(true); } catch (e) {}
 
   // ── Theme Toggle ──────────────────────────────────────────────────────────────
   function initTheme() {
