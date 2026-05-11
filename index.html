@@ -527,10 +527,11 @@
     .sync-ind{display:inline-flex;align-items:center;gap:6px;margin-left:8px;
       font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--text2);
       background:transparent;border:1px solid transparent;border-radius:20px;
-      padding:2px 8px;cursor:default;}
+      padding:2px 10px;cursor:default;box-sizing:border-box;min-height:20px;}
     .sync-ind .sync-arrow{display:inline-flex;align-items:center;gap:2px;
       padding:0 6px;border-radius:999px;border:1px solid var(--border2);
       background:var(--bg4);color:var(--text2);cursor:pointer;user-select:none;
+      height:16px;line-height:16px;box-sizing:border-box;
       -webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;}
     .sync-ind .sync-up{color:#7dd3fc;}
     .sync-ind .sync-down{color:#fbbf24;}
@@ -13187,6 +13188,15 @@ flex-shrink:0;cursor:pointer;
     const app = document.getElementById('app');
     app.style.display = 'flex';
     app.style.flex    = '1';
+    try { window.__gmRepoValid = true; } catch (e) {}
+    try {
+      if (typeof window.__gmSyncStatusReset === 'function') window.__gmSyncStatusReset();
+    } catch (e) {}
+    try {
+      setTimeout(() => {
+        try { refreshSyncStatus(true); } catch (e2) {}
+      }, 0);
+    } catch (e) {}
     document.getElementById('branchTag').style.display  = 'flex';
     document.getElementById('branchName').textContent   = branch || 'main';
     const repoLabelEl = document.getElementById('repoLabel');
@@ -13348,6 +13358,7 @@ flex-shrink:0;cursor:pointer;
 
     // Stop real-time refresh
     stopRealTimeRefresh();
+    try { window.__gmRepoValid = false; } catch (e) {}
   }
 
   async function tryAutoOpenRepoOnLoad() {
@@ -13395,6 +13406,7 @@ flex-shrink:0;cursor:pointer;
 
     if (err) err.textContent = (res && res.error) ? (res.error + (res.req_id ? ` (req_id: ${res.req_id})` : '')) : '恢复失败';
     try { localStorage.removeItem('lastRepoPath'); } catch (e) {}
+    try { window.__gmRepoValid = false; } catch (e) {}
   }
 
   // ── Refresh ───────────────────────────────────────────────────────────────────
@@ -13411,6 +13423,8 @@ flex-shrink:0;cursor:pointer;
       GET('/api/branches'),
       GET('/api/status'),
     ]);
+
+    try { window.__gmRepoValid = !!(stRes && stRes.valid && stRes.repo); } catch (e) {}
 
     if (fRes.error) {
       __gmToastApiError('刷新失败', fRes, fRes.error);
@@ -13993,7 +14007,19 @@ flex-shrink:0;cursor:pointer;
 
   async function refreshFilesOnly(forceDiffReload=false, reloadDiff=true) {
     const fRes = await GET('/api/files');
-    if (fRes.error) return;
+    if (fRes.error) {
+      try {
+        const msg = String((fRes && (fRes.error || fRes.msg || fRes.message)) || '').trim();
+        if (msg.indexOf('未打开仓库') >= 0 || msg.indexOf('未打开') >= 0) {
+          try { window.__gmRepoValid = false; } catch (e) {}
+          try {
+            const ind = document.getElementById('syncIndicator');
+            if (ind) ind.style.display = 'none';
+          } catch (e) {}
+        }
+      } catch (e) {}
+      return;
+    }
     const newFiles = fRes.files || [];
 
     const oldFiles = files;
@@ -14116,7 +14142,9 @@ flex-shrink:0;cursor:pointer;
           await refreshFilesOnly(false, true);
         }
 
-        try { refreshSyncStatus(false); } catch (e) {}
+        try {
+          if (window.__gmRepoValid) refreshSyncStatus(false);
+        } catch (e) {}
       } catch (e) {
       } finally {
         refreshTimer = setTimeout(tick, getDelayMs());
@@ -20938,23 +20966,46 @@ flex-shrink:0;cursor:pointer;
   // ── Git Sync Status Indicator ───────────────────────────────────────────────
   let __gmSyncStatusInFlight = false;
   let __gmSyncStatusLastFetchAt = 0;
+  let __gmSyncStatusFailCount = 0;
+  let __gmSyncStatusCooldownUntil = 0;
+  let __gmSyncStatusLastTryAt = 0;
+  const __gmSyncStatusMinIntervalMs = 3000;
+  try { if (typeof window.__gmRepoValid !== 'boolean') window.__gmRepoValid = false; } catch (e) {}
+
+  window.__gmSyncStatusReset = () => {
+    __gmSyncStatusInFlight = false;
+    __gmSyncStatusFailCount = 0;
+    __gmSyncStatusCooldownUntil = 0;
+    __gmSyncStatusLastTryAt = 0;
+  };
 
   async function refreshSyncStatus(fetch = false) {
     try {
       const ind = document.getElementById('syncIndicator');
       if (!ind) return;
 
+      const now0 = Date.now();
+      if (__gmSyncStatusCooldownUntil && now0 < __gmSyncStatusCooldownUntil) return;
+
+      if (!fetch) {
+        const last = Number(__gmSyncStatusLastTryAt || 0) || 0;
+        if (last && (now0 - last) < __gmSyncStatusMinIntervalMs) return;
+      }
+      __gmSyncStatusLastTryAt = now0;
+
       // Only show when repo is opened (branchTag visible)
-      const bt = document.getElementById('branchTag');
-      const repoOpened = !!(bt && bt.style && bt.style.display !== 'none');
-      if (!repoOpened) {
+      const repoValid = !!(window.__gmRepoValid);
+      if (!repoValid) {
         ind.style.display = 'none';
+        __gmSyncStatusFailCount = Math.min(8, (__gmSyncStatusFailCount || 0) + 1);
+        const waitMs = Math.min(60000, 2000 * Math.pow(2, __gmSyncStatusFailCount - 1));
+        __gmSyncStatusCooldownUntil = now0 + waitMs;
         return;
       }
 
       if (__gmSyncStatusInFlight) return;
 
-      const now = Date.now();
+      const now = now0;
       const doFetch = !!fetch;
       // Avoid frequent `git fetch` (expensive): at most once per 60s unless explicitly requested.
       const allowFetch = doFetch && (!__gmSyncStatusLastFetchAt || (now - __gmSyncStatusLastFetchAt) > 60000);
@@ -20965,8 +21016,14 @@ flex-shrink:0;cursor:pointer;
 
       if (!res || res.error || res.ok === false) {
         ind.style.display = 'none';
+        __gmSyncStatusFailCount = Math.min(8, (__gmSyncStatusFailCount || 0) + 1);
+        const waitMs = Math.min(60000, 2000 * Math.pow(2, __gmSyncStatusFailCount - 1));
+        __gmSyncStatusCooldownUntil = Date.now() + waitMs;
         return;
       }
+
+      __gmSyncStatusFailCount = 0;
+      __gmSyncStatusCooldownUntil = 0;
 
       const branch = String(res.branch || '').trim();
       const ahead = Math.max(0, Number(res.ahead) || 0);
@@ -20989,8 +21046,8 @@ flex-shrink:0;cursor:pointer;
       }
 
       const parts = [];
-      if (ahead > 0) parts.push(`<span class="sync-arrow sync-up" data-action="syncPush" data-count="${ahead}">↑${ahead}</span>`);
-      if (behind > 0) parts.push(`<span class="sync-arrow sync-down" data-action="syncPull" data-count="${behind}">↓${behind}</span>`);
+      if (ahead > 0) parts.push(`<span class="sync-arrow sync-up" data-action="syncPush" data-count="${ahead}">↑ ${ahead}</span>`);
+      if (behind > 0) parts.push(`<span class="sync-arrow sync-down" data-action="syncPull" data-count="${behind}">↓ ${behind}</span>`);
       ind.innerHTML = parts.join(' ');
       ind.setAttribute('data-tip', `与远端同步状态：本地领先 ${ahead} / 远端领先 ${behind}\n点击 ↑ 推送，点击 ↓ 拉取`);
       ind.style.display = '';
