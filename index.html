@@ -4398,7 +4398,13 @@ flex-shrink:0;cursor:pointer;
       try { document.querySelectorAll('.fi').forEach(el => el.classList.remove('active')); } catch (e) {}
       try { document.querySelectorAll('.lf').forEach((el) => el.classList.remove('active')); } catch (e) {}
 
-      await loadCommitFileDiff(ch, p, st);
+      // 添加 epoch 保护，防止在快速选择日志文件时的并发请求
+      const epoch = ++window.__gmLoadDiffEpoch;
+      setTimeout(() => {
+        if (window.__gmLoadDiffEpoch === epoch) {
+          loadCommitFileDiff(ch, p, st);
+        }
+      }, 0);
     } catch (e) {}
   }
 
@@ -9885,12 +9891,34 @@ flex-shrink:0;cursor:pointer;
                   diffMode = 'split';
                   const t1 = document.getElementById('dtSplit');
                   if (t1) setDiffMode('split', t1);
-                  else { diffMode = 'split'; if (curFile !== null) loadDiff(curFile); }
+                  else { 
+                    diffMode = 'split'; 
+                    if (curFile !== null) {
+                      // 添加 epoch 保护，防止在快速切换时的并发请求
+                      const epoch = ++window.__gmLoadDiffEpoch;
+                      setTimeout(() => {
+                        if (window.__gmLoadDiffEpoch === epoch && curFile !== null) {
+                          loadDiff(curFile);
+                        }
+                      }, 0);
+                    }
+                  }
                 } else {
                   diffMode = 'unified';
                   const t2 = document.getElementById('dtUnified');
                   if (t2) setDiffMode('unified', t2);
-                  else { diffMode = 'unified'; if (curFile !== null) loadDiff(curFile); }
+                  else { 
+                    diffMode = 'unified'; 
+                    if (curFile !== null) {
+                      // 添加 epoch 保护，防止在快速切换时的并发请求
+                      const epoch = ++window.__gmLoadDiffEpoch;
+                      setTimeout(() => {
+                        if (window.__gmLoadDiffEpoch === epoch && curFile !== null) {
+                          loadDiff(curFile);
+                        }
+                      }, 0);
+                    }
+                  }
                 }
               } catch (e3) {}
               try { selectFile(idxInFiles); } catch (e4) {}
@@ -9926,6 +9954,9 @@ flex-shrink:0;cursor:pointer;
 
   async function handleFilesUpdate(newFiles) {
     console.log('检测到文件变化，更新列表');
+
+    // 添加 epoch 保护，防止在切换仓库时的并发请求
+    const epoch = ++window.__gmFilesEpoch;
 
     const __gmPlainActive = (() => {
       try {
@@ -9979,6 +10010,9 @@ flex-shrink:0;cursor:pointer;
       if (newIndex >= 0) {
         curFile = newIndex;
         if (!__gmPlainActive) {
+          // 添加 epoch 检查，防止过期请求
+          if (window.__gmFilesEpoch !== epoch) return;
+          
           // 自动加载diff，但只有在shouldAutoRefreshDiff为true时
           // 这样可以避免在撤回操作后被WebSocket的推送打断
           if (shouldAutoRefreshDiff) {
@@ -9987,7 +10021,15 @@ flex-shrink:0;cursor:pointer;
               console.log('跳过一次自动刷新diff（本地已主动更新）');
             } else {
               console.log('自动刷新当前文件的diff');
-              loadDiff(curFile, { showLoading: false, incremental: true });
+              // 添加 epoch 保护，防止在快速刷新时的并发请求
+              if (window.__gmFilesEpoch === epoch) {
+                const diffEpoch = ++window.__gmLoadDiffEpoch;
+                setTimeout(() => {
+                  if (window.__gmLoadDiffEpoch === diffEpoch && window.__gmFilesEpoch === epoch && curFile !== null) {
+                    loadDiff(curFile, { showLoading: false, incremental: true });
+                  }
+                }, 0);
+              }
             }
           }
         }
@@ -13389,9 +13431,12 @@ flex-shrink:0;cursor:pointer;
       fileStatsOverrideByPath = new Map();
     } catch (e) {}
 
+    // Reset epochs to cancel pending operations
     try {
-      recentFiles = [];
-      updateRecentFilesDropdown();
+      window.__gmRealTimeRefreshEpoch++;
+      window.__gmSyncStatusEpoch++;
+      window.__gmLoadDiffEpoch++;
+      window.__gmFilesEpoch++;
     } catch (e) {}
 
     try {
@@ -13595,8 +13640,18 @@ flex-shrink:0;cursor:pointer;
     })();
     if (!__gmPlainActive) {
       if (curFile !== null) {
-        if (curFile < files.length) await loadDiff(curFile);
-        else { curFile = null; clearDiff(); }
+        if (curFile < files.length) {
+          // 添加 epoch 保护，防止在快速刷新时的并发请求
+          const diffEpoch = ++window.__gmLoadDiffEpoch;
+          setTimeout(() => {
+            if (window.__gmLoadDiffEpoch === diffEpoch && curFile !== null && curFile < files.length) {
+              loadDiff(curFile);
+            }
+          }, 0);
+        } else { 
+          curFile = null; 
+          clearDiff(); 
+        }
       }
     }
 
@@ -14098,7 +14153,9 @@ flex-shrink:0;cursor:pointer;
 
   async function refreshFilesOnly(forceDiffReload=false, reloadDiff=true) {
     try { if (!window.__gmRepoValid) return; } catch (e) {}
+    const epoch = ++window.__gmFilesEpoch;
     const fRes = await __gmGETCancelable('files', '/api/files');
+    if (window.__gmFilesEpoch !== epoch) return;
     if (fRes.error) {
       try {
         const msg = String((fRes && (fRes.error || fRes.msg || fRes.message)) || '').trim();
@@ -14155,6 +14212,7 @@ flex-shrink:0;cursor:pointer;
     const same = __gmFilesSignature(newFiles) === __gmFilesSignature(oldFiles);
     // 即使 files 列表统计没变化，撤回/保存等操作也可能改变 diff 内容（比如 +1-1 变更）。
     // 因此在 forceDiffReload 时不要短路。
+    if (window.__gmFilesEpoch !== epoch) return;
     if (same && !forceDiffReload) return;
     // Preserve checked file selection by path (file list order may change)
     const checkedPaths = new Set();
@@ -14169,9 +14227,11 @@ flex-shrink:0;cursor:pointer;
       if (f && f.path && checkedPaths.has(f.path)) nextChecked.add(i);
     });
     checkedSet = nextChecked;
+    if (window.__gmFilesEpoch !== epoch) return;
     renderFileList();
     updateStats();
     if (reloadDiff && !__gmPlainActive) {
+      if (window.__gmFilesEpoch !== epoch) return;
       if (curFile !== null) {
         if (curFile < files.length) {
           const prev = (() => {
@@ -14192,7 +14252,16 @@ flex-shrink:0;cursor:pointer;
             return false;
           })();
 
-          if (shouldReloadCurrent) await loadDiff(curFile);
+          if (window.__gmFilesEpoch !== epoch) return;
+          if (shouldReloadCurrent) {
+            // 添加 epoch 保护，防止在快速刷新时的并发请求
+            const diffEpoch = ++window.__gmLoadDiffEpoch;
+            setTimeout(() => {
+              if (window.__gmLoadDiffEpoch === diffEpoch && window.__gmFilesEpoch === epoch && curFile !== null) {
+                loadDiff(curFile);
+              }
+            }, 0);
+          }
         } else {
           curFile = null;
           clearDiff();
@@ -14209,8 +14278,8 @@ flex-shrink:0;cursor:pointer;
   let __gmRealTimeRefreshEpoch = 0;
 
   function startRealTimeRefresh() {
-    __gmRealTimeRefreshEpoch = (__gmRealTimeRefreshEpoch || 0) + 1;
-    const epoch = __gmRealTimeRefreshEpoch;
+    window.__gmRealTimeRefreshEpoch = (window.__gmRealTimeRefreshEpoch || 0) + 1;
+    const epoch = window.__gmRealTimeRefreshEpoch;
     if (refreshTimer) {
       clearTimeout(refreshTimer);
       refreshTimer = null;
@@ -14229,7 +14298,7 @@ flex-shrink:0;cursor:pointer;
     const tick = async () => {
       try {
         refreshTimer = null;
-        if ((__gmRealTimeRefreshEpoch || 0) !== epoch) return;
+        if ((window.__gmRealTimeRefreshEpoch || 0) !== epoch) return;
         if (document.hidden) {
           refreshTimer = setTimeout(tick, getDelayMs());
           return;
@@ -14245,7 +14314,7 @@ flex-shrink:0;cursor:pointer;
         } catch (e) {}
       } catch (e) {
       } finally {
-        if ((__gmRealTimeRefreshEpoch || 0) !== epoch) return;
+        if ((window.__gmRealTimeRefreshEpoch || 0) !== epoch) return;
         refreshTimer = setTimeout(tick, getDelayMs());
       }
     };
@@ -14254,7 +14323,7 @@ flex-shrink:0;cursor:pointer;
   }
 
   function stopRealTimeRefresh() {
-    __gmRealTimeRefreshEpoch = (__gmRealTimeRefreshEpoch || 0) + 1;
+    window.__gmRealTimeRefreshEpoch = (window.__gmRealTimeRefreshEpoch || 0) + 1;
     if (refreshTimer) {
       clearTimeout(refreshTimer);
       refreshTimer = null;
@@ -14969,7 +15038,13 @@ flex-shrink:0;cursor:pointer;
     renderFileList();
     // 清空之前的hunks，确保重新加载
     curHunks = [];
-    await loadDiff(i);
+    // 添加 epoch 保护，防止在快速选择文件时的并发请求
+    const epoch = ++window.__gmLoadDiffEpoch;
+    setTimeout(() => {
+      if (window.__gmLoadDiffEpoch === epoch) {
+        loadDiff(i);
+      }
+    }, 0);
     try {
       const f = files[i];
       if (f && f.path) __gmRestoreLastLineForPath(f.path);
@@ -15141,6 +15216,7 @@ flex-shrink:0;cursor:pointer;
   }
 
   async function loadDiff(i, opts = {}) {
+    const epoch = ++window.__gmLoadDiffEpoch;
     const options = {
       showLoading: opts.showLoading !== false,
       incremental: !!opts.incremental
@@ -15194,10 +15270,12 @@ flex-shrink:0;cursor:pointer;
     };
 
     // Update label (best-effort, may be refined after hunks load)
-    renderDiffLabelForFile(f);
+    if (window.__gmLoadDiffEpoch === epoch) {
+      renderDiffLabelForFile(f);
+    }
 
     try { __gmRestoreDiffEditorHistoryForPath(String(f.path || '')); } catch (e) {}
-    if (options.showLoading) {
+    if (window.__gmLoadDiffEpoch === epoch && options.showLoading) {
       document.getElementById('diffView').innerHTML =
               '<div class="empty-state"><div class="spin"></div><p>加载中...</p></div>';
     }
@@ -15205,8 +15283,10 @@ flex-shrink:0;cursor:pointer;
     // Load diff hunks
     console.log('loadDiff: loading diff hunks');
     try {
+      if (window.__gmLoadDiffEpoch !== epoch) return;
       const ctxParam = (diffMode === 'unified') ? `&ctx=${encodeURIComponent(changeViewCtx)}` : '';
-      const res = await GET(`/api/diff?path=${encodeURIComponent(f.path)}&status=${f.status}${ctxParam}`);
+      const res = await __gmGETCancelable('diff', `/api/diff?path=${encodeURIComponent(f.path)}&status=${f.status}${ctxParam}`);
+      if (window.__gmLoadDiffEpoch !== epoch) return;
       console.log('loadDiff: diff response:', res);
       if (res.error) {
         __gmToastApiError('加载差异失败', res, res.error);
@@ -15232,6 +15312,7 @@ flex-shrink:0;cursor:pointer;
         renderFileList();
       } catch (e) {}
     } catch (error) {
+      if (__gmIsAbortError(error)) return;
       console.error('loadDiff: error loading diff hunks:', error);
       __gmToastApiError('加载差异失败', null, error.message);
       document.getElementById('diffView').innerHTML = '<div class="empty-state"><p style="color:var(--text2)">加载失败: ' + error.message + '</p></div>';
@@ -15240,25 +15321,27 @@ flex-shrink:0;cursor:pointer;
 
     // Load HEAD/base file content for stable original column rendering (best-effort)
     baseFileContent = null;
-    if (f.status !== 'A') {
+    if (window.__gmLoadDiffEpoch === epoch && f.status !== 'A') {
       try {
-        const headRes = await POST('/api/file_content_head', {path: f.path});
-        if (headRes && headRes.ok && headRes.content !== null && headRes.content !== undefined) {
+        const headRes = await __gmPOSTCancelable('file_content_head', '/api/file_content_head', {path: f.path});
+        if (window.__gmLoadDiffEpoch === epoch && headRes && headRes.ok && headRes.content !== null && headRes.content !== undefined) {
           baseFileContent = headRes.content;
         }
       } catch (e) {
-        baseFileContent = null;
+        if (!__gmIsAbortError(e)) baseFileContent = null;
       }
     }
 
     // Load the full file content
     console.log('loadDiff: loading file content for:', f.path, 'status:', f.status);
+    if (window.__gmLoadDiffEpoch !== epoch) return;
     if (f.status === 'D') {
       curFileContent = null;
       curFileEncoding = 'utf-8';
     } else {
       try {
-        const contentRes = await POST('/api/file_content', { path: f.path });
+        const contentRes = await __gmPOSTCancelable('file_content', '/api/file_content', { path: f.path });
+        if (window.__gmLoadDiffEpoch !== epoch) return;
         console.log('loadDiff: content response:', contentRes);
 
         if (contentRes.ok && contentRes.content !== null && contentRes.content !== undefined) {
@@ -15272,6 +15355,7 @@ flex-shrink:0;cursor:pointer;
           console.log('loadDiff: setting empty content as fallback');
         }
       } catch (error) {
+        if (__gmIsAbortError(error)) return;
         console.error('loadDiff: error loading file content:', error);
         curFileContent = '';
         curFileEncoding = 'utf-8';
@@ -15279,9 +15363,12 @@ flex-shrink:0;cursor:pointer;
     }
 
     // 文件内容加载完成后，再次更新标签以显示正确的行数
-    renderDiffLabelForFile(f);
+    if (window.__gmLoadDiffEpoch === epoch) {
+      renderDiffLabelForFile(f);
+    }
 
     // Collect change locations for quick navigation
+    if (window.__gmLoadDiffEpoch !== epoch) return;
     const changeLocations = [];
     curHunks.forEach((hunk, hunkIndex) => {
       let lastNewLineNumber = null;
@@ -15310,6 +15397,7 @@ flex-shrink:0;cursor:pointer;
     });
 
     // Render based on current view mode
+    if (window.__gmLoadDiffEpoch !== epoch) return;
     console.log('loadDiff: rendering diff, diffMode:', diffMode);
     // Always use renderDiffWithFullContext to show full file content
     const revertBtnEl = document.getElementById('revertFileBtn');
@@ -15329,7 +15417,7 @@ flex-shrink:0;cursor:pointer;
         view.setAttribute('contenteditable', 'true');
       }
     } catch (e) {}
-    // 保持原先体验：不显示“保存”按钮，保存走自动保存/快捷键。
+    // 保持原先体验：不显示"保存"按钮，保存走自动保存/快捷键。
     document.getElementById('saveFileBtn').style.display = 'none';
     console.log('loadDiff: rendering full file view with diff context');
     let didPatch = false;
@@ -17227,6 +17315,9 @@ flex-shrink:0;cursor:pointer;
   }
 
   async function loadCommitFileDiff(commitHash, filepath, status) {
+    // 添加 epoch 保护，防止在快速切换提交时的并发请求
+    const epoch = ++window.__gmLoadDiffEpoch;
+    
     document.getElementById('revertFileBtn').style.display = 'none';
     document.getElementById('diffLabel').innerHTML =
             `<span class="fi-st ${status||'M'}" style="font-size:9px">${status||'M'}</span>
@@ -17240,12 +17331,19 @@ flex-shrink:0;cursor:pointer;
      </button>`;
     try { addToRecentFilesLog(String(commitHash || ''), String(filepath || ''), String(status || 'M')); } catch (e) {}
     try { bindDiffLabelCloseBtn(`log|${String(commitHash || '').trim()}|${String(filepath || '').trim()}`); } catch (e) {}
-    document.getElementById('diffView').innerHTML =
-            '<div class="empty-state"><div class="spin"></div><p>加载中...</p></div>';
+    
+    // 检查 epoch，防止过期请求更新 UI
+    if (window.__gmLoadDiffEpoch === epoch) {
+      document.getElementById('diffView').innerHTML =
+              '<div class="empty-state"><div class="spin"></div><p>加载中...</p></div>';
+    }
 
     const res = await GET(
             `/api/commit_file_diff?hash=${encodeURIComponent(commitHash)}&path=${encodeURIComponent(filepath)}`
     );
+    
+    // 检查 epoch，防止过期请求处理响应
+    if (window.__gmLoadDiffEpoch !== epoch) return;
     curHunks = res.hunks || [];
 
     // 加载完成后更新行数显示
@@ -17264,6 +17362,9 @@ flex-shrink:0;cursor:pointer;
      </button>`;
     try { bindDiffLabelCloseBtn(`log|${String(commitHash || '').trim()}|${String(filepath || '').trim()}`); } catch (e) {}
 
+    // 再次检查 epoch，防止过期请求渲染 UI
+    if (window.__gmLoadDiffEpoch !== epoch) return;
+    
     // 对于历史提交的diff，使用renderDiff而不是renderDiffWithFullContext
     // 因为历史提交的diff可能没有完整的文件内容
     renderDiff({path:filepath, status:status||'M'}, curHunks, true /* readonly */);
@@ -17815,14 +17916,35 @@ flex-shrink:0;cursor:pointer;
     diffMode=mode;localStorage.setItem('diffMode',mode);
     document.querySelectorAll('.dtab').forEach(t => t.classList.remove('active'));
     el.classList.add('active');
-    if (curFile !== null) loadDiff(curFile);
-    else if (curLogFile !== null) loadCommitFileDiff((curLogFile.commit_hash || (curCommit && curCommit.full_hash) || ''), curLogFile.path, curLogFile.status);
+    // 添加 epoch 保护，防止在快速切换模式时的并发请求
+    const epoch = ++window.__gmLoadDiffEpoch;
+    if (curFile !== null) {
+      // 延迟执行以确保 epoch 设置生效
+      setTimeout(() => {
+        if (window.__gmLoadDiffEpoch === epoch) {
+          loadDiff(curFile);
+        }
+      }, 0);
+    } else if (curLogFile !== null) {
+      // 添加 epoch 保护，防止在快速切换模式时的并发请求
+      setTimeout(() => {
+        if (window.__gmLoadDiffEpoch === epoch) {
+          loadCommitFileDiff((curLogFile.commit_hash || (curCommit && curCommit.full_hash) || ''), curLogFile.path, curLogFile.status);
+        }
+      }, 0);
+    }
   }
 
   function expandChangeViewContext(delta = 5) {
     changeViewCtx = Math.min(200, Math.max(0, (changeViewCtx || 5) + (delta || 0)));
     if (curFile !== null) {
-      loadDiff(curFile);
+      // 添加 epoch 保护，防止在快速调整上下文时的并发请求
+      const epoch = ++window.__gmLoadDiffEpoch;
+      setTimeout(() => {
+        if (window.__gmLoadDiffEpoch === epoch) {
+          loadDiff(curFile);
+        }
+      }, 0);
     }
   }
 
@@ -19029,12 +19151,26 @@ flex-shrink:0;cursor:pointer;
       } else {
         __gmToastApiError('撤回失败', res, (res && (res.error || res.msg)) ? (res.error || res.msg) : '失败');
         // Restore diff view if revert fails
-        if (curFile !== null) await loadDiff(curFile);
+        if (curFile !== null) {
+          const epoch = ++window.__gmLoadDiffEpoch;
+          setTimeout(() => {
+            if (window.__gmLoadDiffEpoch === epoch && curFile !== null) {
+              loadDiff(curFile);
+            }
+          }, 0);
+        }
       }
     } catch (error) {
       __gmToastApiError('撤回失败', null, error.message);
       // Restore diff view if error occurs
-      if (curFile !== null) await loadDiff(curFile);
+      if (curFile !== null) {
+        const epoch = ++window.__gmLoadDiffEpoch;
+        setTimeout(() => {
+          if (window.__gmLoadDiffEpoch === epoch && curFile !== null) {
+            loadDiff(curFile);
+          }
+        }, 0);
+      }
     }
   }
 
@@ -19112,7 +19248,13 @@ flex-shrink:0;cursor:pointer;
         const stuck = dv && String(dv.textContent || '').includes('撤回中');
         if (stuck) {
           if (curFile !== null && files && curFile < files.length) {
-            await loadDiff(curFile, { showLoading: false, incremental: false });
+            // 添加 epoch 保护，防止在恢复时的并发请求
+            const epoch = ++window.__gmLoadDiffEpoch;
+            setTimeout(() => {
+              if (window.__gmLoadDiffEpoch === epoch && curFile !== null && files && curFile < files.length) {
+                loadDiff(curFile, { showLoading: false, incremental: false });
+              }
+            }, 0);
           } else {
             clearDiff();
           }
@@ -19524,7 +19666,14 @@ flex-shrink:0;cursor:pointer;
     document.querySelectorAll('.fi').forEach(el => el.classList.remove('active'));
 
     try { addToRecentFilesLog(String(curCommit.full_hash || curCommit.hash || ''), String(f.path || ''), String(f.status || 'M')); } catch (e) {}
-    await loadCommitFileDiff(curCommit.full_hash, f.path, f.status);
+    
+    // 添加 epoch 保护，防止在快速选择日志文件时的并发请求
+    const epoch = ++window.__gmLoadDiffEpoch;
+    setTimeout(() => {
+      if (window.__gmLoadDiffEpoch === epoch) {
+        loadCommitFileDiff(curCommit.full_hash, f.path, f.status);
+      }
+    }, 0);
   }
 
   function switchToLogDetail() {
@@ -21066,17 +21215,18 @@ flex-shrink:0;cursor:pointer;
   // ── Git Sync Status Indicator ───────────────────────────────────────────────
   let __gmSyncStatusInFlight = false;
   let __gmSyncStatusLastFetchAt = 0;
-  let __gmSyncStatusEpoch = 0;
-  let __gmSyncStatusFailCount = 0;
-  let __gmSyncStatusCooldownUntil = 0;
-  let __gmSyncStatusLastTryAt = 0;
+  window.__gmRealTimeRefreshEpoch = 0;
+  window.__gmSyncStatusEpoch = 0;
+  window.__gmSyncStatusReset = () => { window.__gmSyncStatusEpoch++; };
+  window.__gmLoadDiffEpoch = 0;
+  window.__gmFilesEpoch = 0;
   const __gmSyncStatusMinIntervalMs = 3000;
   try { if (typeof window.__gmRepoValid !== 'boolean') window.__gmRepoValid = false; } catch (e) {}
 
   window.__gmSyncStatusReset = () => {
     __gmSyncStatusInFlight = false;
     __gmSyncStatusLastFetchAt = 0;
-    __gmSyncStatusEpoch = (__gmSyncStatusEpoch || 0) + 1;
+    window.__gmSyncStatusEpoch++;
     __gmSyncStatusFailCount = 0;
     __gmSyncStatusCooldownUntil = 0;
     __gmSyncStatusLastTryAt = 0;
@@ -21087,7 +21237,7 @@ flex-shrink:0;cursor:pointer;
       const ind = document.getElementById('syncIndicator');
       if (!ind) return;
 
-      const epoch = __gmSyncStatusEpoch || 0;
+      const epoch = window.__gmSyncStatusEpoch || 0;
 
       const now0 = Date.now();
       if (__gmSyncStatusCooldownUntil && now0 < __gmSyncStatusCooldownUntil) return;
@@ -21120,7 +21270,7 @@ flex-shrink:0;cursor:pointer;
       const res = await __gmGETCancelable('sync_status', p);
       if (allowFetch) __gmSyncStatusLastFetchAt = now;
 
-      if ((__gmSyncStatusEpoch || 0) !== epoch) return;
+      if ((window.__gmSyncStatusEpoch || 0) !== epoch) return;
 
       if (!res || res.error || res.ok === false) {
         ind.style.display = 'none';
