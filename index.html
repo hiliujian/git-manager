@@ -524,12 +524,12 @@
     .branch-tag{display:flex;align-items:center;gap:4px;background:var(--bg4);
       border:1px solid var(--border2);border-radius:20px;padding:2px 10px;
       font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--accent2);cursor:default;}
-    .sync-ind{display:inline-flex;align-items:center;gap:6px;
+    .sync-ind{display:inline-flex;align-items:center;gap:8px;margin-left:8px;
       font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--text2);
-      background:transparent;border:1px solid transparent;border-radius:20px;
-      padding:2px 10px;cursor:default;box-sizing:border-box;min-height:20px;}
+      background:var(--bg4);border:1px solid var(--border2);border-radius:20px;
+      cursor:default;box-sizing:border-box;min-height:20px;}
     .sync-ind .sync-arrow{display:inline-flex;align-items:center;gap:2px;
-      padding:0 6px;border-radius:999px;border:1px solid var(--border2);
+      padding:0 6px;border-radius:999px;border:1px solid transparent;
       background:var(--bg4);color:var(--text2);cursor:pointer;user-select:none;
       height:16px;line-height:16px;box-sizing:border-box;
       -webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;}
@@ -2289,7 +2289,7 @@ flex-shrink:0;cursor:pointer;
     <div class="ph">
       <span class="ph-title">变更</span>
       <span class="badge" id="fileCount" title="筛选变更文件" data-action="toggleFileFilter">0</span>
-      <button class="icon-btn" title="刷新" data-action="refresh">
+      <button class="icon-btn" id="fileListRefreshBtn" title="刷新" data-action="refresh">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
           <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/>
         </svg>
@@ -10045,9 +10045,9 @@ flex-shrink:0;cursor:pointer;
   // Key: file path, Value: {added, removed, modified}
   let fileStatsOverrideByPath = new Map();
 
-  let refreshBusy = false;
-  let lastBranchesRes = null;
+    let lastBranchesRes = null;
   let branchMenuQuery = '';
+  let __gmRefreshEpoch = 0;
 
   let __gmAiConfigLoadedOnce = false;
   let __gmAiPanel = 'chat';
@@ -12936,6 +12936,38 @@ flex-shrink:0;cursor:pointer;
     }
   };
 
+  const __gmAbortControllersByKey = new Map();
+  function __gmAbortGroup(key) {
+    try {
+      const k = String(key || '');
+      if (!k) return;
+      const c = __gmAbortControllersByKey.get(k);
+      if (c) {
+        try { c.abort(); } catch (e) {}
+        __gmAbortControllersByKey.delete(k);
+      }
+    } catch (e) {}
+  }
+
+  async function __gmApiCancelable(key, path, opts={}) {
+    try {
+      const k = String(key || '');
+      if (!k) return api(path, opts);
+      __gmAbortGroup(k);
+      const ac = new AbortController();
+      __gmAbortControllersByKey.set(k, ac);
+      const o2 = Object.assign({}, (opts || {}), { signal: ac.signal });
+      const res = await api(path, o2);
+      try {
+        const cur = __gmAbortControllersByKey.get(k);
+        if (cur === ac) __gmAbortControllersByKey.delete(k);
+      } catch (e) {}
+      return res;
+    } catch (e) {
+      return { ok: false, data: null, error: '请求失败' };
+    }
+  }
+
   async function api(path, opts={}){
     const reqId = __gmGenReqId();
     try{
@@ -12992,6 +13024,11 @@ flex-shrink:0;cursor:pointer;
     return api(p + sep + '_ts=' + Date.now());
   };
   const POST = (p,b,opts={})=> api(p, Object.assign({method:'POST', body: JSON.stringify(b)}, (opts || {})));
+
+  const __gmGETCancelable = (key, p) => {
+    const sep = p.includes('?') ? '&' : '?';
+    return __gmApiCancelable(key, p + sep + '_ts=' + Date.now());
+  };
 
   let __gmAiUndoHistoryEl = null;
   let __gmAiUndoHistoryReqSeq = 0;
@@ -13183,6 +13220,47 @@ flex-shrink:0;cursor:pointer;
     await refresh();
   }
 
+  function goToOpener() {
+    try {
+      if (typeof __gmResetRepoScopedState === 'function') __gmResetRepoScopedState();
+    } catch (e) {}
+    try {
+      __gmAbortGroup('files');
+      __gmAbortGroup('log');
+      __gmAbortGroup('branches');
+      __gmAbortGroup('status');
+      __gmAbortGroup('sync_status');
+    } catch (e) {}
+    try {
+      if (typeof window.__gmSyncStatusReset === 'function') window.__gmSyncStatusReset();
+    } catch (e) {}
+    try {
+      const ind = document.getElementById('syncIndicator');
+      if (ind) {
+        ind.style.display = 'none';
+        ind.innerHTML = '';
+        ind.removeAttribute('data-tip');
+      }
+    } catch (e) {}
+    try {
+      const err = document.getElementById('openErr');
+      if (err) err.textContent = '';
+    } catch (e) {}
+    try {
+      document.getElementById('app').style.display = 'none';
+      document.getElementById('opener').style.display = 'flex';
+      document.getElementById('branchTag').style.display = 'none';
+      document.getElementById('repoLabel').textContent = '';
+    } catch (e) {}
+    try {
+      ['stagedBtn','pullBtn','refreshBtn','changeBtn'].forEach(id => {
+        const b = document.getElementById(id);
+        if (b) b.style.display = 'none';
+      });
+    } catch (e) {}
+    try { window.__gmRepoValid = false; } catch (e) {}
+  }
+
   function showApp(repo, branch) {
     document.getElementById('opener').style.display = 'none';
     const app = document.getElementById('app');
@@ -13190,7 +13268,22 @@ flex-shrink:0;cursor:pointer;
     app.style.flex    = '1';
     try { window.__gmRepoValid = true; } catch (e) {}
     try {
+      __gmAbortGroup('files');
+      __gmAbortGroup('log');
+      __gmAbortGroup('branches');
+      __gmAbortGroup('status');
+      __gmAbortGroup('sync_status');
+    } catch (e) {}
+    try {
       if (typeof window.__gmSyncStatusReset === 'function') window.__gmSyncStatusReset();
+    } catch (e) {}
+    try {
+      const ind = document.getElementById('syncIndicator');
+      if (ind) {
+        ind.style.display = 'none';
+        ind.innerHTML = '';
+        ind.removeAttribute('data-tip');
+      }
     } catch (e) {}
     try {
       setTimeout(() => {
@@ -13238,6 +13331,21 @@ flex-shrink:0;cursor:pointer;
   function __gmResetRepoScopedState() {
     try { closeFindBar(); } catch (e) {}
     try { clearFindHighlights(); } catch (e) {}
+
+    // 关闭WebSocket连接
+    try {
+      if (ws) {
+        ws.close();
+        ws = null;
+      }
+      if (wsReconnectTimer) {
+        clearTimeout(wsReconnectTimer);
+        wsReconnectTimer = null;
+      }
+    } catch (e) {}
+
+    // Stop real-time refresh
+    try { stopRealTimeRefresh(); } catch (e) {}
 
     try {
       findQuery = '';
@@ -13331,34 +13439,6 @@ flex-shrink:0;cursor:pointer;
     } catch (e) {}
 
     try { clearDiff(); } catch (e) {}
-    try { renderFileList(); } catch (e) {}
-    try { updateStats(); } catch (e) {}
-  }
-
-  function goToOpener() {
-    try { __gmResetRepoScopedState(); } catch (e) {}
-    document.getElementById('opener').style.display    = 'flex';
-    document.getElementById('app').style.display       = 'none';
-    document.getElementById('branchTag').style.display = 'none';
-    document.getElementById('repoLabel').textContent   = '';
-    ['stagedBtn','pullBtn','refreshBtn','changeBtn'].forEach(id =>
-            document.getElementById(id).style.display = 'none');
-
-    try { localStorage.removeItem('lastRepoPath'); } catch (e) {}
-
-    // 关闭WebSocket连接
-    if (ws) {
-      ws.close();
-      ws = null;
-    }
-    if (wsReconnectTimer) {
-      clearTimeout(wsReconnectTimer);
-      wsReconnectTimer = null;
-    }
-
-    // Stop real-time refresh
-    stopRealTimeRefresh();
-    try { window.__gmRepoValid = false; } catch (e) {}
   }
 
   async function tryAutoOpenRepoOnLoad() {
@@ -13411,18 +13491,21 @@ flex-shrink:0;cursor:pointer;
 
   // ── Refresh ───────────────────────────────────────────────────────────────────
   async function refresh() {
-    if (refreshBusy) return;
-    refreshBusy = true;
+    const epoch = ++__gmRefreshEpoch;
     const btn = document.getElementById('refreshBtn');
+    const fileListBtn = document.getElementById('fileListRefreshBtn');
     btn.style.opacity = '.5';
     btn.style.pointerEvents = 'none';
+    try { setButtonBusy(fileListBtn, true, '<span class="spin"></span>'); } catch (e) {}
 
     const [fRes, lRes, bRes, stRes] = await Promise.all([
-      GET('/api/files'),
-      GET('/api/log'),
-      GET('/api/branches'),
-      GET('/api/status'),
+      __gmGETCancelable('files', '/api/files'),
+      __gmGETCancelable('log', '/api/log'),
+      __gmGETCancelable('branches', '/api/branches'),
+      __gmGETCancelable('status', '/api/status'),
     ]);
+
+    if (__gmRefreshEpoch !== epoch) return;
 
     try { window.__gmRepoValid = !!(stRes && stRes.valid && stRes.repo); } catch (e) {}
 
@@ -13430,7 +13513,7 @@ flex-shrink:0;cursor:pointer;
       __gmToastApiError('刷新失败', fRes, fRes.error);
       btn.style.opacity='';
       btn.style.pointerEvents='';
-      refreshBusy = false;
+      try { setButtonBusy(fileListBtn, false); } catch (e) {}
       return;
     }
 
@@ -13494,9 +13577,13 @@ flex-shrink:0;cursor:pointer;
     // 清空所有行级和块级勾选状态（刷新后重置）
     clearAllCheckboxStates();
 
+    if (__gmRefreshEpoch !== epoch) return;
+
     renderFileList();
     renderLogList();
     updateStats();
+
+    if (__gmRefreshEpoch !== epoch) return;
 
     // 刷新当前 diff（普通编辑器模式下不触碰 diffView，避免闪烁/隐式滚动）
     const __gmPlainActive = (() => {
@@ -13513,11 +13600,15 @@ flex-shrink:0;cursor:pointer;
       }
     }
 
+    if (__gmRefreshEpoch !== epoch) return;
+
     try { refreshSyncStatus(false); } catch (e) {}
+
+    if (__gmRefreshEpoch !== epoch) return;
 
     btn.style.opacity = '';
     btn.style.pointerEvents = '';
-    refreshBusy = false;
+    try { setButtonBusy(fileListBtn, false); } catch (e) {}
   }
 
   async function pullUpdate() {
@@ -14006,7 +14097,8 @@ flex-shrink:0;cursor:pointer;
   }
 
   async function refreshFilesOnly(forceDiffReload=false, reloadDiff=true) {
-    const fRes = await GET('/api/files');
+    try { if (!window.__gmRepoValid) return; } catch (e) {}
+    const fRes = await __gmGETCancelable('files', '/api/files');
     if (fRes.error) {
       try {
         const msg = String((fRes && (fRes.error || fRes.msg || fRes.message)) || '').trim();
@@ -14114,8 +14206,11 @@ flex-shrink:0;cursor:pointer;
 
   // ── Real-time refresh ─────────────────────────────────────────────────────────
   let refreshTimer = null;
+  let __gmRealTimeRefreshEpoch = 0;
 
   function startRealTimeRefresh() {
+    __gmRealTimeRefreshEpoch = (__gmRealTimeRefreshEpoch || 0) + 1;
+    const epoch = __gmRealTimeRefreshEpoch;
     if (refreshTimer) {
       clearTimeout(refreshTimer);
       refreshTimer = null;
@@ -14134,19 +14229,23 @@ flex-shrink:0;cursor:pointer;
     const tick = async () => {
       try {
         refreshTimer = null;
+        if ((__gmRealTimeRefreshEpoch || 0) !== epoch) return;
         if (document.hidden) {
           refreshTimer = setTimeout(tick, getDelayMs());
           return;
         }
-        if (!wsConnected) {
-          await refreshFilesOnly(false, true);
-        }
+        try {
+          if (window.__gmRepoValid && !wsConnected) {
+            await refreshFilesOnly(false, true);
+          }
+        } catch (e) {}
 
         try {
           if (window.__gmRepoValid) refreshSyncStatus(false);
         } catch (e) {}
       } catch (e) {
       } finally {
+        if ((__gmRealTimeRefreshEpoch || 0) !== epoch) return;
         refreshTimer = setTimeout(tick, getDelayMs());
       }
     };
@@ -14155,6 +14254,7 @@ flex-shrink:0;cursor:pointer;
   }
 
   function stopRealTimeRefresh() {
+    __gmRealTimeRefreshEpoch = (__gmRealTimeRefreshEpoch || 0) + 1;
     if (refreshTimer) {
       clearTimeout(refreshTimer);
       refreshTimer = null;
@@ -20966,6 +21066,7 @@ flex-shrink:0;cursor:pointer;
   // ── Git Sync Status Indicator ───────────────────────────────────────────────
   let __gmSyncStatusInFlight = false;
   let __gmSyncStatusLastFetchAt = 0;
+  let __gmSyncStatusEpoch = 0;
   let __gmSyncStatusFailCount = 0;
   let __gmSyncStatusCooldownUntil = 0;
   let __gmSyncStatusLastTryAt = 0;
@@ -20974,6 +21075,8 @@ flex-shrink:0;cursor:pointer;
 
   window.__gmSyncStatusReset = () => {
     __gmSyncStatusInFlight = false;
+    __gmSyncStatusLastFetchAt = 0;
+    __gmSyncStatusEpoch = (__gmSyncStatusEpoch || 0) + 1;
     __gmSyncStatusFailCount = 0;
     __gmSyncStatusCooldownUntil = 0;
     __gmSyncStatusLastTryAt = 0;
@@ -20983,6 +21086,8 @@ flex-shrink:0;cursor:pointer;
     try {
       const ind = document.getElementById('syncIndicator');
       if (!ind) return;
+
+      const epoch = __gmSyncStatusEpoch || 0;
 
       const now0 = Date.now();
       if (__gmSyncStatusCooldownUntil && now0 < __gmSyncStatusCooldownUntil) return;
@@ -21011,8 +21116,11 @@ flex-shrink:0;cursor:pointer;
       const allowFetch = doFetch && (!__gmSyncStatusLastFetchAt || (now - __gmSyncStatusLastFetchAt) > 60000);
 
       __gmSyncStatusInFlight = true;
-      const res = await GET(`/api/sync_status?fetch=${allowFetch ? '1' : '0'}`);
+      const p = `/api/sync_status?fetch=${allowFetch ? '1' : '0'}`;
+      const res = await __gmGETCancelable('sync_status', p);
       if (allowFetch) __gmSyncStatusLastFetchAt = now;
+
+      if ((__gmSyncStatusEpoch || 0) !== epoch) return;
 
       if (!res || res.error || res.ok === false) {
         ind.style.display = 'none';
