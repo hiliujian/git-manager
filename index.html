@@ -9638,8 +9638,7 @@ flex-shrink:0;cursor:pointer;
       }
       if (res.ws_port) {
         WS_URL = `ws://localhost:${res.ws_port}`;
-        console.log('WebSocket端口已更新:', WS_URL);
-      }
+        }
       // 更新仓库远程地址展示
       if (res && res.origin_url) {
         updateOriginLabel(res.origin_url);
@@ -9714,7 +9713,6 @@ flex-shrink:0;cursor:pointer;
       } catch (eT0) {}
 
       ws.onopen = () => {
-        console.log('WebSocket 连接成功');
         wsConnected = true;
         wsConnecting = false;
         try { if (openTimer) { clearTimeout(openTimer); openTimer = null; } } catch (eT1) {}
@@ -9739,7 +9737,6 @@ flex-shrink:0;cursor:pointer;
       };
 
       ws.onclose = () => {
-        console.log('WebSocket 连接关闭');
         wsConnected = false;
         wsConnecting = false;
         try { if (openTimer) { clearTimeout(openTimer); openTimer = null; } } catch (eT2) {}
@@ -9775,11 +9772,9 @@ flex-shrink:0;cursor:pointer;
   }
 
   function handleWebSocketMessage(data) {
-    console.log('收到 WebSocket 消息:', data.type);
 
     switch (data.type) {
       case 'connected':
-        console.log('WebSocket 连接确认:', data.message);
         break;
 
       case 'files_updated':
@@ -9953,7 +9948,6 @@ flex-shrink:0;cursor:pointer;
   }
 
   async function handleFilesUpdate(newFiles) {
-    console.log('检测到文件变化，更新列表');
 
     // 添加 epoch 保护，防止在切换仓库时的并发请求
     const epoch = ++window.__gmFilesEpoch;
@@ -10018,9 +10012,7 @@ flex-shrink:0;cursor:pointer;
           if (shouldAutoRefreshDiff) {
             if (skipNextAutoDiffRefresh) {
               skipNextAutoDiffRefresh = false;
-              console.log('跳过一次自动刷新diff（本地已主动更新）');
             } else {
-              console.log('自动刷新当前文件的diff');
               // 添加 epoch 保护，防止在快速刷新时的并发请求
               if (window.__gmFilesEpoch === epoch) {
                 const diffEpoch = ++window.__gmLoadDiffEpoch;
@@ -13053,10 +13045,10 @@ flex-shrink:0;cursor:pointer;
       const snippet = String(rawText || '').trim().slice(0, 320);
       return { ok: false, data: null, error: snippet ? (`响应不是JSON: ${snippet}`) : '响应不是JSON', req_id: reqId || null };
     }catch(e){
-      console.error(e);
       if (__gmIsAbortError(e)) {
         return { ok: false, aborted: true, data: null, error: 'aborted', req_id: reqId || null };
       }
+      console.error(e);
       return { ok: false, data: null, error: '连接失败，请确认 server.py 正在运行', req_id: reqId || null };
     }
   }
@@ -13070,6 +13062,10 @@ flex-shrink:0;cursor:pointer;
   const __gmGETCancelable = (key, p) => {
     const sep = p.includes('?') ? '&' : '?';
     return __gmApiCancelable(key, p + sep + '_ts=' + Date.now());
+  };
+
+  const __gmPOSTCancelable = (key, p, body, opts = {}) => {
+    return __gmApiCancelable(key, p, Object.assign({method:'POST', body: JSON.stringify(body)}, (opts || {})));
   };
 
   let __gmAiUndoHistoryEl = null;
@@ -15281,22 +15277,18 @@ flex-shrink:0;cursor:pointer;
     }
 
     // Load diff hunks
-    console.log('loadDiff: loading diff hunks');
     try {
       if (window.__gmLoadDiffEpoch !== epoch) return;
       const ctxParam = (diffMode === 'unified') ? `&ctx=${encodeURIComponent(changeViewCtx)}` : '';
       const res = await __gmGETCancelable('diff', `/api/diff?path=${encodeURIComponent(f.path)}&status=${f.status}${ctxParam}`);
       if (window.__gmLoadDiffEpoch !== epoch) return;
-      console.log('loadDiff: diff response:', res);
       if (res.error) {
         __gmToastApiError('加载差异失败', res, res.error);
-        console.log('loadDiff: diff error:', res.error);
         document.getElementById('diffView').innerHTML = '<div class="empty-state"><p style="color:var(--text2)">加载失败: ' + res.error + '</p></div>';
         return;
       }
       const nextHunks = res.hunks || [];
       curHunks = nextHunks;
-      console.log('loadDiff: loaded', curHunks.length, 'hunks');
       // 按块提交：默认全选当前文件的所有 hunk
       ensureDefaultHunkSelection(f.path, curHunks.length);
 
@@ -15333,7 +15325,6 @@ flex-shrink:0;cursor:pointer;
     }
 
     // Load the full file content
-    console.log('loadDiff: loading file content for:', f.path, 'status:', f.status);
     if (window.__gmLoadDiffEpoch !== epoch) return;
     if (f.status === 'D') {
       curFileContent = null;
@@ -15342,17 +15333,14 @@ flex-shrink:0;cursor:pointer;
       try {
         const contentRes = await __gmPOSTCancelable('file_content', '/api/file_content', { path: f.path });
         if (window.__gmLoadDiffEpoch !== epoch) return;
-        console.log('loadDiff: content response:', contentRes);
 
         if (contentRes.ok && contentRes.content !== null && contentRes.content !== undefined) {
           curFileContent = contentRes.content;
           curFileEncoding = contentRes.encoding || 'utf-8';
-          console.log('loadDiff: file content loaded, length:', curFileContent.length, 'encoding:', curFileEncoding);
         } else {
           console.warn('loadDiff: failed to load file content:', contentRes);
           curFileContent = '';
           curFileEncoding = 'utf-8';
-          console.log('loadDiff: setting empty content as fallback');
         }
       } catch (error) {
         if (__gmIsAbortError(error)) return;
@@ -15398,7 +15386,6 @@ flex-shrink:0;cursor:pointer;
 
     // Render based on current view mode
     if (window.__gmLoadDiffEpoch !== epoch) return;
-    console.log('loadDiff: rendering diff, diffMode:', diffMode);
     // Always use renderDiffWithFullContext to show full file content
     const revertBtnEl = document.getElementById('revertFileBtn');
     revertBtnEl.style.display = 'flex';
@@ -15419,7 +15406,6 @@ flex-shrink:0;cursor:pointer;
     } catch (e) {}
     // 保持原先体验：不显示"保存"按钮，保存走自动保存/快捷键。
     document.getElementById('saveFileBtn').style.display = 'none';
-    console.log('loadDiff: rendering full file view with diff context');
     let didPatch = false;
     if (options.incremental && viewEl && prevContent !== null && prevContent !== undefined) {
       try {
@@ -15446,7 +15432,6 @@ flex-shrink:0;cursor:pointer;
       } catch (e) {}
     }
     try { __gmUpdateUndoRevertButton(); } catch (e) {}
-    console.log('loadDiff: completed');
   }
 
   function getSelectedCommitHunksSet(filepath) {
@@ -16006,7 +15991,6 @@ flex-shrink:0;cursor:pointer;
   }
 
   function renderDiffWithFullContext(file, hunks, readonly, changeLocations = []) {
-    if (DEBUG_MODE) console.log('renderDiffWithFullContext called with file:', file.path, 'hunks:', hunks.length);
     const view = document.getElementById('diffView');
 
     const __gmRenderToken = (() => {
@@ -16026,7 +16010,14 @@ flex-shrink:0;cursor:pointer;
     const __gmAppendPartsProgressively = (el, parts, chunkSize, done) => {
       let i = 0;
       const step = () => {
+        // 检查 render token 和 epoch，防止过期请求继续渲染
         if (!__gmRenderTokenAlive()) return;
+        const currentEpoch = window.__gmLoadDiffEpoch || 0;
+        if (el.__gmRenderEpoch && el.__gmRenderEpoch !== currentEpoch) {
+          console.log('__gmAppendPartsProgressively: epoch mismatch, stopping');
+          return;
+        }
+        
         const end = Math.min(i + chunkSize, parts.length);
         if (end > i) {
           try { el.insertAdjacentHTML('beforeend', parts.slice(i, end).join('')); } catch (e) {}
@@ -16069,7 +16060,6 @@ flex-shrink:0;cursor:pointer;
 
     // If no file content and no hunks, show empty state
     if ((!curFileContent || curFileContent === '') && (!hunks || hunks.length === 0)) {
-      if (DEBUG_MODE) console.log('renderDiffWithFullContext: no content and no hunks, showing empty state');
       view.innerHTML = '<div class="empty-state"><p style="color:var(--text2)">无差异内容</p></div>';
       return;
     }
@@ -16077,32 +16067,82 @@ flex-shrink:0;cursor:pointer;
     // If we have hunks but no file content, try to reconstruct from hunks
     let workingContent = curFileContent;
     if (!workingContent || workingContent === '') {
-      console.log('No file content, reconstructing from hunks...');
       // Build content from hunks (for new files or when content loading fails)
       const lines = [];
+      let maxLineNum = 0;
+      
+      // First pass: collect all line numbers to determine file size
       hunks.forEach(hunk => {
         hunk.lines.forEach(line => {
-          if (line.type === 'context' || line.type === 'added' || line.type === 'modified') {
-            lines.push(line.text);
+          // Check both new_line_number and new_num for compatibility
+          const newLineNum = line.new_line_number || line.new_num || line.num;
+          if (newLineNum && newLineNum > maxLineNum) {
+            maxLineNum = newLineNum;
           }
         });
       });
+      
+      // Second pass: build complete file content with proper line numbers
+      for (let i = 1; i <= maxLineNum; i++) {
+        lines.push(''); // Initialize with empty lines
+      }
+      
+      // Fill in actual content from hunks
+      hunks.forEach(hunk => {
+        hunk.lines.forEach(line => {
+          // Check both new_line_number and new_num for compatibility
+          const newLineNum = line.new_line_number || line.new_num || line.num;
+          if (newLineNum && line.text !== undefined) {
+            lines[newLineNum - 1] = line.text;
+          }
+        });
+      });
+      
       workingContent = lines.join('\n');
-      if (DEBUG_MODE) console.log('Reconstructed content length:', workingContent.length);
     }
 
     // Base content (HEAD) for split left column.
     // IMPORTANT: For deleted (D) files we must keep HEAD content; don't fall back to workingContent,
-    // otherwise the single-column "original-only" view may degrade to diff-reconstruction and show placeholders.
+    // otherwise, single-column "original-only" view may degrade to diff-reconstruction and show placeholders.
     let baseWorkingContent = baseFileContent;
     if (status !== 'D' && (baseWorkingContent === null || baseWorkingContent === undefined || baseWorkingContent === '')) {
-      baseWorkingContent = workingContent;
+      // Build base content from hunks for left column
+      const lines = [];
+      let maxLineNum = 0;
+      
+      // First pass: collect all line numbers to determine file size
+      hunks.forEach(hunk => {
+        hunk.lines.forEach(line => {
+          // Check both old_line_number and old_num for compatibility
+          const oldLineNum = line.old_line_number || line.old_num;
+          if (oldLineNum && oldLineNum > maxLineNum) {
+            maxLineNum = oldLineNum;
+          }
+        });
+      });
+      
+      // Second pass: build complete file content with proper line numbers
+      for (let i = 1; i <= maxLineNum; i++) {
+        lines.push(''); // Initialize with empty lines
+      }
+      
+      // Fill in actual content from hunks
+      hunks.forEach(hunk => {
+        hunk.lines.forEach(line => {
+          // Check both old_line_number and old_num for compatibility
+          const oldLineNum = line.old_line_number || line.old_num;
+          if (oldLineNum && line.text !== undefined) {
+            lines[oldLineNum - 1] = line.text;
+          }
+        });
+      });
+      
+      baseWorkingContent = lines.join('\n');
     }
 
     let __gmWorkingLineCount = 0;
     try { __gmWorkingLineCount = String(workingContent || '').split('\n').length; } catch (e) { __gmWorkingLineCount = 0; }
-    if (DEBUG_MODE) console.log('Rendering diff with', __gmWorkingLineCount, 'lines');
-    try {
+        try {
       const heavy = (__gmWorkingLineCount >= 5000);
       view.dataset.gmHeavyDiff = heavy ? '1' : '0';
       view.dataset.gmLineCount = String(__gmWorkingLineCount);
@@ -16184,12 +16224,17 @@ flex-shrink:0;cursor:pointer;
       const baseLines = String(__nn(baseWorkingContent, '')).split('\n');
       const curLines = String(__nn(workingContent, '')).split('\n');
 
+      
       let oldPtr = 1;
       let newPtr = 1;
 
       const pushContext = () => {
-        const oldText = __nn(baseLines[oldPtr - 1], '');
-        const newText = __nn(curLines[newPtr - 1], '');
+        const oldTextRaw = baseLines[oldPtr - 1];
+        const newTextRaw = curLines[newPtr - 1];
+        const oldText = __nn(oldTextRaw, '');
+        const newText = __nn(newTextRaw, '');
+        
+                
         leftLines.push({type:'context', num:oldPtr, text:oldText});
         rightLines.push({type:'context', num:newPtr, text:newText});
         oldPtr++;
@@ -16266,6 +16311,7 @@ flex-shrink:0;cursor:pointer;
 
       // Split view needs strict row alignment. Build left/right columns together.
       function buildSplitAlignedHtml(leftLines, rightLines, file, readonly) {
+        
         const fpEsc = escJsString(file.path);
         const leftParts = [];
         const rightParts = [];
@@ -16315,7 +16361,8 @@ flex-shrink:0;cursor:pointer;
               ? ' class="lc"' 
               : ' class="lc" contenteditable="false"');
 
-          let cellText = (line.type === 'empty') ? '' : (line.type !== 'empty' ? esc(line.text) : '');
+          let cellText = (line.type === 'empty') ? '' : esc(line.text || '');
+          
           if (!canEdit && line.type === 'modified') {
             const oldT = __nn(line.oldText, __nn(line.text, ''));
             const newT = __nn(line.newText, __nn(line.text, ''));
@@ -16446,6 +16493,12 @@ flex-shrink:0;cursor:pointer;
 
       const leftEl = document.getElementById('__gmSplitLeft');
       const rightEl = document.getElementById('__gmSplitRight');
+      const currentEpoch = window.__gmLoadDiffEpoch || 0;
+      
+      // 设置 epoch 到左右两侧元素，确保渐进式渲染时 epoch 检查正常工作
+      if (leftEl) leftEl.__gmRenderEpoch = currentEpoch;
+      if (rightEl) rightEl.__gmRenderEpoch = currentEpoch;
+      
       const CHUNK = 300;
       let leftDone = false;
       let rightDone = false;
@@ -17520,12 +17573,20 @@ flex-shrink:0;cursor:pointer;
     const container = document.getElementById('virtualDiff');
     if (!container) return;
 
+    // 检查 epoch，防止过期请求渲染 UI
+    const currentEpoch = window.__gmLoadDiffEpoch || 0;
+    if (container.__gmVdEpoch && container.__gmVdEpoch !== currentEpoch) {
+      console.log('renderVirtualDiff: epoch mismatch, skipping render');
+      return;
+    }
+
     try {
       container.__gmVdFile = file;
       container.__gmVdHunks = hunks;
       container.__gmVdReadonly = !!readonly;
       container.__gmVdStartLine = startLine;
       container.__gmVdEndLine = endLine;
+      container.__gmVdEpoch = currentEpoch;
     } catch (e) {}
 
     let currentLine = 0;
@@ -17585,6 +17646,13 @@ flex-shrink:0;cursor:pointer;
     // Add scroll event listener for lazy loading
     const diffContainer = container.parentElement;
     diffContainer.addEventListener('scroll', function() {
+      // 检查 epoch，防止过期请求继续渲染
+      const currentEpoch = window.__gmLoadDiffEpoch || 0;
+      if (container.__gmVdEpoch && container.__gmVdEpoch !== currentEpoch) {
+        console.log('renderVirtualDiff scroll: epoch mismatch, skipping');
+        return;
+      }
+      
       const { scrollTop, scrollHeight, clientHeight } = this;
       // When scrolled to within 200px of the bottom, load more lines
       if (scrollHeight - scrollTop - clientHeight < 200) {

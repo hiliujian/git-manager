@@ -147,8 +147,8 @@ def open_repo(path: str):
     REPO_PATH = root
     try:
         _undo_load_state()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Exception ignored: {e}")
     return True, ""
 
 
@@ -261,8 +261,8 @@ def _idempotency_get(key: str):
         if (now - ts) > _IDEMPOTENCY_TTL_SEC:
             try:
                 del _idempotency_cache[k]
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Exception ignored: {e}")
             return None
         return ent
 
@@ -284,16 +284,16 @@ def _idempotency_set(key: str, payload: dict, code: int = 200):
             for kk in expired:
                 try:
                     del _idempotency_cache[kk]
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Exception ignored: {e}")
             # still too large: drop oldest
             if len(_idempotency_cache) > _IDEMPOTENCY_MAX:
                 items = sorted(_idempotency_cache.items(), key=lambda x: float((x[1] or {}).get("ts") or 0.0))
                 for kk, _vv in items[: max(0, len(_idempotency_cache) - _IDEMPOTENCY_MAX)]:
                     try:
                         del _idempotency_cache[kk]
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Exception ignored: {e}")
 
 
 def _undo_capture_file_snapshot(rel_path: str):
@@ -427,8 +427,8 @@ def _undo_finalize_cmd_snapshots(undo_gid: str, pre_map: dict, pre_snaps: dict):
             snap_h = _undo_capture_head_file_snapshot(rp)
             if snap_h is not None:
                 _undo_record(gid, {"type": "file_snapshot", "op": "delete", "snapshot": snap_h})
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Exception ignored: {e}")
 
     keys = set((pre_map or {}).keys()) | set((post_map or {}).keys())
     for rp in keys:
@@ -459,8 +459,8 @@ def _undo_record(group_id: str, entry: dict):
     try:
         if "ts" not in entry:
             entry["ts"] = time.time()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Exception ignored: {e}")
     with undo_lock:
         _undo_groups.setdefault(gid, []).append(entry)
         if gid not in _undo_group_order:
@@ -468,12 +468,12 @@ def _undo_record(group_id: str, entry: dict):
             try:
                 tp = str(entry.get("type") or "")
                 logger.warning(f"undo_steps+1 (group_id={gid}, first_type={tp}, undo_steps={len(_undo_group_order)})")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Exception ignored: {e}")
     try:
         _undo_save_state()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Exception ignored: {e}")
 
 
 def _hivo_agent_mark_started(run_id: str, session_id: str):
@@ -486,8 +486,8 @@ def _hivo_agent_mark_started(run_id: str, session_id: str):
             _hivo_agent_run_state[rid] = {"session_id": sid, "started_at": time.time(), "cancel": False, "done": False}
             if sid:
                 _hivo_agent_session_active[sid] = rid
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Exception ignored: {e}")
 
 
 def _hivo_agent_mark_done(run_id: str):
@@ -505,8 +505,8 @@ def _hivo_agent_mark_done(run_id: str):
                 sid = ""
             if sid and _hivo_agent_session_active.get(sid) == rid:
                 _hivo_agent_session_active.pop(sid, None)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Exception ignored: {e}")
 
 
 def _hivo_agent_is_cancelled(run_id: str) -> bool:
@@ -538,10 +538,10 @@ def _hivo_agent_request_cancel(run_id: str) -> bool:
             if proc is not None:
                 try:
                     proc.terminate()
-                except Exception:
-                    pass
-        except Exception:
-            pass
+                except Exception as e:
+                    logger.debug(f"Exception ignored: {e}")
+        except Exception as e:
+            logger.debug(f"Exception ignored: {e}")
         return True
     except Exception:
         return False
@@ -553,8 +553,8 @@ def _hivo_agent_clear_proc(run_id: str):
         if not rid:
             return
         _hivo_agent_run_proc.pop(rid, None)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Exception ignored: {e}")
 
 
 def _undo_pop_latest_group():
@@ -568,8 +568,8 @@ def _undo_pop_latest_group():
             gid, actions = "", []
     try:
         _undo_save_state()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Exception ignored: {e}")
     return gid, actions
 
 
@@ -591,14 +591,14 @@ def _undo_pop_latest_group_for_session(session_id: str):
             except Exception:
                 try:
                     _undo_group_order[:] = [x for x in _undo_group_order if str(x) != gid]
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Exception ignored: {e}")
             actions = _undo_groups.pop(gid, None)
             break
     try:
         _undo_save_state()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Exception ignored: {e}")
     if not isinstance(actions, list):
         actions = []
     return gid, actions
@@ -612,12 +612,12 @@ def _undo_pop_group_by_id(group_id: str):
         actions = _undo_groups.pop(gid, None)
         try:
             _undo_group_order[:] = [x for x in _undo_group_order if str(x) != gid]
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Exception ignored: {e}")
     try:
         _undo_save_state()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Exception ignored: {e}")
     if not isinstance(actions, list):
         actions = []
     return gid, actions
@@ -653,19 +653,19 @@ def _undo_clear_for_session(session_id: str):
             return 0
         try:
             _undo_group_order[:] = [g for g in _undo_group_order if not str(g).startswith(prefix)]
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Exception ignored: {e}")
         for gid in gids:
             if gid in _undo_groups:
                 try:
                     del _undo_groups[gid]
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Exception ignored: {e}")
             removed += 1
     try:
         _undo_save_state()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Exception ignored: {e}")
     return removed
 
 
@@ -704,8 +704,8 @@ def _undo_apply_actions(actions: list):
     try:
         invalidate_changed_files_cache()
         notify_files_updated()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Exception ignored: {e}")
     return True, ""
 
 
@@ -713,8 +713,8 @@ def invalidate_changed_files_cache():
     try:
         _changed_files_cache["ts"] = 0.0
         _changed_files_cache["files"] = None
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Exception ignored: {e}")
 
 
 def notify_files_updated():
@@ -729,8 +729,8 @@ def notify_files_updated():
             'type': 'files_updated',
             'files': files
         })
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Exception ignored: {e}")
 
 # 最近一次读取文件的编码/是否发生 lossy(replace) 解码。
 # 说明：为保持前端显示体验，读取时可能用 errors="replace"。
@@ -787,8 +787,8 @@ def _hivo_load_cfg():
                 if isinstance(data, dict):
                     _hivo_cfg_cache.clear()
                     _hivo_cfg_cache.update(data)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Exception ignored: {e}")
         if not _hivo_cfg_cache:
             _hivo_cfg_cache.update({
                 "version": 1,
@@ -846,15 +846,15 @@ def _hivo_load_cfg():
                     _hivo_cfg_cache["features"] = {}
                 if "web_search_enabled" not in _hivo_cfg_cache["features"]:
                     _hivo_cfg_cache["features"]["web_search_enabled"] = False
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Exception ignored: {e}")
             try:
                 if "profiles" not in _hivo_cfg_cache or not isinstance(_hivo_cfg_cache.get("profiles"), list):
                     _hivo_cfg_cache["profiles"] = []
                 if "active_profile_id" not in _hivo_cfg_cache:
                     _hivo_cfg_cache["active_profile_id"] = ""
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Exception ignored: {e}")
             try:
                 ws = _hivo_cfg_cache.get("web_search")
                 if not isinstance(ws, dict):
@@ -875,8 +875,8 @@ def _hivo_load_cfg():
                 if "active_profile_id" not in ws:
                     ws["active_profile_id"] = str((ws.get("profiles") or [{}])[0].get("id") or "").strip() if isinstance(ws.get("profiles"), list) and ws.get("profiles") else ""
                 _hivo_cfg_cache["web_search"] = ws
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Exception ignored: {e}")
         return dict(_hivo_cfg_cache)
 
 
@@ -888,8 +888,8 @@ def _hivo_save_cfg(cfg: dict):
             p = _hivo_cfg_path()
             try:
                 p.parent.mkdir(parents=True, exist_ok=True)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Exception ignored: {e}")
             p.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
             _hivo_cfg_cache.clear()
             _hivo_cfg_cache.update(cfg)
@@ -1158,8 +1158,8 @@ def _hivo_start_new_topic(st: dict, reason: str = ""):
         arc.append(entry)
         while len(arc) > 12:
             arc.pop(0)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Exception ignored: {e}")
     try:
         st["topic_id"] = int(st.get("topic_id") or 1) + 1
     except Exception:
@@ -1414,8 +1414,8 @@ def _hivo_parse_context_refs_structured(context_refs: list, per_file_chars: int 
                 if candidates2:
                     try:
                         candidates2.sort(key=lambda x: _score_candidate2(x), reverse=True)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Exception ignored: {e}")
                 if len(candidates2) == 1:
                     resolved2 = candidates2[0]
                     parse_way2 = "搜索匹配"
@@ -1447,8 +1447,8 @@ def _hivo_parse_context_refs_structured(context_refs: list, per_file_chars: int 
                 }
                 out.append(item)
                 continue
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Exception ignored: {e}")
 
         try:
             rp_dir = rp
@@ -1489,8 +1489,8 @@ def _hivo_parse_context_refs_structured(context_refs: list, per_file_chars: int 
                         item["提示"] = "目录树摘要过长，受上下文长度限制已截断；如需完整目录树，请使用 list_dir_tree 继续查看。"
                 out.append(item)
                 continue
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Exception ignored: {e}")
 
         try:
             is_drive_path = bool(re.match(r"^[A-Za-z]:/", rp))
@@ -1582,8 +1582,8 @@ def _hivo_parse_context_refs_structured(context_refs: list, per_file_chars: int 
 
                 out.append(item)
                 continue
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Exception ignored: {e}")
 
         # Git reference: HEAD/branch/tag/commit-ish
         try:
@@ -1824,13 +1824,13 @@ def _hivo_parse_context_refs_structured(context_refs: list, per_file_chars: int 
             try:
                 if ext in ("png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "tiff", "mp3", "wav", "flac", "mp4", "mkv", "mov", "avi", "pdf"):
                     is_media = True
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Exception ignored: {e}")
             try:
                 if "\x00" in content:
                     is_media = True
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Exception ignored: {e}")
 
             if is_media:
                 item["资源类型"] = "媒体/二进制"
@@ -1859,8 +1859,8 @@ def _hivo_parse_context_refs_structured(context_refs: list, per_file_chars: int 
                     if per_file_chars:
                         # keep legacy knob but interpret as approx char budget -> line target
                         pass
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Exception ignored: {e}")
 
                 def _is_boundary(li: str):
                     try:
@@ -2076,8 +2076,8 @@ def _hivo_ws_emit(run_id: str, session_id: str, stage: str, message: str = "", e
         if isinstance(extra, dict):
             payload.update(extra)
         broadcast_to_clients(payload)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Exception ignored: {e}")
 
 
 def _hivo_ws_emit_final(run_id: str, session_id: str, content: str, ok: bool = True, extra: dict | None = None):
@@ -2093,8 +2093,8 @@ def _hivo_ws_emit_final(run_id: str, session_id: str, content: str, ok: bool = T
         if isinstance(extra, dict):
             payload.update(extra)
         broadcast_to_clients(payload)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Exception ignored: {e}")
 
 
 def get_file_state_hash():
@@ -2495,8 +2495,8 @@ def _safe_repo_abspath(rel_path: str):
     rel_path = (rel_path or "")
     try:
         rel_path = rel_path.replace("\x00", "")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Exception ignored: {e}")
     rel_path = str(rel_path).strip()
     rel_path = rel_path.replace("\\", "/")
     if rel_path.lower().startswith("file://"):
@@ -2511,8 +2511,8 @@ def _safe_repo_abspath(rel_path: str):
             except Exception:
                 return None
             rel_path = os.path.relpath(abs_in, repo_root).replace("\\", "/")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Exception ignored: {e}")
 
     rel_path = rel_path.lstrip("/")
     rel_path = rel_path.replace("\r", "").replace("\n", "")
@@ -2573,8 +2573,8 @@ def get_file_content(filepath: str, return_encoding=False):
             try:
                 _file_last_encoding[filepath] = detected_encoding
                 _file_decode_lossy[filepath] = False
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Exception ignored: {e}")
             return (result, detected_encoding) if return_encoding else result
         except UnicodeDecodeError:
             pass
@@ -2586,8 +2586,8 @@ def get_file_content(filepath: str, return_encoding=False):
             try:
                 _file_last_encoding[filepath] = detected_encoding
                 _file_decode_lossy[filepath] = False
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Exception ignored: {e}")
             return (result, detected_encoding) if return_encoding else result
         except UnicodeDecodeError:
             pass
@@ -2601,8 +2601,8 @@ def get_file_content(filepath: str, return_encoding=False):
                 try:
                     _file_last_encoding[filepath] = detected_encoding
                     _file_decode_lossy[filepath] = False
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Exception ignored: {e}")
                 return (result, detected_encoding) if return_encoding else result
             except UnicodeDecodeError:
                 continue
@@ -2624,8 +2624,8 @@ def get_file_content(filepath: str, return_encoding=False):
             try:
                 _file_last_encoding[filepath] = detected_encoding
                 _file_decode_lossy[filepath] = bool(lossy)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Exception ignored: {e}")
             return (result, detected_encoding) if return_encoding else result
         except Exception as e:
             logger.warning(f"文件 {filepath} 编码探测/解码失败: {e}，回退 UTF-8+replace")
@@ -2635,8 +2635,8 @@ def get_file_content(filepath: str, return_encoding=False):
         try:
             _file_last_encoding[filepath] = detected_encoding
             _file_decode_lossy[filepath] = True
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Exception ignored: {e}")
         return (result, detected_encoding) if return_encoding else result
     except Exception as e:
         logger.error(f"读取文件内容失败: {filepath} - {e}")
@@ -2652,8 +2652,8 @@ def _detect_text_encoding_from_bytes(data: bytes):
     try:
         if data.startswith(b"\xef\xbb\xbf"):
             return "utf-8-sig"
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Exception ignored: {e}")
     
     # 首先尝试UTF-8（最常见）
     try:
@@ -2703,10 +2703,10 @@ def _detect_text_encoding_from_bytes(data: bytes):
                         try:
                             data.decode(detected_enc)
                             return detected_enc
-                        except Exception:
-                            pass
-        except Exception:
-            pass
+                        except Exception as e:
+                            logger.debug(f"Exception ignored: {e}")
+        except Exception as e:
+            logger.debug(f"Exception ignored: {e}")
     
     # Fallback: 按优先级尝试常见编码
     for enc in ("gb18030", "gbk", "gb2312", "cp936"):
@@ -2958,8 +2958,8 @@ def save_file_content(filepath: str, content: str, force_encoding: str = None):
             if _file_decode_lossy.get(filepath):
                 enc_hint = _file_last_encoding.get(filepath) or target_enc
                 return False, f"该文件读取时发生编码替换（{enc_hint} + replace），无法保证无损保存。请用正确编码打开/修复原始字节后再保存。"
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Exception ignored: {e}")
 
         # Decide target EOL:
         # Priority: 1) detect from original file (most reliable)
@@ -3007,14 +3007,14 @@ def save_file_content(filepath: str, content: str, force_encoding: str = None):
                 out2, _, code2 = run_git(["config", "--get", "core.autocrlf"], timeout=10)
                 if code2 == 0 and (out2 or "").strip().lower() == "true":
                     target_eol = "\r\n"
-                    logger.debug(f"从 core.autocrlf 检测到使用 CRLF")
+                    logger.debug("从 core.autocrlf 检测到使用 CRLF")
             except Exception as e:
                 logger.warning(f"检查 core.autocrlf 失败: {e}")
 
         # Step 4: Default to LF if still unknown
         if target_eol is None:
             target_eol = "\n"
-            logger.debug(f"使用默认换行符 LF")
+            logger.debug("使用默认换行符 LF")
 
         txt = content if content is not None else ""
         
@@ -3024,11 +3024,11 @@ def save_file_content(filepath: str, content: str, force_encoding: str = None):
         
         if target_eol == "\r\n" and has_crlf:
             # Content already has CRLF and we want CRLF - no conversion needed
-            logger.debug(f"内容已是 CRLF 格式,无需转换")
+            logger.debug("内容已是 CRLF 格式,无需转换")
             pass
         elif target_eol == "\n" and has_lf_only:
             # Content already has LF only and we want LF - no conversion needed
-            logger.debug(f"内容已是 LF 格式,无需转换")
+            logger.debug("内容已是 LF 格式,无需转换")
             pass
         else:
             # Need to normalize and convert
@@ -3069,12 +3069,12 @@ def save_file_content(filepath: str, content: str, force_encoding: str = None):
                 f.write(data_bytes)
                 try:
                     f.flush()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Exception ignored: {e}")
                 try:
                     os.fsync(f.fileno())
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Exception ignored: {e}")
 
             os.replace(tmp_path, full)
             tmp_path = None
@@ -3083,8 +3083,8 @@ def save_file_content(filepath: str, content: str, force_encoding: str = None):
                 try:
                     if os.path.exists(tmp_path):
                         os.remove(tmp_path)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Exception ignored: {e}")
         
         if transcoded and (enc_used != target_enc):
             logger.info(f"✓ 文件保存成功: {filepath} (编码: {target_enc} -> {enc_used}, 换行符: {repr(target_eol)}, {len(txt)}字符)")
@@ -3094,7 +3094,6 @@ def save_file_content(filepath: str, content: str, force_encoding: str = None):
     except Exception as e:
         logger.error(f"保存文件失败: {filepath} - {e}", exc_info=True)
         return False, str(e)
-
 
 
 # ════════════════════════════════════════════════════════
@@ -3332,8 +3331,8 @@ def parse_diff(text):
         try:
             if a.startswith(b) or b.startswith(a):
                 return max(len_ratio, 0.6)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Exception ignored: {e}")
 
         try:
             seq = difflib.SequenceMatcher(None, a, b, autojunk=False).ratio()
@@ -3815,8 +3814,8 @@ def extract_selected_lines_from_patch(patch_text: str, line_keys):
         for ridx in raw_idxs:
             try:
                 inc.add(int(ridx))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Exception ignored: {e}")
 
     hunks_out = []
     for hi, inc in include_map.items():
@@ -4085,8 +4084,8 @@ def revert_line(filepath: str, hunk_idx: int, line_idx: int, status: str, ctx_li
                 if _sig_match(dli or {}, signature):
                     found_idx = i
                     break
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Exception ignored: {e}")
         if found_idx is not None:
             line_idx = found_idx
 
@@ -4104,8 +4103,8 @@ def revert_line(filepath: str, hunk_idx: int, line_idx: int, status: str, ctx_li
         if _file_decode_lossy.get(filepath):
             enc_hint = _file_last_encoding.get(filepath) or "unknown"
             return False, f"该文件读取时发生编码替换（{enc_hint} + replace），无法安全执行撤回写入。请先用正确编码修复文件后再撤回。"
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Exception ignored: {e}")
 
     try:
         content, enc = get_file_content(filepath, return_encoding=True)
@@ -4164,8 +4163,8 @@ def revert_line(filepath: str, hunk_idx: int, line_idx: int, status: str, ctx_li
                 try:
                     insert_at = max(0, int(n_new) - 1)
                     break
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Exception ignored: {e}")
         if insert_at is None:
             for j in range(line_idx - 1, -1, -1):
                 prv = lines[j] or {}
@@ -4174,8 +4173,8 @@ def revert_line(filepath: str, hunk_idx: int, line_idx: int, status: str, ctx_li
                     try:
                         insert_at = max(0, int(p_new))
                         break
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Exception ignored: {e}")
         if insert_at is None:
             insert_at = len(cur_lines)
         if insert_at > len(cur_lines):
@@ -4839,12 +4838,12 @@ def find_files_by_name(name: str, max_results: int = 20):
             dirs[:] = [d for d in dirs if not d.startswith(".")]
             try:
                 dirs.sort()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Exception ignored: {e}")
             try:
                 files.sort()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Exception ignored: {e}")
             for fn in files:
                 if fn.startswith("."):
                     continue
@@ -4923,8 +4922,8 @@ def save_hivo_ai_config(cfg: dict):
             base_cfg["features"] = {}
         if isinstance(features_in, dict) and "web_search_enabled" in features_in:
             base_cfg["features"]["web_search_enabled"] = bool(features_in.get("web_search_enabled"))
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Exception ignored: {e}")
 
     try:
         # Only overwrite web_search when client provided it.
@@ -4948,8 +4947,8 @@ def save_hivo_ai_config(cfg: dict):
             else:
                 active2 = str(ws_profiles2[0].get("id") or "").strip() if ws_profiles2 else ""
             base_cfg["web_search"] = {"active_profile_id": active2, "profiles": ws_profiles2}
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Exception ignored: {e}")
 
     ok, msg = _hivo_save_cfg(base_cfg)
     if not ok:
@@ -5014,8 +5013,8 @@ def ai_list_models(base_url: str, api_key: str | None = None):
             models = ent.get("models")
             if isinstance(models, list):
                 return True, "", models
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Exception ignored: {e}")
 
     headers = {
         "Accept": "application/json",
@@ -5065,8 +5064,8 @@ def ai_list_models(base_url: str, api_key: str | None = None):
             items = {}
             _ai_models_cache["items"] = items
         items[cache_key] = {"ts": time.time(), "models": out}
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Exception ignored: {e}")
     return True, "", out
 
 
@@ -5168,8 +5167,8 @@ def get_capabilities_spec():
         for e in ep_extra:
             if isinstance(e, dict) and e.get("method") and e.get("path"):
                 endpoints.append(e)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Exception ignored: {e}")
 
     # Agent Tools 定义
     agent_tools = [
@@ -5641,22 +5640,22 @@ def get_capabilities_spec():
         for t in tool_extra:
             if isinstance(t, dict) and str(t.get("type") or "").strip():
                 agent_tools.append(t)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Exception ignored: {e}")
 
     try:
         dis_ep_set = set(str(x) for x in dis_ep if x is not None and str(x).strip())
         if dis_ep_set:
             endpoints = [e for e in endpoints if (str(e.get("path") or "") not in dis_ep_set)]
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Exception ignored: {e}")
 
     try:
         dis_tool_set = set(str(x) for x in dis_tool if x is not None and str(x).strip())
         if dis_tool_set:
             agent_tools = [t for t in agent_tools if (str(t.get("type") or "") not in dis_tool_set)]
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Exception ignored: {e}")
 
     lines = []
     lines.append("系统接口索引（后端单一真源，自动生成）：")
@@ -5699,8 +5698,8 @@ try:
     _AI_SSL_CONTEXT = ssl.create_default_context()
     try:
         _AI_SSL_CONTEXT.minimum_version = ssl.TLSVersion.TLSv1_2
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Exception ignored: {e}")
 except Exception:
     _AI_SSL_CONTEXT = None
 
@@ -5943,8 +5942,8 @@ def ai_chat(messages: list, temperature: float | None = None, profile_id: str | 
     if temperature is not None:
         try:
             payload["temperature"] = float(temperature)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Exception ignored: {e}")
     if max_output_tokens > 0:
         payload["max_tokens"] = max_output_tokens
 
@@ -6279,8 +6278,8 @@ def _hivo_extract_tool_calls(text: str, max_calls: int = 3):
                         break
             if calls:
                 return calls
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Exception ignored: {e}")
 
     # 2) Fallback: scan embedded JSON objects in mixed text.
     for seg in _hivo_scan_json_objects(s, max_objects=max_calls * 2):
@@ -6373,8 +6372,8 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
                     "content": content,
                 },
             })
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Exception ignored: {e}")
         return True, "", {"file": {"path": pick, "file_name": os.path.basename(pick), "view": view, "encoding": encoding, "content": content}}
 
     # File/Workspace
@@ -6534,8 +6533,8 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
             cur = get_file_content(rp)
             if isinstance(cur, str) and cur == content:
                 return True, "", {"path": rp, "no_change": True}
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Exception ignored: {e}")
         if undo_gid:
             snap = _undo_capture_file_snapshot(rp)
             if snap is not None:
@@ -6712,8 +6711,8 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
         try:
             invalidate_changed_files_cache()
             notify_files_updated()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Exception ignored: {e}")
         return True, "", {"output": (out or "")}
 
     if t in ("pull_safe",):
@@ -6742,8 +6741,8 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
                             break
                         if line and (not line.startswith("error:")) and (not line.startswith("hint:")):
                             affected_files.append(line.strip())
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Exception ignored: {e}")
 
         conflict_files, _ = get_unmerged_files()
         has_conflicts = bool(conflict_files)
@@ -6752,8 +6751,8 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
             try:
                 invalidate_changed_files_cache()
                 notify_files_updated()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Exception ignored: {e}")
         return True, "", {
             "ok": ok,
             "output": output.strip(),
@@ -6777,8 +6776,8 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
         try:
             invalidate_changed_files_cache()
             notify_files_updated()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Exception ignored: {e}")
         return True, "", {
             "ok": ok,
             "stashed": stashed,
@@ -6810,8 +6809,8 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
         try:
             invalidate_changed_files_cache()
             notify_files_updated()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Exception ignored: {e}")
         return True, "", {
             "ok": ok,
             "commit_output": (commit_out or "").strip(),
@@ -6854,8 +6853,8 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
         try:
             invalidate_changed_files_cache()
             notify_files_updated()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Exception ignored: {e}")
         return True, "", {"output": out}
 
     if t in ("switch_branch_safe",):
@@ -6889,8 +6888,8 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
                 try:
                     invalidate_changed_files_cache()
                     notify_files_updated()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Exception ignored: {e}")
                 return True, "", {"ok": True, "current": cur, "message": f"成功切换到分支 {cur}"}
 
             ok2, cur2, err_msg, out_msg, _safe_err = switch_branch(target_branch)
@@ -6898,8 +6897,8 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
                 try:
                     invalidate_changed_files_cache()
                     notify_files_updated()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Exception ignored: {e}")
                 return True, "", {"ok": True, "current": cur2, "message": f"成功切换到分支 {cur2}"}
             return True, "", {"ok": False, "error": err_msg or "切换分支失败", "output": out_msg or ""}
 
@@ -6919,8 +6918,8 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
             try:
                 invalidate_changed_files_cache()
                 notify_files_updated()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Exception ignored: {e}")
             return True, "", {
                 "ok": True,
                 "current": target_branch,
@@ -6975,16 +6974,16 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
             if stashed:
                 try:
                     run_git(["stash", "pop"], timeout=60)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Exception ignored: {e}")
             return False, "暂存后工作区仍存在未提交更改，无法安全切换分支（可能包含未被 stash 的变更）", {"output": detail2 or ""}
 
         ok2, cur2, err_msg, out_msg, _safe_err = switch_branch(target_branch)
         try:
             invalidate_changed_files_cache()
             notify_files_updated()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Exception ignored: {e}")
         if ok2:
             return True, "", {"ok": True, "current": cur2, "stashed": stashed, "has_stash": bool(stashed), "message": f"成功切换到分支 {cur2}"}
         return True, "", {"ok": False, "error": err_msg or "切换分支失败", "output": out_msg or "", "stashed": stashed, "has_stash": bool(stashed)}
@@ -7009,8 +7008,8 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
         try:
             invalidate_changed_files_cache()
             notify_files_updated()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Exception ignored: {e}")
         if ok2:
             return True, "", {"ok": True, "current": cur2, "commit_output": (commit_out or "").strip(), "message": f"成功提交并切换到分支 {cur2}"}
         return True, "", {"ok": False, "error": err_msg or "切换分支失败", "output": out_msg or "", "commit_output": (commit_out or "").strip()}
@@ -7124,8 +7123,8 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
             _hivo_start_new_topic(st, reason=str(user_text or "")[:200])
             iso_note = "【话题已切换 / 上下文隔离】\n从这一轮开始，你必须将其视为一个全新的问题域：\n- 禁止引用上一话题的工具回执、推理结论或未相关上下文\n- 若需要旧信息，必须要求用户重新提供，或通过工具重新获取\n"
             dyn_context = (iso_note + ("\n" + str(dyn_context or "") if dyn_context else "")).strip()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Exception ignored: {e}")
     try:
         long_summary = str(st.get("summary") or "").strip()
     except Exception:
@@ -7241,8 +7240,8 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
                     s2 = _hivo_summarize_for_long_term(older, max_chars=int(mem_conf.get("long_term_summary_chars") or 3500))
                     if s2:
                         st["summary"] = s2
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Exception ignored: {e}")
         _hivo_ws_emit(run_id, session_id, "done", _hivo_status_message(cfg, "done"))
         _hivo_ws_emit_final(run_id, session_id, content, ok=True, extra={"rounds": 1})
         return True, content, run_id
@@ -7296,8 +7295,8 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
                         s2 = _hivo_summarize_for_long_term(older, max_chars=int(mem_conf.get("long_term_summary_chars") or 3500))
                         if s2:
                             st["summary"] = s2
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Exception ignored: {e}")
             _hivo_ws_emit(run_id, session_id, "done", _hivo_status_message(cfg, "done"))
             _hivo_ws_emit_final(run_id, session_id, content, ok=True, extra={"rounds": round_i + 1})
             return True, content, run_id
@@ -7323,8 +7322,8 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
 
         try:
             _hivo_ws_emit(run_id, session_id, "executing", _hivo_status_message(cfg, "executing", tool_count=len(calls)))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Exception ignored: {e}")
 
         ws_enabled = None
         try:
@@ -7356,8 +7355,8 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
                     msg0,
                     extra={"tool": name, "tool_i": i_tool + 1, "tool_n": len(calls), "can_cancel": True},
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Exception ignored: {e}")
 
             c2 = c
             try:
@@ -7395,8 +7394,8 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
                     if isinstance(data1, dict) and "cache_hit" not in data1:
                         data1 = dict(data1)
                         data1["cache_hit"] = True
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Exception ignored: {e}")
             else:
                 ok1, msg1, data1 = _hivo_exec_tool(c2, undo_gid=undo_gid_eff, run_id=run_id, agent_deadline=agent_deadline)
                 try:
@@ -7407,8 +7406,8 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
                                 tool_cache.popitem(last=False)
                             except Exception:
                                 break
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Exception ignored: {e}")
 
             try:
                 if tool_memory_enabled and memory_enabled:
@@ -7417,8 +7416,8 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
                     while len(tool_log0) > int(mem_conf.get("tool_log_items") or 80):
                         tool_log0.pop(0)
                     st["tool_log"] = tool_log0
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Exception ignored: {e}")
 
             receipts.append({"type": name, "ok": bool(ok1), "msg": msg1 or "", "data": data1})
 
@@ -7466,8 +7465,8 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
                     total_payload_chars += len(chunk)
                     receipt_lines.append("  ---")
                     receipt_lines.append(chunk)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Exception ignored: {e}")
         receipt_text = "\n".join(receipt_lines)
 
         msgs.append({"role": "assistant", "content": content})
@@ -7508,8 +7507,8 @@ def _run_cmd_simple(cmd: str, timeout: int = 30, cwd: str = "", run_id: str = ""
             try:
                 remain = int(max(1, agent_deadline - time.time()))
                 to_s = max(1, min(to_s, remain))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Exception ignored: {e}")
 
         pre_map, pre_snaps = _undo_prepare_cmd_snapshots(undo_gid)
 
@@ -7527,8 +7526,8 @@ def _run_cmd_simple(cmd: str, timeout: int = 30, cwd: str = "", run_id: str = ""
         if rid:
             try:
                 _hivo_agent_run_proc[rid] = p
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Exception ignored: {e}")
 
         out_chunks = []
         err_chunks = []
@@ -7536,20 +7535,20 @@ def _run_cmd_simple(cmd: str, timeout: int = 30, cwd: str = "", run_id: str = ""
             if rid and _hivo_agent_is_cancelled(rid):
                 try:
                     p.terminate()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Exception ignored: {e}")
                 return False, "已取消", ""
             if agent_deadline and agent_deadline > 0 and time.time() > agent_deadline:
                 try:
                     p.terminate()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Exception ignored: {e}")
                 return False, "执行超时", ""
             if (time.time() - start_t) > to_s:
                 try:
                     p.terminate()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Exception ignored: {e}")
                 return False, "命令超时", ""
 
             rc = p.poll()
@@ -7567,8 +7566,8 @@ def _run_cmd_simple(cmd: str, timeout: int = 30, cwd: str = "", run_id: str = ""
                     return False, f"exit={rc}", out
                 try:
                     _undo_finalize_cmd_snapshots(undo_gid, pre_map, pre_snaps)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Exception ignored: {e}")
                 return True, "", out
             time.sleep(0.2)
     except Exception as e:
@@ -7577,8 +7576,8 @@ def _run_cmd_simple(cmd: str, timeout: int = 30, cwd: str = "", run_id: str = ""
         try:
             if rid:
                 _hivo_agent_clear_proc(rid)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Exception ignored: {e}")
 
 
 _rl_lock = threading.Lock()
@@ -7691,8 +7690,8 @@ def _ai_cache_get(query: str, profile_id: str | None = None):
         for ck in dead:
             try:
                 _ai_cache.pop(ck, None)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Exception ignored: {e}")
 
         exact_key = prefix + nq
         ent = _ai_cache.get(exact_key)
@@ -7701,8 +7700,8 @@ def _ai_cache_get(query: str, profile_id: str | None = None):
             ent["ts"] = now
             try:
                 _ai_cache.move_to_end(exact_key)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Exception ignored: {e}")
             return ent
 
         best_key = ""
@@ -7729,8 +7728,8 @@ def _ai_cache_get(query: str, profile_id: str | None = None):
                 e["ts"] = now
                 try:
                     _ai_cache.move_to_end(best_key)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Exception ignored: {e}")
                 return e
     return None
 
@@ -7761,8 +7760,8 @@ def _ai_cache_put(query: str, response: str, profile_id: str | None = None):
         _ai_cache[key] = ent
         try:
             _ai_cache.move_to_end(key)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Exception ignored: {e}")
         while len(_ai_cache) > 220:
             try:
                 _ai_cache.popitem(last=False)
@@ -8161,8 +8160,8 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     if "req_id" not in data and rid:
                         data["req_id"] = rid
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Exception ignored: {e}")
 
                 need_wrap = not ("ok" in data and "data" in data and "error" in data)
                 if need_wrap:
@@ -8216,7 +8215,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", len(data))
             self.end_headers()
             self.wfile.write(data)
-            logger.debug(f"发送 HTML 页面: index.html")
+            logger.debug("发送 HTML 页面: index.html")
         except Exception as e:
             logger.error(f"发送 HTML 页面失败: {e}")
             body = f"找不到 index.html: {e}".encode()
@@ -8311,8 +8310,8 @@ class Handler(BaseHTTPRequestHandler):
                                     tsf = float(ts0)
                                     if (created_ts is None) or (tsf < created_ts):
                                         created_ts = tsf
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                logger.debug(f"Exception ignored: {e}")
                             if tp == "file_snapshot":
                                 op = str(a.get("op") or "").strip()
                                 try:
@@ -8340,8 +8339,8 @@ class Handler(BaseHTTPRequestHandler):
                                         rp = str(snap.get("path") or "").strip().replace("\\", "/").lstrip("/")
                                         if rp:
                                             file_paths.append(rp)
-                                except Exception:
-                                    pass
+                                except Exception as e:
+                                    logger.debug(f"Exception ignored: {e}")
                             elif tp == "rename":
                                 try:
                                     oldp = str(a.get("old_path") or "").strip().replace("\\", "/").lstrip("/")
@@ -8350,8 +8349,8 @@ class Handler(BaseHTTPRequestHandler):
                                         file_paths.append(oldp)
                                     if newp:
                                         file_paths.append(newp)
-                                except Exception:
-                                    pass
+                                except Exception as e:
+                                    logger.debug(f"Exception ignored: {e}")
                                 try:
                                     snaps = a.get("snapshots")
                                     if isinstance(snaps, list):
@@ -8361,8 +8360,8 @@ class Handler(BaseHTTPRequestHandler):
                                             rp = str(s0.get("path") or "").strip().replace("\\", "/").lstrip("/")
                                             if rp:
                                                 file_paths.append(rp)
-                                except Exception:
-                                    pass
+                                except Exception as e:
+                                    logger.debug(f"Exception ignored: {e}")
                         uniq_files = []
                         try:
                             seen = set()
@@ -8767,8 +8766,8 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 if delay_s > 0:
                     time.sleep(delay_s)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Exception ignored: {e}")
             q = qget("query") or qget("q") or ""
             cs = str(qget("case_sensitive") or "").strip().lower() in ("1", "true", "yes", "y")
             try:
@@ -8867,8 +8866,8 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     invalidate_changed_files_cache()
                     notify_files_updated()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Exception ignored: {e}")
                 self.send_json({"ok": True})
 
             elif p == "/api/discard_staged_file":
@@ -8886,8 +8885,8 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     invalidate_changed_files_cache()
                     notify_files_updated()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Exception ignored: {e}")
                 self.send_json({"ok": True})
 
             elif p == "/api/unstage_all_staged":
@@ -8901,8 +8900,8 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     invalidate_changed_files_cache()
                     notify_files_updated()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Exception ignored: {e}")
                 self.send_json({"ok": True})
 
             elif p == "/api/discard_all_staged":
@@ -8916,8 +8915,8 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     invalidate_changed_files_cache()
                     notify_files_updated()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Exception ignored: {e}")
                 self.send_json({"ok": True})
 
             elif p == "/api/revert_hunk":
@@ -9076,8 +9075,8 @@ class Handler(BaseHTTPRequestHandler):
                         return
                     if delay_s > 0:
                         time.sleep(delay_s)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Exception ignored: {e}")
                 idem_key = (self.headers.get("X-Idempotency-Key") or "").strip()
                 if idem_key:
                     ent = _idempotency_get(idem_key)
@@ -9095,8 +9094,8 @@ class Handler(BaseHTTPRequestHandler):
                             _idempotency_set(idem_key, payload, 200)
                         self.send_json(payload)
                         return
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Exception ignored: {e}")
                 if undo_gid:
                     snap = _undo_capture_file_snapshot(fp)
                     if snap is not None:
@@ -9204,18 +9203,18 @@ class Handler(BaseHTTPRequestHandler):
 
                     try:
                         logger.warning(f"run_cmd 完成 (ok={1 if r.returncode == 0 else 0}, exit_code={int(r.returncode)}, cmd={cmd[:180]})")
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Exception ignored: {e}")
                     try:
                         _undo_finalize_cmd_snapshots(undo_gid, pre_map, pre_snaps)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Exception ignored: {e}")
 
                     try:
                         invalidate_changed_files_cache()
                         notify_files_updated()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Exception ignored: {e}")
 
                     self.send_json({
                         "ok": (r.returncode == 0),
@@ -9268,8 +9267,8 @@ class Handler(BaseHTTPRequestHandler):
                         return
                     if delay_s > 0:
                         time.sleep(delay_s)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Exception ignored: {e}")
                 idem_key = (self.headers.get("X-Idempotency-Key") or "").strip()
                 if idem_key:
                     ent = _idempotency_get(idem_key)
@@ -9468,8 +9467,8 @@ class Handler(BaseHTTPRequestHandler):
                         return
                     if delay_s > 0:
                         time.sleep(delay_s)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Exception ignored: {e}")
 
                 user_q = ""
                 try:
@@ -9499,8 +9498,8 @@ class Handler(BaseHTTPRequestHandler):
                     content = result.get("content", "")
                     try:
                         _ai_cache_put(user_q, str(content or ""), profile_id=pid)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Exception ignored: {e}")
                     try:
                         cost_ms = int((time.time() - t0) * 1000)
                     except Exception:
@@ -9539,12 +9538,12 @@ class Handler(BaseHTTPRequestHandler):
                         return
                     if delay_s > 0:
                         time.sleep(delay_s)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Exception ignored: {e}")
                 try:
                     _ai_cache_clear()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Exception ignored: {e}")
                 self.send_json({"ok": True, "msg": "已清空缓存"})
 
             elif p == "/api/ai_chat_history":
@@ -9640,8 +9639,8 @@ class Handler(BaseHTTPRequestHandler):
                             while len(tl) > int(mc.get("tool_log_items") or 80):
                                 tl.pop(0)
                             st["tool_log"] = tl
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Exception ignored: {e}")
 
                 sid_s0 = str(sid or "").strip()
                 if sid_s0:
@@ -9651,14 +9650,14 @@ class Handler(BaseHTTPRequestHandler):
                             if active and (active in _hivo_agent_run_state) and (not bool((_hivo_agent_run_state.get(active) or {}).get("done"))):
                                 self.send_json({"ok": False, "msg": "已有任务执行中，请先取消或等待完成", "run_id": active}, 409)
                                 return
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Exception ignored: {e}")
 
                 run_id = uuid.uuid4().hex
                 try:
                     _hivo_agent_mark_started(run_id, sid_s0)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Exception ignored: {e}")
 
                 # ack immediately; stream progress via websocket
                 self.send_json({"ok": True, "run_id": run_id})
@@ -9701,25 +9700,25 @@ class Handler(BaseHTTPRequestHandler):
                                     visible.append({"role": "assistant", "content": str(final2)})
                                 with ai_history_lock:
                                     save_ai_chat_history(pid_s, visible, session_id=sid_s)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"Exception ignored: {e}")
                     except Exception as e:
                         try:
                             _hivo_ws_emit(run_id, sid_s0, "error", str(e))
                             _hivo_ws_emit_final(run_id, sid_s0, str(e), ok=False)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"Exception ignored: {e}")
                     finally:
                         try:
                             _hivo_agent_mark_done(run_id)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"Exception ignored: {e}")
 
                 try:
                     th = threading.Thread(target=_bg, daemon=True)
                     th.start()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Exception ignored: {e}")
 
             elif p == "/api/revert_all":
                 logger.info("处理 /api/revert_all 请求")
@@ -9733,8 +9732,8 @@ class Handler(BaseHTTPRequestHandler):
                         return
                     if delay_s > 0:
                         time.sleep(delay_s)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Exception ignored: {e}")
                 errors = []
                 raw_paths = data.get("paths")
                 paths = None
@@ -9779,8 +9778,8 @@ class Handler(BaseHTTPRequestHandler):
                     try:
                         invalidate_changed_files_cache()
                         notify_files_updated()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Exception ignored: {e}")
                 self.send_json({"ok": not errors, "errors": errors})
 
             elif p == "/api/restore_file":
@@ -9883,8 +9882,8 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     invalidate_changed_files_cache()
                     notify_files_updated()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Exception ignored: {e}")
                 self.send_json({"ok": True})
 
             elif p == "/api/commit":
@@ -10303,7 +10302,7 @@ class Handler(BaseHTTPRequestHandler):
                         "message": "工作区有未提交的修改，请先处理后再切换远端分支"
                     })
                     return
-                logger.info(f"工作区有未提交修改，检查是否会被覆盖...")
+                logger.info("工作区有未提交修改，检查是否会被覆盖...")
                 
                 # 使用 git checkout --dry-run 来检测是否会有冲突
                 # 注意：git checkout 本身没有 --dry-run 选项，我们用其他方式检测
@@ -10325,7 +10324,7 @@ class Handler(BaseHTTPRequestHandler):
                 error_msg = (test_err or "").lower()
                 if "would be overwritten" in error_msg or "overwritten by checkout" in error_msg:
                     # 修改会被覆盖，需要用户处理
-                    logger.warning(f"切换分支会覆盖未提交的修改")
+                    logger.warning("切换分支会覆盖未提交的修改")
                     
                     # 提取受影响的文件列表
                     affected_files = []
@@ -10390,8 +10389,8 @@ class Handler(BaseHTTPRequestHandler):
                     if stashed:
                         try:
                             run_git(["stash", "pop"], timeout=60)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"Exception ignored: {e}")
                     self.send_json({
                         "ok": False,
                         "error": "暂存后工作区仍存在未提交更改，无法安全切换分支（可能包含未被 stash 的变更）",
@@ -10518,8 +10517,8 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     invalidate_changed_files_cache()
                     notify_files_updated()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Exception ignored: {e}")
                 self.send_json({
                     "ok": True,
                     "message": "成功恢复暂存的修改",
@@ -10537,8 +10536,8 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     invalidate_changed_files_cache()
                     notify_files_updated()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Exception ignored: {e}")
                 self.send_json({"ok": True, "output": (out or "").strip()})
 
             else:
@@ -10601,8 +10600,8 @@ def main():
         try:
             if srv is not None:
                 srv.server_close()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Exception ignored: {e}")
         logger.info("Git Manager 后端已停止")
         print("已停止")
 
