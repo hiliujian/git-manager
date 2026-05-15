@@ -1984,6 +1984,26 @@ flex-shrink:0;cursor:pointer;
     }
     .revert-block-hint .hint-btn:hover{background:rgba(242, 114, 114, 0.12);border-color:#6b1f1e;box-shadow:0 0 8px rgba(242, 114, 114, 0.18);}
 
+    .revert-block-hint .hint-close{
+      width:18px;
+      height:18px;
+      border-radius:6px;
+      border:1px solid rgba(255,255,255,0.10);
+      background:transparent;
+      color:var(--text3);
+      font-size:14px;
+      line-height:16px;
+      padding:0;
+      cursor:pointer;
+      opacity:0;
+      visibility:hidden;
+      transition:opacity .12s, visibility .12s, background .12s, border-color .12s;
+      margin-left:auto;
+      flex-shrink:0;
+    }
+    .revert-block-hint:hover .hint-close{opacity:1;visibility:visible;}
+    .revert-block-hint .hint-close:hover{background:rgba(255,255,255,0.06);border-color:rgba(255,255,255,0.18);color:var(--text);}
+
     .ln{width:44px;min-width:44px;text-align:right;padding:0 6px;color:var(--text3);
       font-size:10px;border-right:1px solid var(--border);background:var(--bg2);
       flex-shrink:0;line-height:20px;user-select:none;-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;}
@@ -2243,6 +2263,13 @@ flex-shrink:0;cursor:pointer;
       <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/>
       </svg>换仓库
+    </button>
+    <button class="icon-btn" id="selfCheckBtn" title="自检" data-action="gmSelfCheck">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"/>
+        <line x1="12" y1="16" x2="12" y2="12"/>
+        <line x1="12" y1="8" x2="12.01" y2="8"/>
+      </svg>
     </button>
     <button class="icon-btn" id="themeToggle" title="切换主题" data-action="toggleTheme">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -3756,6 +3783,8 @@ flex-shrink:0;cursor:pointer;
       const ln = lastLineByPath.get(p);
       if (!ln || !Number.isFinite(Number(ln))) return;
 
+      // 仅用于纯文本编辑器的位置恢复
+      // diff视图的位置恢复已在loadDiff内部统一处理
       if (window.__plainEditorFilename && String(window.__plainEditorFilename) === p) {
         const ta = document.getElementById('plainEditorTextarea');
         if (ta) {
@@ -3766,13 +3795,6 @@ flex-shrink:0;cursor:pointer;
             if (gutter) gutter.scrollTop = ta.scrollTop;
           } catch (e3) {}
         }
-        return;
-      }
-
-      if (curFile !== null && files && files[curFile] && String(files[curFile].path || '') === p) {
-        setTimeout(() => {
-          try { scrollToLine(Number(ln)); } catch (e) {}
-        }, 0);
       }
     } catch (e) {}
   }
@@ -3888,6 +3910,7 @@ flex-shrink:0;cursor:pointer;
           if (act === 'refresh') { e.preventDefault(); refresh(); return; }
           if (act === 'goToOpener') { e.preventDefault(); goToOpener(); return; }
           if (act === 'toggleTheme') { e.preventDefault(); toggleTheme(); return; }
+          if (act === 'gmSelfCheck') { e.preventDefault(); __gmRunSelfCheck(); return; }
           if (act === 'openRepo') { e.preventDefault(); openRepo(); return; }
           if (act === 'toggleFileFilter') { e.preventDefault(); toggleFileFilter(); return; }
           if (act === 'toggleLeftPanel') { e.preventDefault(); toggleLeftPanel(); return; }
@@ -4745,6 +4768,17 @@ flex-shrink:0;cursor:pointer;
         gutter.querySelectorAll('.n.find-match').forEach(el => el.classList.remove('find-match'));
       }
     } catch (e3) {}
+  }
+
+  function __gmClearFindStateOnTextStructureChange() {
+    try {
+      if (!findQuery && (!findMatches || !findMatches.length) && findPos < 0 && !findLineHits) return;
+    } catch (e0) {}
+    try { clearFindHighlights(); } catch (e1) {}
+    try { findMatches = []; } catch (e2) {}
+    try { findPos = -1; } catch (e3) {}
+    try { findLineHits = null; } catch (e4) {}
+    try { updateFindMeta(); } catch (e5) {}
   }
 
   function __gmEscapeHtml(s) {
@@ -9779,6 +9813,12 @@ flex-shrink:0;cursor:pointer;
 
       case 'files_updated':
         // 文件列表更新
+        try {
+          if (document.hidden) {
+            window.__gmPendingFilesUpdate = data.files;
+            return;
+          }
+        } catch (e) {}
         handleFilesUpdate(data.files);
         break;
 
@@ -9945,6 +9985,50 @@ flex-shrink:0;cursor:pointer;
     setTimeout(() => {
       shouldAutoRefreshDiff = true;
     }, durationMs);
+  }
+
+  function __gmRunSelfCheck() {
+    try {
+      const yes = (v) => (v ? 'yes' : 'no');
+      const hidden = !!document.hidden;
+      const wsState = (() => {
+        try {
+          if (!ws) return 'null';
+          const rs = ws.readyState;
+          if (rs === WebSocket.CONNECTING) return 'CONNECTING';
+          if (rs === WebSocket.OPEN) return 'OPEN';
+          if (rs === WebSocket.CLOSING) return 'CLOSING';
+          if (rs === WebSocket.CLOSED) return 'CLOSED';
+          return String(rs);
+        } catch (e) {
+          return 'unknown';
+        }
+      })();
+
+      const pendingFilesUpdate = !!window.__gmPendingFilesUpdate;
+
+      const msg = [
+        `time: ${new Date().toLocaleString()}`,
+        `document.hidden: ${yes(hidden)}`,
+        `repo.valid: ${yes(!!window.__gmRepoValid)}`,
+        `wsConnected: ${yes(!!wsConnected)}`,
+        `wsConnecting: ${yes(!!wsConnecting)}`,
+        `ws: ${wsState}`,
+        `wsReconnectTimer: ${yes(!!wsReconnectTimer)}`,
+        `realTimeRefreshTimer: ${yes(!!refreshTimer)}`,
+        `externalWatchTimer: ${yes(!!window.__plainEditorExternalWatchTimer)}`,
+        `externalWatchInFlight: ${yes(!!window.__plainEditorExternalWatchInFlight)}`,
+        `pendingFilesUpdate: ${yes(pendingFilesUpdate)}`,
+      ].join('\n');
+
+      showCustomDialog({
+        title: '自检信息',
+        message: msg,
+        buttons: [{ text: '关闭', value: 'close' }]
+      });
+    } catch (e) {
+      try { toast('自检失败', 'err'); } catch (e2) {}
+    }
   }
 
   async function handleFilesUpdate(newFiles) {
@@ -10484,18 +10568,15 @@ flex-shrink:0;cursor:pointer;
             node.className = 'ai-msg ' + (isUser ? 'user' : 'assistant');
             node.innerHTML = '';
           }
-          continue;
-        }
-        if (prevSig === sig) {
+        } else if (prevSig === sig) {
           if (node.className !== ('ai-msg ' + (isUser ? 'user' : 'assistant'))) {
             node.className = 'ai-msg ' + (isUser ? 'user' : 'assistant');
           }
-          continue;
+        } else {
+          node.className = 'ai-msg ' + (isUser ? 'user' : 'assistant');
+          node.innerHTML = `<div class="ai-meta">${esc(isUser ? '你' : 'AI')}</div><div class="ai-bubble${userLoading ? ' user-loading' : ''}${isPending ? ' pending' : ''}"><div class="ai-msg-actions"><button title="删除" data-action="aiDeleteMsg" data-idx="${idx}">×</button></div><div class="ai-md">${isPending ? esc(content) : aiRenderMarkdown(content)}</div></div>`;
+          try { __gmAiEnhanceCodeBlocks(node); } catch (eEnh) {}
         }
-
-        node.className = 'ai-msg ' + (isUser ? 'user' : 'assistant');
-        node.innerHTML = `<div class="ai-meta">${esc(isUser ? '你' : 'AI')}</div><div class="ai-bubble${userLoading ? ' user-loading' : ''}${isPending ? ' pending' : ''}"><div class="ai-msg-actions"><button title="删除" data-action="aiDeleteMsg" data-idx="${idx}">×</button></div><div class="ai-md">${isPending ? esc(content) : aiRenderMarkdown(content)}</div></div>`;
-        try { __gmAiEnhanceCodeBlocks(node); } catch (eEnh) {}
       }
 
       for (let i = children.length - 1; i >= len; i--) {
@@ -10583,9 +10664,17 @@ flex-shrink:0;cursor:pointer;
       if (!Number.isFinite(i)) return;
       if (!Array.isArray(__gmAiChatMessages)) return;
       if (i < 0 || i >= __gmAiChatMessages.length) return;
-      __gmAiChatMessages.splice(i, 1);
+      const cur = __gmAiChatMessages[i];
+      const curRole = String(cur && cur.role || '');
+      if (curRole === 'user') {
+        __gmAiChatMessages.splice(i);
+      } else {
+        __gmAiChatMessages.splice(i, 1);
+      }
       __gmAiRenderChat();
-      __gmAiSaveHistoryNow();
+      Promise.resolve(__gmAiSaveHistoryNow()).then(() => {
+        try { __gmAiRefreshSendCounter(); } catch (e0) {}
+      }).catch(()=>{});
       try {
         if (!__gmAiChatMessages.length) {
           const sid = String(__gmAiActiveSessionId || '').trim();
@@ -10676,7 +10765,7 @@ flex-shrink:0;cursor:pointer;
         const lastUserText = String(msgs[lastUser] && msgs[lastUser].content || '');
         msgs.splice(lastUser);
         __gmAiRenderChat();
-        __gmAiSaveHistoryNow();
+        await __gmAiSaveHistoryNow();
         try {
           if (!__gmAiChatMessages.length) __gmAiLastUndoSteps = 0;
           __gmAiRefreshSendCounter();
@@ -10697,8 +10786,6 @@ flex-shrink:0;cursor:pointer;
           if (undoGidForTurn && String(__gmAiActiveTurnUndoGroupId || '') === undoGidForTurn) __gmAiActiveTurnUndoGroupId = '';
         } catch (eG0) {}
       }
-
-      try { __gmAiRefreshSendCounter(); } catch (eC) {}
     } catch (e) {}
   }
 
@@ -15036,15 +15123,18 @@ flex-shrink:0;cursor:pointer;
     curHunks = [];
     // 添加 epoch 保护，防止在快速选择文件时的并发请求
     const epoch = ++window.__gmLoadDiffEpoch;
+    
+    // 延迟执行loadDiff，确保DOM更新
     setTimeout(() => {
       if (window.__gmLoadDiffEpoch === epoch) {
         loadDiff(i);
+        // loadDiff完成后会自动处理跳转逻辑（autoScrollToFirstChangeOnce或恢复上次位置）
       }
     }, 0);
-    try {
-      const f = files[i];
-      if (f && f.path) __gmRestoreLastLineForPath(f.path);
-    } catch (e) {}
+    
+    // ❌ 删除此处的__gmRestoreLastLineForPath调用
+    // 原因：会与loadDiff内部的自动跳转逻辑冲突，造成竞态条件
+    // 恢复位置的逻辑已在loadDiff完成后的回调中处理
   }
 
   function __gmCaptureDiffScrollState(viewEl) {
@@ -15418,19 +15508,34 @@ flex-shrink:0;cursor:pointer;
       renderDiffWithFullContext(f, curHunks, false, changeLocations);
     }
     try { __gmRestoreDiffScrollState(document.getElementById('diffView'), prevScroll); } catch (e) {}
-    // Auto jump to the first change when user manually opens the file.
-    if (autoScrollToFirstChangeOnce) {
-      autoScrollToFirstChangeOnce = false;
-      try {
-        const locs = buildChangeLocationsFromHunks(curHunks);
-        const first = (locs || [])[0];
-        const ln = first ? ((first.anchorLineNumber !== null && first.anchorLineNumber !== undefined) ? first.anchorLineNumber : ((first.lineNumber !== null && first.lineNumber !== undefined) ? first.lineNumber : first.displayLineNumber)) : undefined;
-        if (ln !== null && ln !== undefined && Number.isFinite(Number(ln))) {
-          // Wait for DOM paint
-          setTimeout(() => scrollToLine(Number(ln)), 0);
-        }
-      } catch (e) {}
-    }
+    
+    // 统一的跳转逻辑：确保DOM完全渲染后再执行
+    // 使用requestAnimationFrame + setTimeout确保在下一帧执行
+    requestAnimationFrame(() => {
+      setTimeout(() => {
+        try {
+          // 优先处理自动跳转到首次变更（仅首次打开文件时）
+          if (autoScrollToFirstChangeOnce) {
+            autoScrollToFirstChangeOnce = false;
+            const locs = buildChangeLocationsFromHunks(curHunks);
+            const first = (locs || [])[0];
+            const ln = first ? ((first.anchorLineNumber !== null && first.anchorLineNumber !== undefined) ? first.anchorLineNumber : ((first.lineNumber !== null && first.lineNumber !== undefined) ? first.lineNumber : first.displayLineNumber)) : undefined;
+            if (ln !== null && ln !== undefined && Number.isFinite(Number(ln))) {
+              scrollToLine(Number(ln));
+            }
+          }
+          // 否则恢复上次浏览位置（如果有的话）
+          else if (f && f.path) {
+            const p = String(f.path || '');
+            const savedLine = lastLineByPath.get(p);
+            if (savedLine && Number.isFinite(Number(savedLine))) {
+              scrollToLine(Number(savedLine));
+            }
+          }
+        } catch (e) {}
+      }, 50); // 50ms延迟确保大文件也能完成初始渲染
+    });
+    
     try { __gmUpdateUndoRevertButton(); } catch (e) {}
   }
 
@@ -15993,6 +16098,8 @@ flex-shrink:0;cursor:pointer;
   function renderDiffWithFullContext(file, hunks, readonly, changeLocations = []) {
     const view = document.getElementById('diffView');
 
+    try { __gmClearFindStateOnTextStructureChange(); } catch (e0) {}
+
     const __gmRenderToken = (() => {
       try {
         const next = Number(__nn(view.__gmRenderToken, 0)) + 1;
@@ -16400,7 +16507,7 @@ flex-shrink:0;cursor:pointer;
           const actions = (columnType === 'right') ? `<span class="dl-actions">${commitCb}${btn}</span>` : '';
           const lsHtml = (columnType === 'left') ? '' : '<span class="ls"></span>';
           const lcAttr = (columnType === 'left') ? '' : ' contenteditable="false"';
-          return `<div class="dl revert-block-hint">${actions}${lsHtml}<span class="ln"></span><span class="lc"${lcAttr}><span class="hint-tag" contenteditable="false">块撤回</span><span class="hint-text" contenteditable="false">已识别为连续变更块（${count}行），可一键撤回</span></span></div>`;
+          return `<div class="dl revert-block-hint">${actions}${lsHtml}<span class="ln"></span><span class="lc"${lcAttr}><span class="hint-tag" contenteditable="false">块撤回</span><span class="hint-text" contenteditable="false">已识别为连续变更块（${count}行），可一键撤回</span><button class="hint-close" type="button" data-action="dismissRevertBlockHint" title="关闭">×</button></span></div>`;
         };
 
         while (i < Math.max(leftLines.length, rightLines.length)) {
@@ -16701,7 +16808,7 @@ flex-shrink:0;cursor:pointer;
           const commitCb = (!readonly) ? `<input class="commit-cb" type="checkbox" ${checkedAttr} ${indetAttr} data-action="toggleCommitBlock" data-file="${fpEsc}" data-hunk="${hunkIndex}" data-start="${startIdx}" data-end="${endIdx}">` : '';
           const btn = (!readonly) ? `<button class="hint-btn" data-action="askRevertMultiLines" data-file="${fpEsc}" data-hunk="${hunkIndex}" data-start="${startIdx}" data-end="${endIdx}" data-status="${file.status}">块撤回（${count}）</button>` : '';
           const actions = `<span class="dl-actions">${commitCb}${btn}</span>`;
-          return `<div class="dl revert-block-hint">${actions}<span class="ls"></span><span class="ln"></span><span class="lc" contenteditable="false"><span class="hint-tag" contenteditable="false">块撤回</span><span class="hint-text" contenteditable="false">已识别为连续变更块（${count}行），可一键撤回</span></span></div>`;
+          return `<div class="dl revert-block-hint">${actions}<span class="ls"></span><span class="ln"></span><span class="lc" contenteditable="false"><span class="hint-tag" contenteditable="false">块撤回</span><span class="hint-text" contenteditable="false">已识别为连续变更块（${count}行），可一键撤回</span><button class="hint-close" type="button" data-action="dismissRevertBlockHint" title="关闭">×</button></span></div>`;
         };
 
         const lines = (hunk.lines || []);
@@ -16883,7 +16990,7 @@ flex-shrink:0;cursor:pointer;
           const commitCb = (!readonly) ? `<input class="commit-cb" type="checkbox" ${checkedAttr} ${indetAttr} data-action="toggleCommitBlock" data-file="${fpEsc}" data-hunk="${hunkIndex}" data-start="${startIdx}" data-end="${endIdx}">` : '';
           const btn = (!readonly) ? `<button class="hint-btn" data-action="askRevertMultiLines" data-file="${fpEsc}" data-hunk="${hunkIndex}" data-start="${startIdx}" data-end="${endIdx}" data-status="${file.status}">块撤回（${count}）</button>` : '';
           const actions = `<span class="dl-actions">${commitCb}${btn}</span>`;
-          return `<div class="dl revert-block-hint">${actions}<span class="ls"></span><span class="ln"></span><span class="lc"><span class="hint-tag">块撤回</span><span class="hint-text">已识别为连续变更块（${count}行），可一键撤回</span></span></div>`;
+          return `<div class="dl revert-block-hint">${actions}<span class="ls"></span><span class="ln"></span><span class="lc"><span class="hint-tag">块撤回</span><span class="hint-text">已识别为连续变更块（${count}行），可一键撤回</span><button class="hint-close" type="button" data-action="dismissRevertBlockHint" title="关闭">×</button></span></div>`;
         };
 
         const lines = (hunk.lines || []);
@@ -17793,7 +17900,7 @@ flex-shrink:0;cursor:pointer;
                   `<div class="dl revert-block-hint" data-line-id="${hi}-${startLi}" data-hunk="${hi}" data-line="${startLi}">
             <span class="ls"></span>
             <span class="ln"></span>
-            <span class="lc"><span class="hint-tag">块撤回</span><span class="hint-text">已识别为连续变更块（${group.lines.length}行），可一键撤回</span><span class="hint-actions"><button class="hint-btn" data-action="askRevertMultiLines" data-file="${escJsString(file.path)}" data-hunk="${hi}" data-start="${startLi}" data-end="${endLi}" data-status="${file.status}">撤回该块（${group.lines.length}）</button></span></span>
+            <span class="lc"><span class="hint-tag">块撤回</span><span class="hint-text">已识别为连续变更块（${group.lines.length}行），可一键撤回</span><span class="hint-actions"><button class="hint-btn" data-action="askRevertMultiLines" data-file="${escJsString(file.path)}" data-hunk="${hi}" data-start="${startLi}" data-end="${endLi}" data-status="${file.status}">撤回该块（${group.lines.length}）</button><button class="hint-close" type="button" data-action="dismissRevertBlockHint" title="关闭">×</button></span></span>
           </div>` : '';
 
           const lineRows = group.lines.map(({line: l, index: li}) => {
@@ -17921,7 +18028,7 @@ flex-shrink:0;cursor:pointer;
                   `<div class="dl revert-block-hint" data-line-id="${hi}-${startLi}" data-hunk="${hi}" data-line="${startLi}">
             <span class="ls"></span>
             <span class="ln"></span>
-            <span class="lc"><span class="hint-tag">块撤回</span><span class="hint-text">已识别为连续变更块（${group.lines.length}行），可一键撤回</span><span class="hint-actions"><button class="hint-btn" data-action="askRevertMultiLines" data-file="${escJsString(file.path)}" data-hunk="${hi}" data-start="${startLi}" data-end="${endLi}" data-status="${file.status}">撤回该块（${group.lines.length}）</button></span></span>
+            <span class="lc"><span class="hint-tag">块撤回</span><span class="hint-text">已识别为连续变更块（${group.lines.length}行），可一键撤回</span><span class="hint-actions"><button class="hint-btn" data-action="askRevertMultiLines" data-file="${escJsString(file.path)}" data-hunk="${hi}" data-start="${startLi}" data-end="${endLi}" data-status="${file.status}">撤回该块（${group.lines.length}）</button><button class="hint-close" type="button" data-action="dismissRevertBlockHint" title="关闭">×</button></span></span>
           </div>` : '';
 
           const lineRows = group.lines.map(({line: l, index: li}) => {
@@ -18017,6 +18124,7 @@ flex-shrink:0;cursor:pointer;
   }
 
   function clearDiff() {
+    try { __gmClearFindStateOnTextStructureChange(); } catch (e0) {}
     document.getElementById('diffView').innerHTML =
             `<div class="empty-state">
       <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
@@ -21196,6 +21304,19 @@ flex-shrink:0;cursor:pointer;
           return;
         }
 
+        if (act === 'dismissRevertBlockHint') {
+          e.preventDefault();
+          try { e.stopPropagation(); } catch (e2) {}
+          try {
+            const host = document.getElementById('diffView');
+            if (!host) return;
+            host.querySelectorAll('.revert-block-hint').forEach(n => {
+              try { n.remove(); } catch (e0) {}
+            });
+          } catch (e3) {}
+          return;
+        }
+
         if (act === 'askRevertHunk') {
           e.preventDefault();
           try { e.stopPropagation(); } catch (e2) {}
@@ -22222,6 +22343,7 @@ flex-shrink:0;cursor:pointer;
   // 渲染普通编辑器
   function renderPlainEditor(content, filename) {
     const view = document.getElementById('diffView');
+    try { __gmClearFindStateOnTextStructureChange(); } catch (e0) {}
     const text = (content === null || content === undefined) ? '' : String(content);
     view.innerHTML = `
       <div class="plain-editor-container">
@@ -23474,6 +23596,9 @@ flex-shrink:0;cursor:pointer;
 
       window.__plainEditorExternalWatchTimer = setInterval(async () => {
         try {
+          if (document.hidden) return;
+          if (window.__plainEditorExternalWatchInFlight) return;
+          window.__plainEditorExternalWatchInFlight = true;
           if (!window.__plainEditorFilename || !window.__plainEditorIsExternal) {
             __gmStopExternalEditorWatch();
             return;
@@ -23516,6 +23641,8 @@ flex-shrink:0;cursor:pointer;
           }
           window.__plainEditorExternalLastModified = lm;
         } catch (e) {
+        } finally {
+          window.__plainEditorExternalWatchInFlight = false;
         }
       }, 2000);
     } catch (e) {}
@@ -23529,6 +23656,67 @@ flex-shrink:0;cursor:pointer;
       return ''; // 其他浏览器
     }
   });
+
+  function __gmOnPageHidden() {
+    try { __gmStopExternalEditorWatch(); } catch (e0) {}
+    try { stopRealTimeRefresh(); } catch (e1) {}
+    try {
+      if (ws) {
+        try { ws.onopen = null; } catch (e2) {}
+        try { ws.onmessage = null; } catch (e3) {}
+        try { ws.onerror = null; } catch (e4) {}
+        try { ws.onclose = null; } catch (e5) {}
+        try { ws.close(); } catch (e6) {}
+        ws = null;
+      }
+      wsConnected = false;
+      wsConnecting = false;
+      if (wsReconnectTimer) {
+        clearTimeout(wsReconnectTimer);
+        wsReconnectTimer = null;
+      }
+    } catch (e7) {}
+  }
+
+  function __gmOnPageVisible() {
+    try { __gmStartExternalEditorWatch(); } catch (e0) {}
+    try { connectWebSocket(); } catch (e1) {}
+
+    try {
+      setTimeout(() => {
+        try {
+          if (document.hidden) return;
+          startRealTimeRefresh();
+        } catch (e2) {}
+      }, 800);
+    } catch (e3) {}
+
+    try {
+      if (window.__gmPendingFilesUpdate) {
+        const f0 = window.__gmPendingFilesUpdate;
+        window.__gmPendingFilesUpdate = null;
+        handleFilesUpdate(f0);
+      }
+    } catch (e4) {}
+  }
+
+  function __gmInitVisibilityLifecycle() {
+    try {
+      if (window.__gmVisibilityWatcherInited) return;
+      window.__gmVisibilityWatcherInited = true;
+      document.addEventListener('visibilitychange', () => {
+        try {
+          if (document.hidden) {
+            __gmOnPageHidden();
+          } else {
+            __gmOnPageVisible();
+          }
+        } catch (e) {}
+      });
+    } catch (e) {}
+  }
+
+  __gmInitVisibilityLifecycle();
 
   (async () => {
     try {
@@ -23766,49 +23954,42 @@ flex-shrink:0;cursor:pointer;
 
     // 监听 keydown 事件
     document.addEventListener('keydown', (e) => {
+      // Alt键按下 - 单独的Alt，不与其他修饰键组合
       if (e.key === 'Alt' && !e.ctrlKey && !e.shiftKey && !e.metaKey) {
-        try {
-          const ta = document.getElementById('plainEditorTextarea');
-          if (ta && document.activeElement === ta) {
-            e.preventDefault();
-            try { e.stopImmediatePropagation(); } catch (e2) {}
-            try { e.stopPropagation(); } catch (e2) {}
-          }
-        } catch (e2) {}
+        // 阻止浏览器默认的Alt行为（如激活菜单栏）
+        e.preventDefault();
+        try { e.stopImmediatePropagation(); } catch (e2) {}
+        try { e.stopPropagation(); } catch (e2) {}
+        
         if (altPressed) return;
         altPressed = true;
         
+        // 立即显示导航盘（不延迟，避免大文件时卡顿）
         clearTimeout(altTimeout);
-        altTimeout = setTimeout(() => {
-          if (altPressed) {
-            showNavDial();
-          }
-        }, 100);
+        showNavDial();
       }
       
+      // 如果Alt已按下但按了其他键，隐藏导航盘
       if (altPressed && e.key !== 'Alt') {
         clearTimeout(altTimeout);
         hideNavDial();
         altPressed = false;
       }
-    });
+    }, true); // 使用捕获阶段，确保最先执行
 
     // 监听 keyup 事件
     document.addEventListener('keyup', (e) => {
       if (e.key === 'Alt') {
-        try {
-          const ta = document.getElementById('plainEditorTextarea');
-          if (ta && document.activeElement === ta) {
-            e.preventDefault();
-            try { e.stopImmediatePropagation(); } catch (e2) {}
-            try { e.stopPropagation(); } catch (e2) {}
-          }
-        } catch (e2) {}
+        // 阻止浏览器默认的Alt行为
+        e.preventDefault();
+        try { e.stopImmediatePropagation(); } catch (e2) {}
+        try { e.stopPropagation(); } catch (e2) {}
+        
         clearTimeout(altTimeout);
         hideNavDial();
         altPressed = false;
       }
-    });
+    }, true); // 使用捕获阶段，确保最先执行
 
     // 监听窗口失焦
     window.addEventListener('blur', () => {
