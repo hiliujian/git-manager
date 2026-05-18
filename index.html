@@ -1652,6 +1652,37 @@ flex-shrink:0;cursor:pointer;
     .ai-md .ai-code-copy:hover{background:rgba(0,0,0,0.52);border-color:rgba(255,255,255,0.24);}
     [data-theme="light"] .ai-md .ai-code-copy{background:rgba(255,255,255,0.75);border-color:rgba(0,0,0,0.14);}
     [data-theme="light"] .ai-md .ai-code-copy:hover{background:rgba(255,255,255,0.92);border-color:rgba(0,0,0,0.22);}
+    .ai-md .ai-code-run{position:absolute;top:8px;right:56px;z-index:2;
+      font-size:inherit;line-height:1; padding:6px 8px; border-radius:8px;
+      border:1px solid rgba(255,255,255,0.16); background:rgba(0,0,0,0.35);
+      color:var(--text); cursor:pointer; user-select:none; opacity:0;
+      transition:opacity 0.15s ease, background 0.15s ease, border-color 0.15s ease;}
+    .ai-md pre:hover .ai-code-run{opacity:1;}
+    .ai-md .ai-code-run:hover{background:rgba(0,0,0,0.52);border-color:rgba(255,255,255,0.24);}
+    [data-theme="light"] .ai-md .ai-code-run{background:rgba(255,255,255,0.75);border-color:rgba(0,0,0,0.14);}
+    [data-theme="light"] .ai-md .ai-code-run:hover{background:rgba(255,255,255,0.92);border-color:rgba(0,0,0,0.22);}
+    .ai-md .ai-action-log{margin-top:8px;padding:8px 10px;border-radius:10px;
+      border:1px solid rgba(255,255,255,0.10);background:rgba(0,0,0,0.22);
+      color:var(--text2);font-size:11px;white-space:pre-wrap;word-break:break-word;}
+    [data-theme="light"] .ai-md .ai-action-log{border-color:rgba(0,0,0,0.10);background:rgba(0,0,0,0.04);}
+    .ai-md .ai-action-log.ok{border-color:rgba(80,220,140,0.22);}
+    .ai-md .ai-action-log.err{border-color:rgba(255,80,80,0.22);}
+    .ai-md .ai-action-card{margin-top:10px;border-radius:12px;overflow:hidden;
+      border:1px solid rgba(255,255,255,0.10);background:rgba(0,0,0,0.14);}
+    [data-theme="light"] .ai-md .ai-action-card{border-color:rgba(0,0,0,0.10);background:rgba(0,0,0,0.03);}
+    .ai-md .ai-action-card-hd{display:flex;align-items:center;gap:8px;
+      padding:8px 10px;border-bottom:1px solid rgba(255,255,255,0.08);}
+    [data-theme="light"] .ai-md .ai-action-card-hd{border-bottom-color:rgba(0,0,0,0.08);}
+    .ai-md .ai-action-card-title{font-size:12px;color:var(--text);font-weight:600;}
+    .ai-md .ai-action-card-btns{margin-left:auto;display:flex;gap:6px;}
+    .ai-md .ai-action-card .btn{padding:2px 10px;}
+    .ai-md .ai-action-steps{padding:8px 10px;font-size:11px;color:var(--text2);}
+    .ai-md .ai-action-step{display:flex;gap:8px;align-items:flex-start;padding:3px 0;}
+    .ai-md .ai-action-step .k{width:44px;opacity:0.9;}
+    .ai-md .ai-action-step .v{flex:1;word-break:break-word;}
+    .ai-md .ai-action-step .st{width:70px;text-align:right;opacity:0.9;}
+    .ai-md .ai-action-shot{padding:0 10px 10px 10px;}
+    .ai-md .ai-action-shot img{max-width:100%;height:auto;border-radius:10px;}
     .ai-md blockquote{margin:8px 0;padding:6px 10px;border-left:3px solid rgba(110,168,254,0.45);
       color:var(--text2);background:rgba(110,168,254,0.06);border-radius:10px;}
     [data-theme="light"] .ai-md blockquote{background:rgba(76,166,255,0.08);}
@@ -2544,7 +2575,7 @@ flex-shrink:0;cursor:pointer;
                   <input type="text" name="username" autocomplete="username" style="display:none">
                   <div>
                     <label>API Base URL</label>
-                    <input id="aiProfBaseUrl" type="text" placeholder="https://api.openai.com" />
+                    <input id="aiProfBaseUrl" type="text" placeholder="https://api.openai.com" autocomplete="url" />
                   </div>
                   <div class="ai-config-row">
                     <div class="ai-config-label">API Key</div>
@@ -3055,6 +3086,267 @@ flex-shrink:0;cursor:pointer;
           const code = pre.querySelector('code');
           if (!code) continue;
 
+          const getLang = () => {
+            try {
+              const cls = String(code.className || '');
+              const m = cls.match(/language-([a-zA-Z0-9_\-]+)/);
+              if (m && m[1]) return String(m[1] || '').toLowerCase();
+            } catch (e) {}
+            return '';
+          };
+
+          const getCmdText = () => {
+            try {
+              const t = String(code.innerText || code.textContent || '').replace(/\r\n/g, '\n');
+              return t.trim();
+            } catch (e) { return ''; }
+          };
+
+          const isRunnableLang = (lang) => {
+            const s = String(lang || '').toLowerCase();
+            return s === 'bash' || s === 'sh' || s === 'shell' || s === 'cmd' || s === 'bat' || s === 'powershell' || s === 'ps1' || s === 'git';
+          };
+
+          const isSingleLineCmd = (txt) => {
+            const t = String(txt || '');
+            if (!t) return false;
+            if (t.includes('\n')) return false;
+            return true;
+          };
+
+          const __gmAiTryParseBrowserSteps = () => {
+            try {
+              const lang = getLang();
+              if (lang !== 'json') return null;
+              const raw = getCmdText();
+              if (!raw) return null;
+              if (!(raw.startsWith('{') || raw.startsWith('['))) return null;
+              const obj = JSON.parse(raw);
+              let steps = null;
+              let session_id = '';
+              if (Array.isArray(obj)) {
+                steps = obj;
+              } else if (obj && typeof obj === 'object') {
+                session_id = String(obj.session_id || '').trim();
+                if (Array.isArray(obj.steps)) steps = obj.steps;
+              }
+              if (!Array.isArray(steps) || !steps.length) return null;
+              const norm = [];
+              for (const s of steps) {
+                if (!s || typeof s !== 'object') return null;
+                const action = String(s.action || '').trim();
+                const params = (s.params && typeof s.params === 'object') ? s.params : {};
+                if (!action) return null;
+                const a = action.toLowerCase();
+                const allow = (a === 'open' || a === 'click' || a === 'type' || a === 'eval' || a === 'text' || a === 'screenshot' || a === 'wait' || a === 'close');
+                if (!allow) return null;
+                norm.push({ action: a, params });
+              }
+              return { session_id, steps: norm };
+            } catch (e) { return null; }
+          };
+
+          const __gmAiRenderBrowserActionCard = (parsed) => {
+            try {
+              if (!parsed || !parsed.steps || !parsed.steps.length) return;
+              if (pre.getAttribute('data-has-browser-card') === '1') return;
+              pre.setAttribute('data-has-browser-card', '1');
+
+              const sessionId = String(parsed.session_id || '').trim() || ('ac_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7));
+
+              const card = document.createElement('div');
+              card.className = 'ai-action-card';
+
+              const hd = document.createElement('div');
+              hd.className = 'ai-action-card-hd';
+              const title = document.createElement('div');
+              title.className = 'ai-action-card-title';
+              title.textContent = 'Browser Flow';
+              const btns = document.createElement('div');
+              btns.className = 'ai-action-card-btns';
+
+              const runBtn = document.createElement('button');
+              runBtn.type = 'button';
+              runBtn.className = 'btn';
+              runBtn.textContent = '执行';
+
+              const stopBtn = document.createElement('button');
+              stopBtn.type = 'button';
+              stopBtn.className = 'btn';
+              stopBtn.textContent = '终止';
+              stopBtn.style.display = 'none';
+
+              const retryBtn = document.createElement('button');
+              retryBtn.type = 'button';
+              retryBtn.className = 'btn';
+              retryBtn.textContent = '重试';
+              retryBtn.style.display = 'none';
+
+              btns.appendChild(runBtn);
+              btns.appendChild(stopBtn);
+              btns.appendChild(retryBtn);
+              hd.appendChild(title);
+              hd.appendChild(btns);
+
+              const stepsBox = document.createElement('div');
+              stepsBox.className = 'ai-action-steps';
+
+              const logEl = document.createElement('div');
+              logEl.className = 'ai-action-log';
+              logEl.style.margin = '0 10px 10px 10px';
+              logEl.textContent = '就绪';
+
+              const shotBox = document.createElement('div');
+              shotBox.className = 'ai-action-shot';
+              shotBox.style.display = 'none';
+
+              const stepNodes = [];
+              parsed.steps.forEach((st, idx) => {
+                const row = document.createElement('div');
+                row.className = 'ai-action-step';
+                const k = document.createElement('div');
+                k.className = 'k';
+                k.textContent = String(idx + 1);
+                const v = document.createElement('div');
+                v.className = 'v';
+                v.textContent = st.action + (st && st.params ? ('  ' + JSON.stringify(st.params)) : '');
+                const s = document.createElement('div');
+                s.className = 'st';
+                s.textContent = '';
+                row.appendChild(k);
+                row.appendChild(v);
+                row.appendChild(s);
+                stepsBox.appendChild(row);
+                stepNodes.push({ stEl: s });
+              });
+
+              card.appendChild(hd);
+              card.appendChild(stepsBox);
+              card.appendChild(shotBox);
+              card.appendChild(logEl);
+              pre.appendChild(card);
+
+              const state = {
+                running: false,
+                abort: false,
+                lastParsed: parsed,
+              };
+
+              const setRunning = (v) => {
+                state.running = !!v;
+                runBtn.disabled = !!v;
+                stopBtn.style.display = v ? '' : 'none';
+                retryBtn.style.display = (!v) ? '' : 'none';
+                if (v) {
+                  retryBtn.style.display = 'none';
+                }
+              };
+
+              const setLog = (txt, cls) => {
+                try {
+                  logEl.classList.remove('ok');
+                  logEl.classList.remove('err');
+                  if (cls === 'ok') logEl.classList.add('ok');
+                  if (cls === 'err') logEl.classList.add('err');
+                  logEl.textContent = String(txt || '');
+                } catch (e) {}
+              };
+
+              const renderShot = (b64) => {
+                try {
+                  const s = String(b64 || '').trim();
+                  if (!s) {
+                    shotBox.style.display = 'none';
+                    shotBox.innerHTML = '';
+                    return;
+                  }
+                  shotBox.style.display = '';
+                  shotBox.innerHTML = `<img src="data:image/png;base64,${s}">`;
+                } catch (e) {}
+              };
+
+              const runFlow = async () => {
+                if (state.running) return;
+                state.abort = false;
+                renderShot('');
+                stepNodes.forEach(n => { try { n.stEl.textContent = ''; } catch (e) {} });
+
+                const preview = (() => {
+                  try {
+                    const lines = state.lastParsed.steps.map((s, i) => `${i + 1}. ${s.action} ${JSON.stringify(s.params || {})}`);
+                    return lines.join('\n');
+                  } catch (e) { return ''; }
+                })();
+
+                try {
+                  const ok = await showConfirm({
+                    title: '确认执行 Browser Flow',
+                    message: preview,
+                    okText: '执行',
+                    cancelText: '取消',
+                    danger: true,
+                  });
+                  if (!ok) return;
+                } catch (e) {}
+
+                setRunning(true);
+                setLog('执行中...', null);
+
+                try {
+                  for (let i = 0; i < state.lastParsed.steps.length; i++) {
+                    if (state.abort) {
+                      setLog('已终止', 'err');
+                      break;
+                    }
+                    const st = state.lastParsed.steps[i];
+                    try { stepNodes[i].stEl.textContent = '执行中'; } catch (e) {}
+                    const r = await POST('/api/browser_tool', { action: st.action, session_id: sessionId, params: st.params || {} });
+                    if (!(r && r.ok)) {
+                      try { stepNodes[i].stEl.textContent = '失败'; } catch (e) {}
+                      setLog(String((r && (r.msg || r.error)) || '执行失败'), 'err');
+                      return;
+                    }
+                    try { stepNodes[i].stEl.textContent = '成功'; } catch (e) {}
+
+                    try {
+                      if (r && r.image_b64) {
+                        renderShot(String(r.image_b64 || ''));
+                      }
+                    } catch (e) {}
+                  }
+
+                  if (!state.abort) {
+                    setLog('✓ 执行完成', 'ok');
+                  }
+                } catch (e) {
+                  setLog(String((e && e.message) || e || '执行失败'), 'err');
+                } finally {
+                  setRunning(false);
+                }
+              };
+
+              runBtn.addEventListener('click', (e) => {
+                try { e.preventDefault(); e.stopPropagation(); } catch (e0) {}
+                runFlow();
+              });
+              retryBtn.addEventListener('click', (e) => {
+                try { e.preventDefault(); e.stopPropagation(); } catch (e0) {}
+                runFlow();
+              });
+              stopBtn.addEventListener('click', (e) => {
+                try { e.preventDefault(); e.stopPropagation(); } catch (e0) {}
+                state.abort = true;
+                try { stopBtn.disabled = true; stopBtn.textContent = '终止中'; } catch (e1) {}
+                try {
+                  POST('/api/browser_tool', { action: 'close', session_id: sessionId, params: {} }).catch(()=>{});
+                } catch (e2) {}
+                setTimeout(() => {
+                  try { stopBtn.disabled = false; stopBtn.textContent = '终止'; } catch (e3) {}
+                }, 800);
+              });
+            } catch (e) {}
+          };
+
           try {
             if (pre.getAttribute('data-pre-wrapped') !== '1') {
               const wrap = document.createElement('div');
@@ -3069,6 +3361,89 @@ flex-shrink:0;cursor:pointer;
               pre.setAttribute('data-pre-wrapped', '1');
             }
           } catch (eWrap) {}
+
+          try {
+            const lang = getLang();
+            const txt = getCmdText();
+            const allowRun = isRunnableLang(lang) && isSingleLineCmd(txt);
+            if (allowRun) {
+              const runBtn = document.createElement('button');
+              runBtn.type = 'button';
+              runBtn.className = 'ai-code-run';
+              runBtn.textContent = '运行';
+              runBtn.title = '执行命令（单行）';
+              runBtn.addEventListener('click', async (ev) => {
+                try { ev.preventDefault(); ev.stopPropagation(); } catch (e0) {}
+
+                const cmd0 = getCmdText();
+                if (!cmd0 || !isSingleLineCmd(cmd0)) {
+                  toast('只支持单行命令', 'err');
+                  return;
+                }
+
+                try {
+                  const ok = await showConfirm({
+                    title: '确认执行命令',
+                    message: cmd0,
+                    okText: '执行',
+                    cancelText: '取消',
+                    danger: true,
+                  });
+                  if (!ok) return;
+                } catch (eC) {}
+
+                let logEl = null;
+                try {
+                  logEl = pre.querySelector('.ai-action-log');
+                  if (!logEl) {
+                    logEl = document.createElement('div');
+                    logEl.className = 'ai-action-log';
+                    pre.appendChild(logEl);
+                  }
+                  logEl.classList.remove('ok');
+                  logEl.classList.remove('err');
+                  logEl.textContent = '执行中...';
+                } catch (e1) {}
+
+                try {
+                  runBtn.disabled = true;
+                  runBtn.textContent = '运行中';
+                } catch (e2) {}
+
+                try {
+                  const r = await POST('/api/run_cmd', { cmd: cmd0, timeout: 60 });
+                  const ok1 = !!(r && r.ok);
+                  const out = String((r && (r.output || r.stdout || r.result || r.msg)) || '');
+                  if (logEl) {
+                    logEl.classList.toggle('ok', ok1);
+                    logEl.classList.toggle('err', !ok1);
+                    logEl.textContent = out || (ok1 ? '✓ 执行成功（无输出）' : (String((r && (r.error || r.msg)) || '执行失败') || '执行失败'));
+                  }
+                  if (!ok1) {
+                    __gmToastApiError('执行失败', r, String((r && (r.msg || r.error)) || '执行失败'));
+                  }
+                } catch (e3) {
+                  if (logEl) {
+                    logEl.classList.add('err');
+                    logEl.textContent = String((e3 && e3.message) || e3 || '执行失败');
+                  }
+                } finally {
+                  try {
+                    runBtn.disabled = false;
+                    runBtn.textContent = '运行';
+                  } catch (e4) {}
+                }
+              });
+              pre.insertBefore(runBtn, pre.firstChild);
+            }
+          } catch (eRun) {}
+
+          try {
+            const parsed = __gmAiTryParseBrowserSteps();
+            if (parsed) {
+              __gmAiRenderBrowserActionCard(parsed);
+            }
+          } catch (eCard) {}
 
           const btn = document.createElement('button');
           btn.type = 'button';
@@ -4847,13 +5222,16 @@ flex-shrink:0;cursor:pointer;
     }
   }
 
-  function __gmOverlayAddRect(overlay, hostRect, r) {
+  function __gmOverlayAddRect(overlay, hostRect, r, hostScrollLeft, hostScrollTop) {
     try {
       if (!overlay || !r) return;
+      const sx = Number(hostScrollLeft || 0);
+      const sy = Number(hostScrollTop || 0);
       const el = document.createElement('div');
       el.className = 'find-ol-hit';
-      el.style.left = `${Math.max(0, r.left - hostRect.left)}px`;
-      el.style.top = `${Math.max(0, r.top - hostRect.top)}px`;
+      // Note: overlay is inside a scroll container; compensate scroll offsets to keep rects aligned.
+      el.style.left = `${Math.max(0, (r.left - hostRect.left) + sx)}px`;
+      el.style.top = `${Math.max(0, (r.top - hostRect.top) + sy)}px`;
       el.style.width = `${Math.max(0, r.width)}px`;
       el.style.height = `${Math.max(0, r.height)}px`;
       overlay.appendChild(el);
@@ -4919,11 +5297,14 @@ flex-shrink:0;cursor:pointer;
             overlay.innerHTML = '';
 
             const hostRect = host.getBoundingClientRect();
+            const hostScrollTop = Number(host.scrollTop || 0);
+            const hostScrollLeft = Number(host.scrollLeft || 0);
             const lines = host.querySelectorAll ? host.querySelectorAll('.dl .lc') : [];
             let rectCount = 0;
             for (let i = 0; i < lines.length; i++) {
               const lc = lines[i];
               if (!lc) continue;
+              if (lc.closest && lc.closest('.revert-block-hint')) continue;
               // Editable lines: still allow overlay rects (no DOM mutation)
               const idxObj = __gmBuildTextNodeIndex(lc);
               if (!idxObj || !idxObj.text) continue;
@@ -4943,7 +5324,7 @@ flex-shrink:0;cursor:pointer;
                     rg.setEnd(b.node, b.offset);
                     const rects = rg.getClientRects ? Array.from(rg.getClientRects()) : [];
                     for (let k = 0; k < rects.length; k++) {
-                      __gmOverlayAddRect(overlay, hostRect, rects[k]);
+                      __gmOverlayAddRect(overlay, hostRect, rects[k], hostScrollLeft, hostScrollTop);
                       rectCount++;
                       if (rectCount > 1500) break;
                     }
@@ -5069,6 +5450,7 @@ flex-shrink:0;cursor:pointer;
 
     const rows = Array.from(dv.querySelectorAll('.dl'));
     rows.forEach(r => {
+      if (r && r.classList && r.classList.contains('revert-block-hint')) return;
       const t = (r.innerText || '').toLowerCase();
       if (t.includes(q.toLowerCase())) findMatches.push(r);
     }, true);
@@ -10416,8 +10798,10 @@ flex-shrink:0;cursor:pointer;
         const rid = String(window.__gmAiActiveRunId || '').trim();
         if (rid) {
           POST('/api/hivo_agent_cancel', { run_id: rid }).catch(()=>{});
+          try { if (__gmAiRunStatusCache && __gmAiRunStatusCache.delete) __gmAiRunStatusCache.delete(rid); } catch (eC1) {}
         }
       } catch (eC0) {}
+      try { window.__gmAiActiveRunId = ''; } catch (eAR0) {}
       try {
         const msgs = Array.isArray(__gmAiChatMessages) ? __gmAiChatMessages : [];
         const last = msgs.length ? msgs[msgs.length - 1] : null;
@@ -12805,6 +13189,7 @@ flex-shrink:0;cursor:pointer;
   // ---- File list context menu ----------------------------------------------
   let __gmFileCtxMenuEl = null;
   let __gmFileCtxState = null;
+  let __gmFileBlankCtxMenuEl = null;
 
   function __gmEnsureFileCtxMenu() {
     if (__gmFileCtxMenuEl) return __gmFileCtxMenuEl;
@@ -12866,6 +13251,139 @@ flex-shrink:0;cursor:pointer;
     el.classList.remove('show');
     el.style.display = 'none';
     __gmFileCtxState = null;
+  }
+
+  function __gmEnsureFileBlankCtxMenu() {
+    if (__gmFileBlankCtxMenuEl) return __gmFileBlankCtxMenuEl;
+    const el = document.createElement('div');
+    el.className = 'ctx-menu';
+    el.id = '__gmFileBlankCtxMenu';
+    el.innerHTML = `
+      <div class="ctx-hint" id="__gmFileBlankCtxHint">文件操作</div>
+      <div class="ctx-item" data-act="new_file">新建文件</div>
+      <div class="ctx-item" data-act="new_folder">新建文件夹</div>
+    `;
+    document.body.appendChild(el);
+    __gmFileBlankCtxMenuEl = el;
+
+    el.addEventListener('click', async (e) => {
+      try {
+        const t = e && e.target;
+        const item = t && t.closest ? t.closest('.ctx-item') : null;
+        if (!item || !el.contains(item)) return;
+        const act = String(item.getAttribute('data-act') || '');
+        if (!act) return;
+        await __gmHandleFileBlankCtxAction(act);
+      } catch (e2) {}
+    }, true);
+
+    document.addEventListener('mousedown', (e) => {
+      try {
+        if (!__gmFileBlankCtxMenuEl) return;
+        if (!__gmFileBlankCtxMenuEl.classList.contains('show')) return;
+        const t = e && e.target;
+        if (t && (__gmFileBlankCtxMenuEl === t || (__gmFileBlankCtxMenuEl.contains && __gmFileBlankCtxMenuEl.contains(t)))) return;
+        __gmHideFileBlankCtxMenu();
+      } catch (e2) {}
+    }, true);
+
+    document.addEventListener('keydown', (e) => {
+      try {
+        if (e.key !== 'Escape') return;
+        if (!__gmFileBlankCtxMenuEl || !__gmFileBlankCtxMenuEl.classList.contains('show')) return;
+        __gmHideFileBlankCtxMenu();
+      } catch (e2) {}
+    }, true);
+
+    return el;
+  }
+
+  function __gmHideFileBlankCtxMenu() {
+    const el = __gmFileBlankCtxMenuEl;
+    if (!el) return;
+    el.classList.remove('show');
+    el.style.display = 'none';
+  }
+
+  function __gmShowFileBlankCtxMenu(x, y) {
+    const el = __gmEnsureFileBlankCtxMenu();
+    el.style.display = 'block';
+    el.classList.add('show');
+    try {
+      const r = el.getBoundingClientRect();
+      const vw = window.innerWidth || document.documentElement.clientWidth || 0;
+      const vh = window.innerHeight || document.documentElement.clientHeight || 0;
+      let left = Number(x || 0);
+      let top = Number(y || 0);
+      left = Math.min(left, Math.max(6, vw - r.width - 6));
+      top = Math.min(top, Math.max(6, vh - r.height - 6));
+      el.style.left = left + 'px';
+      el.style.top = top + 'px';
+    } catch (e) {
+      el.style.left = (x || 10) + 'px';
+      el.style.top = (y || 10) + 'px';
+    }
+  }
+
+  async function __gmHandleFileBlankCtxAction(act) {
+    try { __gmHideFileBlankCtxMenu(); } catch (e0) {}
+    const a = String(act || '');
+    if (a === 'new_file') {
+      const name = await showPrompt({
+        title: '新建文件',
+        message: '请输入文件路径（相对仓库根目录）',
+        defaultValue: '',
+        okText: '创建',
+        cancelText: '取消',
+      });
+      if (!name) return;
+      const p = String(name || '').trim().replace(/\\/g, '/').replace(/^\/+/, '');
+      if (!p) return;
+
+      const exists = (() => {
+        try {
+          const pk = p.toLowerCase();
+          return (files || []).some(f => f && String(f.path || '').replace(/\\/g, '/').toLowerCase() === pk);
+        } catch (e) { return false; }
+      })();
+      if (exists) {
+        __gmToastApiError('创建失败', null, '文件已存在');
+        return;
+      }
+
+      const res = await POST('/api/save_file', { path: p, content: '' });
+      if (!(res && res.ok)) {
+        __gmToastApiError('创建失败', res, String((res && (res.msg || res.error)) || '创建失败'));
+        return;
+      }
+      await refresh();
+      try {
+        const idx = (files || []).findIndex(f => f && String(f.path || '').replace(/\\/g, '/').toLowerCase() === p.toLowerCase());
+        if (idx >= 0) selectFile(idx);
+      } catch (e) {}
+      return;
+    }
+
+    if (a === 'new_folder') {
+      const name = await showPrompt({
+        title: '新建文件夹',
+        message: '请输入文件夹路径（相对仓库根目录）',
+        defaultValue: '',
+        okText: '创建',
+        cancelText: '取消',
+      });
+      if (!name) return;
+      const p = String(name || '').trim().replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
+      if (!p) return;
+
+      const res = await POST('/api/mkdir', { path: p });
+      if (!(res && res.ok)) {
+        __gmToastApiError('创建失败', res, String((res && (res.msg || res.error)) || '创建失败'));
+        return;
+      }
+      await refresh();
+      return;
+    }
   }
 
   function __gmShowFileCtxMenu(x, y, state) {
@@ -15036,7 +15554,12 @@ flex-shrink:0;cursor:pointer;
           try {
             const t = e && e.target;
             const row = (t && t.closest) ? t.closest('.fi') : null;
-            if (!row || !el.contains(row)) return;
+            if (!row || !el.contains(row)) {
+              e.preventDefault();
+              try { e.stopPropagation(); } catch (e2) {}
+              __gmShowFileBlankCtxMenu(e.clientX, e.clientY);
+              return;
+            }
             e.preventDefault();
             try { e.stopPropagation(); } catch (e2) {}
             const idx = Number(row.dataset ? row.dataset.idx : NaN);

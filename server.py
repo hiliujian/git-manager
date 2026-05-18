@@ -8,7 +8,7 @@ import json
 import time
 import re
 from collections import deque, OrderedDict
-import subprocess, os, sys, logging, threading, hashlib, difflib, shutil, mimetypes
+import subprocess, os, sys, logging, threading, hashlib, difflib, shutil, mimetypes, base64
 from pathlib import Path
 import urllib.request
 import urllib.error
@@ -34,6 +34,11 @@ except ImportError:
     CHARDET_AVAILABLE = False
     print("提示: chardet 库未安装，中文编码检测可能不够准确")
     print("安装方法: pip install chardet")
+
+try:
+    from playwright.sync_api import sync_playwright  # type: ignore
+except Exception:
+    sync_playwright = None
 
 # ════════════════════════════════════════════════════════
 #  日志系统配置
@@ -193,6 +198,192 @@ def workspace_context_text():
 
 ai_config_lock = threading.Lock()
 ai_history_lock = threading.Lock()
+
+
+_pw_lock = threading.Lock()
+_pw_runtime = {
+    "pw": None,
+    "browser": None,
+    "sessions": {},
+}
+
+
+def _pw_is_available():
+    return sync_playwright is not None
+
+
+def _pw_get_session(session_id: str):
+    sid = str(session_id or "").strip() or "global"
+    with _pw_lock:
+        sess = _pw_runtime.get("sessions", {}).get(sid)
+        if isinstance(sess, dict) and sess.get("page") is not None:
+            return sid, sess
+
+        if not _pw_is_available():
+            return sid, None
+
+        if _pw_runtime.get("pw") is None:
+            _pw_runtime["pw"] = sync_playwright().start()
+        if _pw_runtime.get("browser") is None:
+            _pw_runtime["browser"] = _pw_runtime["pw"].chromium.launch(headless=True)
+
+        ctx = _pw_runtime["browser"].new_context()
+        page = ctx.new_page()
+        sess = {"ctx": ctx, "page": page}
+        _pw_runtime.setdefault("sessions", {})[sid] = sess
+        return sid, sess
+
+
+def _pw_require_session(session_id: str):
+    if not _pw_is_available():
+        return False, "Playwright 未安装（可选能力）。如需启用请安装 playwright 并执行 playwright install。", None
+    try:
+        sid, sess = _pw_get_session(session_id)
+        if sess is None:
+            return False, "Playwright 未安装（可选能力）。如需启用请安装 playwright 并执行 playwright install。", None
+        return True, "", sess
+    except Exception as e:
+        return False, str(e), None
+
+
+def _pw_open(session_id: str, url: str, wait_ms: int = 0):
+    ok, msg, sess = _pw_require_session(session_id)
+    if not ok:
+        return False, msg, {}
+    u = str(url or "").strip()
+    if not u:
+        return False, "缺少 url", {}
+    if not (u.startswith("http://") or u.startswith("https://")):
+        return False, "仅支持 http/https", {}
+    page = sess.get("page")
+    page.goto(u)
+    if int(wait_ms or 0) > 0:
+        try:
+            page.wait_for_timeout(int(wait_ms))
+        except Exception:
+            pass
+    return True, "", {"session_id": str(session_id or "").strip() or "global", "obs": _pw_obs(sess)}
+
+
+def _pw_click(session_id: str, selector: str, wait_ms: int = 0):
+    ok, msg, sess = _pw_require_session(session_id)
+    if not ok:
+        return False, msg, {}
+    sel = str(selector or "").strip()
+    if not sel:
+        return False, "缺少 selector", {}
+    page = sess.get("page")
+    page.click(sel)
+    if int(wait_ms or 0) > 0:
+        try:
+            page.wait_for_timeout(int(wait_ms))
+        except Exception:
+            pass
+    return True, "", {"session_id": str(session_id or "").strip() or "global", "obs": _pw_obs(sess)}
+
+
+def _pw_type(session_id: str, selector: str, text: str, clear: bool = True, wait_ms: int = 0):
+    ok, msg, sess = _pw_require_session(session_id)
+    if not ok:
+        return False, msg, {}
+    sel = str(selector or "").strip()
+    if not sel:
+        return False, "缺少 selector", {}
+    page = sess.get("page")
+    if clear:
+        try:
+            page.fill(sel, "")
+        except Exception:
+            pass
+    page.type(sel, str(text or ""))
+    if int(wait_ms or 0) > 0:
+        try:
+            page.wait_for_timeout(int(wait_ms))
+        except Exception:
+            pass
+    return True, "", {"session_id": str(session_id or "").strip() or "global", "obs": _pw_obs(sess)}
+
+
+def _pw_eval(session_id: str, script: str):
+    ok, msg, sess = _pw_require_session(session_id)
+    if not ok:
+        return False, msg, {}
+    js = str(script or "")
+    if not js.strip():
+        return False, "缺少 script", {}
+    page = sess.get("page")
+    out = page.evaluate(js)
+    return True, "", {"session_id": str(session_id or "").strip() or "global", "result": out, "obs": _pw_obs(sess)}
+
+
+def _pw_text(session_id: str, selector: str = ""):
+    ok, msg, sess = _pw_require_session(session_id)
+    if not ok:
+        return False, msg, {}
+    page = sess.get("page")
+    sel = str(selector or "").strip()
+    if sel:
+        out = page.text_content(sel)
+        return True, "", {"session_id": str(session_id or "").strip() or "global", "text": str(out or ""), "obs": _pw_obs(sess)}
+    out = page.content()
+    out_s = str(out or "")
+    if len(out_s) > 12000:
+        out_s = out_s[:12000]
+    return True, "", {"session_id": str(session_id or "").strip() or "global", "html": out_s, "obs": _pw_obs(sess)}
+
+
+def _pw_screenshot(session_id: str, full_page: bool = True):
+    ok, msg, sess = _pw_require_session(session_id)
+    if not ok:
+        return False, msg, {}
+    page = sess.get("page")
+    b = page.screenshot(full_page=bool(full_page))
+    b64 = base64.b64encode(b).decode("ascii")
+    return True, "", {"session_id": str(session_id or "").strip() or "global", "image_b64": b64, "obs": _pw_obs(sess)}
+
+
+def _pw_wait(session_id: str, ms: int = 0):
+    ok, msg, sess = _pw_require_session(session_id)
+    if not ok:
+        return False, msg, {}
+    page = sess.get("page")
+    try:
+        page.wait_for_timeout(int(ms or 0))
+    except Exception:
+        pass
+    return True, "", {"session_id": str(session_id or "").strip() or "global", "obs": _pw_obs(sess)}
+
+
+def _pw_close_session(session_id: str):
+    sid = str(session_id or "").strip() or "global"
+    with _pw_lock:
+        sess = _pw_runtime.get("sessions", {}).pop(sid, None)
+    if isinstance(sess, dict):
+        try:
+            ctx = sess.get("ctx")
+            if ctx is not None:
+                ctx.close()
+        except Exception:
+            pass
+    return True
+
+
+def _pw_obs(sess: dict):
+    try:
+        page = sess.get("page")
+        if page is None:
+            return {}
+        try:
+            url = str(page.url or "")
+        except Exception:
+            url = ""
+        try:
+            title = str(page.title() or "")
+        except Exception:
+            title = ""
+        return {"url": url, "title": title}
+    except Exception:
+        return {}
 
 _hivo_mem_lock = threading.Lock()
 _hivo_session_mem: dict = {}  # session_id -> {summary:str, chat:list[dict], tool_log:list[dict], tool_cache:dict}
@@ -846,6 +1037,7 @@ def _hivo_load_cfg():
                     "context_refs_enabled": True,
                     "web_search_enabled": False,
                     "topic_isolation_enabled": True,
+                    "browser_auto_screenshot": False,
                 },
                 "active_profile_id": "",
                 "profiles": [],
@@ -882,6 +1074,8 @@ def _hivo_load_cfg():
                     _hivo_cfg_cache["features"] = {}
                 if "web_search_enabled" not in _hivo_cfg_cache["features"]:
                     _hivo_cfg_cache["features"]["web_search_enabled"] = False
+                if "browser_auto_screenshot" not in _hivo_cfg_cache["features"]:
+                    _hivo_cfg_cache["features"]["browser_auto_screenshot"] = False
             except Exception as e:
                 logger.debug(f"Exception ignored: {e}")
             try:
@@ -4019,6 +4213,25 @@ def rename_file(old_path: str, new_path: str):
         return False, str(e)
 
 
+def mkdir_repo(rel_path: str):
+    if not REPO_PATH:
+        return False, "未打开仓库"
+    rp = str(rel_path or "").strip().replace("\\", "/").lstrip("/")
+    rp = rp.rstrip("/")
+    if not rp:
+        return False, "缺少 path"
+    full = _safe_repo_abspath(rp)
+    if not full:
+        return False, "非法路径"
+    try:
+        Path(full).mkdir(parents=True, exist_ok=False)
+        return True, ""
+    except FileExistsError:
+        return False, "目录已存在"
+    except Exception as e:
+        return False, str(e)
+
+
 def revert_hunk(filepath: str, hunk_idx: int, status: str, ctx_lines: int = 5):
     raw_patch, err = _get_raw_file_diff_patch(filepath, status, ctx_lines=ctx_lines)
     if err:
@@ -5195,6 +5408,7 @@ def get_capabilities_spec():
         {"method": "POST", "path": "/api/open_file", "body": {"name": "<name or rel path>", "view": "editor/split/change/unified"}},
         {"method": "POST", "path": "/api/verify_python", "body": {"paths": ["<rel>"]}},
         {"method": "POST", "path": "/api/run_cmd", "body": {"cmd": "<single line>", "timeout": 30, "cwd": "<rel?>"}},
+        {"method": "POST", "path": "/api/browser_tool", "body": {"action": "open/click/type/eval/text/screenshot/wait/close", "session_id": "<id>", "params": {}}},
         {"method": "POST", "path": "/api/undo", "body": {}},
         {"method": "GET", "path": "/api/undo_stats"},
         {"method": "GET", "path": "/api/capabilities"},
@@ -5246,6 +5460,99 @@ def get_capabilities_spec():
                 "new_path": {"type": "string", "desc": "新相对路径"},
             },
             "example": {"type": "rename_file", "old_path": "a.txt", "new_path": "b.txt"},
+        },
+        {
+            "type": "mkdir",
+            "desc": "创建目录（递归创建父目录）。",
+            "required": ["path"],
+            "properties": {
+                "path": {"type": "string", "desc": "相对路径，例如 src/utils"},
+            },
+            "example": {"type": "mkdir", "path": "docs"},
+        },
+        {
+            "type": "browser_open",
+            "desc": "（可选）Playwright：打开网页。未安装 Playwright 时返回 ok=false。",
+            "required": ["url"],
+            "properties": {
+                "session_id": {"type": "string", "desc": "可选，会话 id（默认 global）"},
+                "url": {"type": "string", "desc": "http/https URL"},
+                "wait_ms": {"type": "number", "desc": "可选，打开后等待毫秒"},
+            },
+            "example": {"type": "browser_open", "session_id": "s1", "url": "https://example.com", "wait_ms": 500},
+        },
+        {
+            "type": "browser_click",
+            "desc": "（可选）Playwright：点击元素（CSS selector）。未安装 Playwright 时返回 ok=false。",
+            "required": ["selector"],
+            "properties": {
+                "session_id": {"type": "string", "desc": "可选，会话 id（默认 global）"},
+                "selector": {"type": "string", "desc": "CSS selector"},
+                "wait_ms": {"type": "number", "desc": "可选，点击后等待毫秒"},
+            },
+            "example": {"type": "browser_click", "session_id": "s1", "selector": "button[type=submit]", "wait_ms": 500},
+        },
+        {
+            "type": "browser_type",
+            "desc": "（可选）Playwright：在输入框输入文本。未安装 Playwright 时返回 ok=false。",
+            "required": ["selector", "text"],
+            "properties": {
+                "session_id": {"type": "string", "desc": "可选，会话 id（默认 global）"},
+                "selector": {"type": "string", "desc": "CSS selector"},
+                "text": {"type": "string", "desc": "输入文本"},
+                "clear": {"type": "boolean", "desc": "可选，是否先清空（默认 true）"},
+                "wait_ms": {"type": "number", "desc": "可选，输入后等待毫秒"},
+            },
+            "example": {"type": "browser_type", "session_id": "s1", "selector": "#q", "text": "hello", "clear": True},
+        },
+        {
+            "type": "browser_eval",
+            "desc": "（可选）Playwright：执行页面 JS 并返回结果。未安装 Playwright 时返回 ok=false。",
+            "required": ["script"],
+            "properties": {
+                "session_id": {"type": "string", "desc": "可选，会话 id（默认 global）"},
+                "script": {"type": "string", "desc": "JS 表达式/函数体（evaluate）"},
+            },
+            "example": {"type": "browser_eval", "session_id": "s1", "script": "() => document.title"},
+        },
+        {
+            "type": "browser_text",
+            "desc": "（可选）Playwright：获取页面内容（selector 则取 textContent，否则返回 html 截断）。未安装 Playwright 时返回 ok=false。",
+            "required": [],
+            "properties": {
+                "session_id": {"type": "string", "desc": "可选，会话 id（默认 global）"},
+                "selector": {"type": "string", "desc": "可选，CSS selector"},
+            },
+            "example": {"type": "browser_text", "session_id": "s1", "selector": "body"},
+        },
+        {
+            "type": "browser_screenshot",
+            "desc": "（可选）Playwright：截图（base64 png）。未安装 Playwright 时返回 ok=false。",
+            "required": [],
+            "properties": {
+                "session_id": {"type": "string", "desc": "可选，会话 id（默认 global）"},
+                "full_page": {"type": "boolean", "desc": "可选，是否整页（默认 true）"},
+            },
+            "example": {"type": "browser_screenshot", "session_id": "s1", "full_page": True},
+        },
+        {
+            "type": "browser_wait",
+            "desc": "（可选）Playwright：等待毫秒。未安装 Playwright 时返回 ok=false。",
+            "required": ["ms"],
+            "properties": {
+                "session_id": {"type": "string", "desc": "可选，会话 id（默认 global）"},
+                "ms": {"type": "number", "desc": "等待毫秒"},
+            },
+            "example": {"type": "browser_wait", "session_id": "s1", "ms": 1000},
+        },
+        {
+            "type": "browser_close",
+            "desc": "（可选）Playwright：关闭会话页面。未安装 Playwright 时返回 ok=false。",
+            "required": [],
+            "properties": {
+                "session_id": {"type": "string", "desc": "可选，会话 id（默认 global）"},
+            },
+            "example": {"type": "browser_close", "session_id": "s1"},
         },
         {
             "type": "revert_hunk",
@@ -6634,6 +6941,61 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
             notify_files_updated()
         return bool(ok1), msg1 or "", {"old_path": oldp, "new_path": newp}
 
+    if t == "mkdir":
+        rp = str(tool.get("path") or "").strip()
+        ok1, msg1 = mkdir_repo(rp)
+        if ok1:
+            invalidate_changed_files_cache()
+            notify_files_updated()
+        return bool(ok1), msg1 or "", {"path": rp}
+
+    if t == "browser_open":
+        sid = str(tool.get("session_id") or run_id or "global").strip() or "global"
+        u = str(tool.get("url") or "").strip()
+        wait_ms = int(tool.get("wait_ms") or 0)
+        return _pw_open(sid, u, wait_ms=wait_ms)
+
+    if t == "browser_click":
+        sid = str(tool.get("session_id") or run_id or "global").strip() or "global"
+        sel = str(tool.get("selector") or "").strip()
+        wait_ms = int(tool.get("wait_ms") or 0)
+        return _pw_click(sid, sel, wait_ms=wait_ms)
+
+    if t == "browser_type":
+        sid = str(tool.get("session_id") or run_id or "global").strip() or "global"
+        sel = str(tool.get("selector") or "").strip()
+        txt = str(tool.get("text") or "")
+        clear = bool(tool.get("clear", True))
+        wait_ms = int(tool.get("wait_ms") or 0)
+        return _pw_type(sid, sel, txt, clear=clear, wait_ms=wait_ms)
+
+    if t == "browser_eval":
+        sid = str(tool.get("session_id") or run_id or "global").strip() or "global"
+        js = str(tool.get("script") or "")
+        return _pw_eval(sid, js)
+
+    if t == "browser_text":
+        sid = str(tool.get("session_id") or run_id or "global").strip() or "global"
+        sel = str(tool.get("selector") or "").strip()
+        return _pw_text(sid, selector=sel)
+
+    if t == "browser_screenshot":
+        sid = str(tool.get("session_id") or run_id or "global").strip() or "global"
+        full_page = bool(tool.get("full_page", True))
+        return _pw_screenshot(sid, full_page=full_page)
+
+    if t == "browser_wait":
+        sid = str(tool.get("session_id") or run_id or "global").strip() or "global"
+        ms = int(tool.get("ms") or 0)
+        return _pw_wait(sid, ms=ms)
+
+    if t == "browser_close":
+        sid = str(tool.get("session_id") or run_id or "global").strip() or "global"
+        if not _pw_is_available():
+            return False, "Playwright 未安装（可选能力）。", {}
+        _pw_close_session(sid)
+        return True, "", {"session_id": sid}
+
     if t == "revert_file":
         rp = str(tool.get("path") or "").strip()
         st = str(tool.get("status") or "M").strip() or "M"
@@ -7476,6 +7838,40 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
 
             receipts.append({"type": name, "ok": bool(ok1), "msg": msg1 or "", "data": data1})
 
+        # Auto browser screenshot: only when the round includes a state-changing browser action
+        # (open/click/type) but no screenshot was taken, append one extra receipt.
+        try:
+            try:
+                cfgS = _hivo_load_cfg()
+                featS = cfgS.get("features") if isinstance(cfgS, dict) else None
+                featS = featS if isinstance(featS, dict) else {}
+                auto_enabled = bool(featS.get("browser_auto_screenshot", False))
+            except Exception:
+                auto_enabled = False
+            if not auto_enabled:
+                raise Exception("auto_screenshot_disabled")
+
+            had_browser_action = False
+            had_shot = False
+            sid_auto = ""
+            for r in receipts:
+                nm0 = str(r.get("type") or "")
+                if nm0 in ("browser_screenshot", "browser_screenshot_auto"):
+                    had_shot = True
+                if nm0 in ("browser_open", "browser_click", "browser_type"):
+                    had_browser_action = True
+                    if not sid_auto:
+                        d0 = r.get("data") if isinstance(r.get("data"), dict) else {}
+                        sid_auto = str(d0.get("session_id") or "").strip()
+            if had_browser_action and (not had_shot):
+                if not sid_auto:
+                    sid_auto = str(session_id or "").strip() or str(run_id or "").strip() or "global"
+                okS, msgS, dataS = _pw_screenshot(sid_auto, full_page=True)
+                receipts.append({"type": "browser_screenshot_auto", "ok": bool(okS), "msg": msgS or "", "data": dataS if isinstance(dataS, dict) else {}})
+        except Exception as e:
+            if str(e) != "auto_screenshot_disabled":
+                logger.debug(f"Exception ignored: {e}")
+
         receipt_lines = ["【工具回执(真实执行结果)】"]
         total_payload_chars = 0
         max_total_payload_chars = 24000
@@ -7511,6 +7907,36 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
                 elif nm in ("web_fetch",):
                     res1 = data1.get("result") if isinstance(data1.get("result"), dict) else {}
                     payload = str(res1.get("text") or "")
+
+                elif nm.startswith("browser_"):
+                    if nm in ("browser_text",):
+                        payload = str(data1.get("text") or data1.get("html") or "")
+                        try:
+                            if len(payload) > 12000:
+                                payload = payload[:12000]
+                        except Exception:
+                            pass
+                    elif nm in ("browser_screenshot",):
+                        b64 = str(data1.get("image_b64") or "")
+                        if b64:
+                            try:
+                                if len(b64) > 8000:
+                                    b64 = b64[:8000]
+                            except Exception:
+                                pass
+                            payload = "image_b64(png, truncated):\n" + b64
+                    elif nm in ("browser_eval",):
+                        try:
+                            payload = json.dumps({"result": data1.get("result"), "obs": data1.get("obs")}, ensure_ascii=False, indent=2)
+                        except Exception:
+                            payload = str(data1.get("result") or "")
+                    else:
+                        try:
+                            obs0 = data1.get("obs") if isinstance(data1.get("obs"), dict) else {}
+                            if obs0:
+                                payload = json.dumps({"obs": obs0}, ensure_ascii=False, indent=2)
+                        except Exception:
+                            payload = ""
 
                 if payload:
                     if total_payload_chars >= max_total_payload_chars:
@@ -8515,14 +8941,19 @@ class Handler(BaseHTTPRequestHandler):
 
         elif p == "/api/capabilities":
             logger.debug("处理 /api/capabilities 请求")
-            spec = get_capabilities_spec()
-            self.send_json({
-                "ok": True,
-                "version": spec.get("version"),
-                "generated_at": spec.get("generated_at"),
-                "text": spec.get("text"),
-                "endpoints": spec.get("endpoints"),
-            })
+            try:
+                spec = get_capabilities_spec()
+                self.send_json({
+                    "ok": True,
+                    "version": spec.get("version"),
+                    "generated_at": spec.get("generated_at"),
+                    "text": spec.get("text"),
+                    "endpoints": spec.get("endpoints"),
+                    "agent_tools": spec.get("agent_tools"),
+                })
+            except Exception as e:
+                logger.error(f"/api/capabilities failed: {e}")
+                self.send_json({"ok": False, "error": str(e)}, 500)
 
         elif p == "/api/files":
             logger.debug("处理 /api/files 请求")
@@ -9198,6 +9629,98 @@ class Handler(BaseHTTPRequestHandler):
                 if idem_key:
                     _idempotency_set(idem_key, payload, 200)
                 self.send_json(payload)
+
+            elif p == "/api/mkdir":
+                logger.info("处理 /api/mkdir 请求")
+                if not self._require_repo():
+                    return
+                try:
+                    key = _rl_make_key(self)
+                    ok_rl, delay_s, retry_after = _rl_check_and_get_delay(key, "modify")
+                    if not ok_rl:
+                        self.send_json({"ok": False, "msg": f"请求过于频繁，请在 {retry_after} 秒后重试", "retry_after": retry_after}, 429)
+                        return
+                    if delay_s > 0:
+                        time.sleep(delay_s)
+                except Exception as e:
+                    logger.debug(f"Exception ignored: {e}")
+                idem_key = (self.headers.get("X-Idempotency-Key") or "").strip()
+                if idem_key:
+                    ent = _idempotency_get(idem_key)
+                    if ent and isinstance(ent.get("payload"), dict):
+                        self.send_json(ent.get("payload"), int(ent.get("code") or 200))
+                        return
+                fp = data.get("path", "")
+                ok, msg = mkdir_repo(fp)
+                if ok:
+                    invalidate_changed_files_cache()
+                    notify_files_updated()
+                try:
+                    norm_path = str(fp or "").replace("\\", "/").lstrip("/")
+                    if norm_path.startswith("./"):
+                        norm_path = norm_path[2:]
+                except Exception:
+                    norm_path = str(fp or "")
+                payload = {"ok": ok, "msg": msg, "path": norm_path}
+                if idem_key:
+                    _idempotency_set(idem_key, payload, 200)
+                self.send_json(payload)
+
+            elif p == "/api/browser_tool":
+                logger.info("处理 /api/browser_tool 请求")
+                action = str((data.get("action") if isinstance(data, dict) else "") or "").strip().lower()
+                sid = str((data.get("session_id") if isinstance(data, dict) else "") or "").strip() or "global"
+                params = (data.get("params") if isinstance(data, dict) else None)
+                params = params if isinstance(params, dict) else {}
+
+                if not action:
+                    self.send_json({"ok": False, "msg": "缺少 action"}, 400)
+                    return
+
+                if action == "open":
+                    ok, msg, out = _pw_open(sid, str(params.get("url") or ""), wait_ms=int(params.get("wait_ms") or 0))
+                    self.send_json({"ok": bool(ok), "msg": msg, **(out if isinstance(out, dict) else {})})
+                    return
+                if action == "click":
+                    ok, msg, out = _pw_click(sid, str(params.get("selector") or ""), wait_ms=int(params.get("wait_ms") or 0))
+                    self.send_json({"ok": bool(ok), "msg": msg, **(out if isinstance(out, dict) else {})})
+                    return
+                if action == "type":
+                    ok, msg, out = _pw_type(
+                        sid,
+                        str(params.get("selector") or ""),
+                        str(params.get("text") or ""),
+                        clear=bool(params.get("clear", True)),
+                        wait_ms=int(params.get("wait_ms") or 0),
+                    )
+                    self.send_json({"ok": bool(ok), "msg": msg, **(out if isinstance(out, dict) else {})})
+                    return
+                if action == "eval":
+                    ok, msg, out = _pw_eval(sid, str(params.get("script") or ""))
+                    self.send_json({"ok": bool(ok), "msg": msg, **(out if isinstance(out, dict) else {})})
+                    return
+                if action == "text":
+                    ok, msg, out = _pw_text(sid, selector=str(params.get("selector") or "").strip())
+                    self.send_json({"ok": bool(ok), "msg": msg, **(out if isinstance(out, dict) else {})})
+                    return
+                if action == "screenshot":
+                    ok, msg, out = _pw_screenshot(sid, full_page=bool(params.get("full_page", True)))
+                    self.send_json({"ok": bool(ok), "msg": msg, **(out if isinstance(out, dict) else {})})
+                    return
+                if action == "wait":
+                    ok, msg, out = _pw_wait(sid, ms=int(params.get("ms") or 0))
+                    self.send_json({"ok": bool(ok), "msg": msg, **(out if isinstance(out, dict) else {})})
+                    return
+                if action == "close":
+                    if not _pw_is_available():
+                        self.send_json({"ok": False, "msg": "Playwright 未安装（可选能力）。"}, 400)
+                        return
+                    _pw_close_session(sid)
+                    self.send_json({"ok": True, "msg": "", "session_id": sid})
+                    return
+
+                self.send_json({"ok": False, "msg": f"不支持的 action: {action}"}, 400)
+                return
 
             elif p == "/api/delete_file":
                 logger.info("处理 /api/delete_file 请求")
