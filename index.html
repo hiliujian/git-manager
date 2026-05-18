@@ -17683,6 +17683,11 @@ flex-shrink:0;cursor:pointer;
   async function loadCommitFileDiff(commitHash, filepath, status) {
     // 添加 epoch 保护，防止在快速切换提交时的并发请求
     const epoch = ++window.__gmLoadDiffEpoch;
+
+    try {
+      curFile = null;
+      curLogFile = { path: String(filepath || ''), status: String(status || 'M') || 'M', commit_hash: String(commitHash || '') };
+    } catch (e) {}
     
     document.getElementById('revertFileBtn').style.display = 'none';
     document.getElementById('diffLabel').innerHTML =
