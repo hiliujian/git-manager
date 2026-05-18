@@ -1180,49 +1180,36 @@
     }
     .sp{flex:1;min-width:400px;overflow-x:auto;}
 
-    .fold-toggle{
-      display:inline-flex;
-      align-items:center;
-      justify-content:center;
-      width:14px;
-      height:14px;
-      border-radius:3px;
-      margin-right:2px;
-      color:var(--text2);
-      background:rgba(255,255,255,0.08);
-      border:1px solid rgba(255,255,255,0.14);
-      cursor:pointer;
-      user-select:none;
-      opacity:.85;
-    }
-    .fold-toggle:hover{background:rgba(255,255,255,0.06);color:var(--text2);}
-    [data-theme="light"] .fold-toggle:hover{background:rgba(0,0,0,0.06);}
-    [data-theme="light"] .fold-toggle{background:rgba(0,0,0,0.06);border:1px solid rgba(0,0,0,0.12);}
-
     .gm-fold-hint{opacity:.9;}
     .gm-fold-hint .lc{color:var(--text3);}
 
     .gm-fold-inline{
-      display:inline-block;
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
       margin-left:2px;
-      padding:0 6px;
-      border-radius:10px;
-      font-size:11px;
-      line-height:16px;
+      padding:0 4px;
+      border-radius:4px;
+      font-size:10px;
+      line-height:14px;
       color:var(--text3);
       background:rgba(255,255,255,0.06);
       cursor:pointer;
       user-select:none;
       vertical-align:baseline;
       white-space:nowrap;
+      opacity:0;
+      transition:opacity .12s ease;
     }
     [data-theme="light"] .gm-fold-inline{background:rgba(0,0,0,0.06);}
     .gm-fold-inline:hover{color:var(--text2);background:rgba(255,255,255,0.10);}
     [data-theme="light"] .gm-fold-inline:hover{background:rgba(0,0,0,0.10);}
 
+    .dl:hover .gm-fold-inline{opacity:1;}
+
     /* ── DIFF CONTENT ── */
     .empty-state{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;
-      gap:12px;color:var(--text3);}
+      color:var(--text3);gap:10px;font-size:13px;}
     .empty-state svg{opacity:.2;}
     .empty-state p{font-size:13px;}
 
@@ -2391,12 +2378,13 @@ flex-shrink:0;cursor:pointer;
             <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/>
           </svg>撤回文件
         </button>
-        <button class="btn green" id="saveFileBtn" style="display:none" data-action="saveFile">
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <button class="btn" id="saveFileBtn" data-action="saveFile">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/>
+            <polyline points="17 21 17 13 7 13 7 21"/>
+            <polyline points="7 3 7 8 15 8"/>
           </svg>保存
         </button>
-        <button class="btn" id="foldBtn" style="display:none" data-action="applyCodeFolding">折叠</button>
       </div>
     </div>
     <div class="statsbar">
@@ -4415,17 +4403,16 @@ flex-shrink:0;cursor:pointer;
             return;
           }
 
-          if (act === 'applyCodeFolding') {
+          if (act === 'applyDiff') {
             e.preventDefault();
-            try { if (typeof window.__gmApplyCodeFolding === 'function') window.__gmApplyCodeFolding(true); } catch (e2) {}
-            try { if (typeof window.updateLineNumbers === 'function') window.updateLineNumbers(); } catch (e2) {}
+            applyDiff();
             return;
           }
 
-          if (act === 'syncPush') {
+          if (act === 'unstageOneStagedFromPanel') {
             e.preventDefault();
-            try { refreshSyncStatus(false); } catch (e2) {}
-            try { pushFromHistory(); } catch (e2) {}
+            const idx = Number(t.getAttribute('data-idx') || 0);
+            unstageOneStagedFromPanel(idx);
             return;
           }
 
@@ -5946,763 +5933,18 @@ flex-shrink:0;cursor:pointer;
           scheduleAutoSave();
           setTimeout(() => {
             if (typeof window.updateLineNumbers === 'function') window.updateLineNumbers();
-            try { if (typeof window.__gmApplyCodeFolding === 'function') window.__gmApplyCodeFolding(); } catch (e3) {}
           }, 0);
           try {
             newLine.focus();
+          } catch (e2) {}
+          try {
             setCaretOffset(newLine, Math.max(0, Math.min(col, String(newLine.textContent || '').length)));
           } catch (e2) {}
         } catch (e2) {}
+
       }, true);
+
     }
-
-    const __isCeHost = () => {
-      try {
-        const host = document.getElementById('diffView');
-        return !!(host && String(host.getAttribute('data-ce-host') || '') === '1');
-      } catch (e) {
-        return false;
-      }
-    };
-
-    window.__autoSaveTimer = null;
-    window.__dirtyEdits = false;
-
-    if (!window.__deletedLineIndicesByPath) {
-      window.__deletedLineIndicesByPath = new Map();
-    }
-
-    if (window.__autoSaveEnabled === undefined) {
-      try {
-        const v = localStorage.getItem('gm_auto_save_enabled');
-        window.__autoSaveEnabled = (v === null) ? true : (v === '1');
-      } catch (e) {
-        window.__autoSaveEnabled = true;
-      }
-    }
-
-    const toggle = document.getElementById('autoSaveToggle');
-    if (toggle) {
-      toggle.checked = !!window.__autoSaveEnabled;
-      toggle.onchange = () => {
-        window.__autoSaveEnabled = !!toggle.checked;
-        try { localStorage.setItem('gm_auto_save_enabled', window.__autoSaveEnabled ? '1' : '0'); } catch (e) {}
-      };
-    }
-
-    const setEditStatus = (text) => {
-      const el = document.getElementById('selInfo');
-      if (!el) return;
-      el.textContent = text || '';
-    };
-    
-    // 将函数暴露到全局作用域以便编辑器模式使用
-    window.setEditStatus = setEditStatus;
-
-    // 实时更新行号的函数
-    const updateLineNumbersNow = () => {
-      try {
-        const host = document.getElementById('diffView');
-        if (!host) return;
-        
-        // 对于并排视图和变更视图,重新计算行号
-        const isPlainEditor = !!window.__plainEditorFilename;
-        if (isPlainEditor) return; // 普通编辑器有自己的行号更新机制
-        
-        // 检查是否是并排视图
-        const splitWrap = host.querySelector('.split-wrap');
-        if (splitWrap) {
-          // 并排视图 - 左右两列分别更新
-          const leftPanel = splitWrap.querySelector('.sp:first-child');
-          const rightPanel = splitWrap.querySelector('.sp:last-child');
-          
-          if (leftPanel) {
-            const leftLines = leftPanel.querySelectorAll('.dl');
-            let leftLineNum = 1;
-            leftLines.forEach(dl => {
-              const lnEl = dl.querySelector('.ln');
-              // 跳过空行和提示行
-              if (!lnEl || dl.classList.contains('empty') || dl.classList.contains('revert-block-hint') || dl.classList.contains('gm-gap-hint') || dl.classList.contains('gm-fold-hint')) {
-                return;
-              }
-              
-              if (dl.classList.contains('context')) {
-                lnEl.textContent = leftLineNum;
-                leftLineNum++;
-              } else if (dl.classList.contains('removed') || dl.classList.contains('modified')) {
-                lnEl.textContent = leftLineNum;
-                leftLineNum++;
-              } else if (dl.classList.contains('added')) {
-                // 新增行在左侧不显示行号
-                lnEl.textContent = '';
-              }
-            });
-          }
-          
-          if (rightPanel) {
-            const rightLines = rightPanel.querySelectorAll('.dl');
-            let rightLineNum = 1;
-            rightLines.forEach(dl => {
-              const lnEl = dl.querySelector('.ln');
-              // 跳过空行和提示行
-              if (!lnEl || dl.classList.contains('empty') || dl.classList.contains('revert-block-hint') || dl.classList.contains('gm-gap-hint') || dl.classList.contains('gm-fold-hint')) {
-                return;
-              }
-              
-              if (dl.classList.contains('context')) {
-                lnEl.textContent = rightLineNum;
-                rightLineNum++;
-              } else if (dl.classList.contains('added') || dl.classList.contains('modified')) {
-                lnEl.textContent = rightLineNum;
-                rightLineNum++;
-              } else if (dl.classList.contains('removed')) {
-                // 删除行在右侧不显示行号
-                lnEl.textContent = '';
-              }
-            });
-          }
-        } else {
-          // 变更视图（unified） - 单列更新
-          const allLines = host.querySelectorAll('.dl');
-          let currentLineNum = 1;
-          allLines.forEach(dl => {
-            const lnEl = dl.querySelector('.ln');
-            // 跳过空行、提示行和折叠提示行
-            if (!lnEl || dl.classList.contains('empty') || dl.classList.contains('revert-block-hint') || dl.classList.contains('gm-gap-hint') || dl.classList.contains('gm-fold-hint')) {
-              return;
-            }
-            
-            // 为有效代码行更新行号
-            if (dl.classList.contains('context') || dl.classList.contains('added') || dl.classList.contains('modified')) {
-              lnEl.textContent = currentLineNum;
-              currentLineNum++;
-            } else if (dl.classList.contains('removed')) {
-              // 删除行不显示行号
-              lnEl.textContent = '';
-            }
-          });
-        }
-      } catch (e) {
-        console.error('Error updating line numbers:', e);
-      }
-    };
-
-    const updateLineNumbers = (force = false) => {
-      try {
-        if (force) {
-          updateLineNumbersNow();
-          return;
-        }
-
-        if (!window.__gmUpdateLineNumbersRaf) window.__gmUpdateLineNumbersRaf = 0;
-        if (window.__gmUpdateLineNumbersRaf) return;
-        window.__gmUpdateLineNumbersRaf = requestAnimationFrame(() => {
-          window.__gmUpdateLineNumbersRaf = 0;
-          updateLineNumbersNow();
-        });
-      } catch (e2) {
-        try { updateLineNumbersNow(); } catch (e3) {}
-      }
-    };
-    
-    // 暴露到全局以便其他函数调用
-    window.updateLineNumbers = updateLineNumbers;
-
-    const scheduleAutoSave = () => {
-      if (window.__autoSaveTimer) clearTimeout(window.__autoSaveTimer);
-      if (!window.__autoSaveEnabled) {
-        setEditStatus('已修改：自动保存已关闭（Ctrl+S 立即保存）');
-        return;
-      }
-      window.__autoSaveTimer = setTimeout(async () => {
-        if (!window.__dirtyEdits) return;
-        if (curFile === null && !window.__plainEditorFilename) return;
-        if (window.__saveFileInFlight) return;
-        setEditStatus('检测到修改：自动保存中...');
-        await saveFile();
-        window.__dirtyEdits = false;
-        setEditStatus('已保存');
-      }, 5000);
-      setEditStatus('已修改：5秒后自动保存（Ctrl+S 立即保存）');
-    };
-    
-    // 将函数暴露到全局作用域以便编辑器模式使用
-    window.scheduleAutoSave = scheduleAutoSave;
-
-    if (!window.__gmEditUndoStack) window.__gmEditUndoStack = [];
-    if (!window.__gmEditRedoStack) window.__gmEditRedoStack = [];
-    if (window.__gmEditUndoMax === undefined) window.__gmEditUndoMax = 100;
-
-    const __gmGetActiveLineAndCol = (host) => {
-      try {
-        const sel = window.getSelection ? window.getSelection() : null;
-        if (!sel || sel.rangeCount === 0) return { line: null, idx: -1, col: 0 };
-        const r = sel.getRangeAt(0);
-        const node = sel.focusNode || r.startContainer;
-        const el = node ? ((node.nodeType === Node.ELEMENT_NODE) ? node : (node.parentElement || null)) : null;
-        const dl = (el && el.closest) ? el.closest('.dl') : null;
-        const line = (el && el.closest) ? el.closest('.editable-line') : (dl && dl.querySelector ? dl.querySelector('.editable-line') : null);
-        if (!line || !host.contains(line)) return { line: null, idx: -1, col: 0 };
-        const lines = Array.from(host.querySelectorAll('.editable-line'));
-        const idx = lines.indexOf(line);
-        let col = 0;
-        try {
-          if (line.contains(r.startContainer)) {
-            const tr = document.createRange();
-            tr.selectNodeContents(line);
-            tr.setEnd(r.startContainer, r.startOffset);
-            col = tr.toString().length;
-          }
-        } catch (e2) {
-          try { col = getCaretOffset(line); } catch (e3) { col = 0; }
-        }
-        return { line, idx, col: Math.max(0, Number(col) || 0) };
-      } catch (e) {
-        return { line: null, idx: -1, col: 0 };
-      }
-    };
-
-    const __gmPushEditorSnapshot = (host) => {
-      try {
-        if (!host) return;
-        const pos = __gmGetActiveLineAndCol(host);
-        const scopeKey = (() => {
-          try {
-            if (curFile !== null && files && files[curFile] && files[curFile].path) return `file:${String(files[curFile].path)}`;
-          } catch (e2) {}
-          return null;
-        })();
-        window.__gmEditUndoStack.push({ html: host.innerHTML, idx: pos.idx, col: pos.col, scopeKey });
-        if (window.__gmEditUndoStack.length > window.__gmEditUndoMax) window.__gmEditUndoStack.shift();
-        window.__gmEditRedoStack = [];
-      } catch (e) {}
-    };
-
-    const __gmPushEditorSnapshotFull = (host) => {
-      try {
-        if (!host) return;
-        const pos = __gmGetActiveLineAndCol(host);
-        const scopeKey = (() => {
-          try {
-            if (curFile !== null && files && files[curFile] && files[curFile].path) return `file:${String(files[curFile].path)}`;
-          } catch (e2) {}
-          return null;
-        })();
-        const hunksSnap = (() => {
-          try { return JSON.parse(JSON.stringify(curHunks || [])); } catch (e2) { return null; }
-        })();
-        window.__gmEditUndoStack.push({
-          html: host.innerHTML,
-          idx: pos.idx,
-          col: pos.col,
-          scopeKey,
-          fileContent: curFileContent,
-          hunks: hunksSnap,
-          wholeDirty: !!window.__gmWholeContentDirty,
-        });
-        if (window.__gmEditUndoStack.length > window.__gmEditUndoMax) window.__gmEditUndoStack.shift();
-        window.__gmEditRedoStack = [];
-      } catch (e) {}
-    };
-
-    try { window.__gmGetActiveLineAndCol = __gmGetActiveLineAndCol; } catch (e) {}
-    try { window.__gmPushEditorSnapshot = __gmPushEditorSnapshot; } catch (e) {}
-    try { window.__gmPushEditorSnapshotFull = __gmPushEditorSnapshotFull; } catch (e) {}
-    try { window.scheduleAutoSave = scheduleAutoSave; } catch (e) {}
-    try { window.setEditStatus = setEditStatus; } catch (e) {}
-
-    const __gmEnsureFoldState = () => {
-      try {
-        if (!window.__gmFoldStateByPath) window.__gmFoldStateByPath = new Map();
-      } catch (e) {}
-    };
-
-    const __gmGetFoldStateSet = (path) => {
-      try {
-        __gmEnsureFoldState();
-        const key = String(path || '');
-        let set = window.__gmFoldStateByPath.get(key);
-        if (!set) {
-          set = new Set();
-          window.__gmFoldStateByPath.set(key, set);
-        }
-        return set;
-      } catch (e) {
-        return null;
-      }
-    };
-
-    const __gmGetFoldScope = (host) => {
-      try {
-        const wrap = host ? host.querySelector('.split-wrap') : null;
-        if (wrap) {
-          const right = wrap.querySelector('.sp:last-child');
-          return right || host;
-        }
-        return host;
-      } catch (e) {
-        return host;
-      }
-    };
-
-    const __gmComputeFoldRanges = (scope) => {
-      try {
-        const dls = Array.from(scope.querySelectorAll('.dl'));
-        const ranges = [];
-        const getLineText = (dl) => {
-          const lc = dl && dl.querySelector ? dl.querySelector('.lc.editable-line') : null;
-          const t = lc ? String(lc.textContent || '') : '';
-          return t.replace(/[\r\n\u2028\u2029]/g, '');
-        };
-
-        const stack = [];
-        for (let i = 0; i < dls.length; i++) {
-          const dl = dls[i];
-          if (!dl || !dl.classList) continue;
-          if (dl.classList.contains('revert-block-hint') || dl.classList.contains('gm-gap-hint') || dl.classList.contains('gm-fold-hint')) continue;
-          const txt = getLineText(dl);
-          if (!txt) continue;
-          const opens = (txt.match(/\{/g) || []).length;
-          const closes = (txt.match(/\}/g) || []).length;
-          for (let k = 0; k < opens; k++) stack.push(i);
-          for (let k = 0; k < closes; k++) {
-            const start = stack.pop();
-            if (start === undefined || start === null) continue;
-            const end = i;
-            if (end - start >= 2) ranges.push({ start, end });
-          }
-        }
-
-        if (ranges.length) return ranges;
-
-        const ind = (s) => {
-          const m = String(s || '').match(/^[\t ]*/);
-          const ws = m ? String(m[0] || '') : '';
-          let n = 0;
-          for (const ch of ws) n += (ch === '\t') ? 4 : 1;
-          return { ws, n };
-        };
-
-        for (let i = 0; i < dls.length - 1; i++) {
-          const a = dls[i];
-          const b = dls[i + 1];
-          if (!a || !b) continue;
-          if (a.classList.contains('revert-block-hint') || a.classList.contains('gm-gap-hint') || a.classList.contains('gm-fold-hint')) continue;
-          if (b.classList.contains('revert-block-hint') || b.classList.contains('gm-gap-hint') || b.classList.contains('gm-fold-hint')) continue;
-          const at = getLineText(a);
-          const bt = getLineText(b);
-          if (!at.trim() || !bt.trim()) continue;
-          const ai = ind(at);
-          const bi = ind(bt);
-          if (bi.n <= ai.n) continue;
-          let end = i + 1;
-          for (let j = i + 1; j < dls.length; j++) {
-            const x = dls[j];
-            if (!x || x.classList.contains('revert-block-hint') || x.classList.contains('gm-gap-hint') || x.classList.contains('gm-fold-hint')) break;
-            const xt = getLineText(x);
-            if (!xt.trim()) { end = j; continue; }
-            const xi = ind(xt);
-            if (xi.n <= ai.n) break;
-            end = j;
-          }
-          if (end - i >= 2) {
-            ranges.push({ start: i, end });
-            i = end - 1;
-          }
-        }
-        return ranges;
-      } catch (e) {
-        return [];
-      }
-    };
-
-    const __gmClearFoldsInScope = (scope) => {
-      try {
-        if (!scope) return;
-        scope.querySelectorAll('.gm-fold-hint').forEach(el => { try { el.remove(); } catch (e) {} });
-        scope.querySelectorAll('.gm-fold-inline').forEach(el => { try { el.remove(); } catch (e) {} });
-        scope.querySelectorAll('.dl[data-gm-fold-id]').forEach(dl => {
-          try { dl.style.display = ''; } catch (e) {}
-        });
-        scope.querySelectorAll('.dl[data-gm-fold-start]').forEach(dl => {
-          try {
-            const lc = dl.querySelector ? dl.querySelector('.lc.editable-line') : null;
-            if (lc) {
-              try { lc.setAttribute('contenteditable', 'true'); } catch (e) {}
-            }
-            dl.removeAttribute('data-gm-fold-start');
-          } catch (e) {}
-        });
-        scope.querySelectorAll('.fold-toggle').forEach(btn => {
-          try { btn.remove(); } catch (e) {}
-        });
-      } catch (e) {}
-    };
-
-    const __gmExtractPureTextFromLc = (lc) => {
-      try {
-        if (!lc) return '';
-        const parts = [];
-        const walk = (node) => {
-          if (!node) return;
-          if (node.nodeType === Node.TEXT_NODE) {
-            parts.push(String(node.textContent || ''));
-            return;
-          }
-          if (node.nodeType !== Node.ELEMENT_NODE) return;
-          const el = node;
-          if (el.classList && (el.classList.contains('gm-fold-inline') || el.classList.contains('fold-toggle'))) return;
-          const cn = el.childNodes;
-          if (!cn || !cn.length) return;
-          for (let i = 0; i < cn.length; i++) walk(cn[i]);
-        };
-        walk(lc);
-        return parts.join('');
-      } catch (e) {
-        return String((lc && lc.textContent) || '');
-      }
-    };
-
-    const __gmApplyFoldToRange = (scope, dls, range, isFolded, foldId) => {
-      try {
-        const startDl = dls[range.start];
-        if (!startDl) return;
-        const ls = startDl.querySelector ? startDl.querySelector('.ls') : null;
-        if (!ls) return;
-
-        const lc = startDl.querySelector ? startDl.querySelector('.lc') : null;
-
-        const toggle = document.createElement('span');
-        toggle.className = 'fold-toggle';
-        toggle.textContent = isFolded ? '▸' : '▾';
-        toggle.setAttribute('contenteditable', 'false');
-        toggle.onmousedown = (ev) => { try { ev.preventDefault(); ev.stopPropagation(); } catch (e) {} };
-        toggle.onclick = (ev) => {
-          try { ev.preventDefault(); ev.stopPropagation(); } catch (e) {}
-          try { window.__gmToggleFoldById(foldId); } catch (e) {}
-          return false;
-        };
-
-        // IMPORTANT: fold UI must never be inserted into editable text content.
-        // We anchor it at the end of '{' visually (IDE-like) using absolute positioning.
-        // Fallback: mount into non-editable sign column (.ls).
-        const __gmMountFoldUiAtBrace = (el, padX) => {
-          try {
-            if (!el) return false;
-            if (!lc) return false;
-
-            const rawText = __gmExtractPureTextFromLc(lc);
-            const bracePos = rawText.indexOf('{');
-            if (bracePos < 0) return false;
-            const textNode = lc.firstChild && lc.firstChild.nodeType === Node.TEXT_NODE ? lc.firstChild : null;
-            if (!textNode) return false;
-            if (bracePos + 1 > (textNode.textContent || '').length) return false;
-
-            const r = document.createRange();
-            r.setStart(textNode, bracePos + 1);
-            r.collapse(true);
-            const br = r.getBoundingClientRect();
-            const dr = startDl.getBoundingClientRect();
-            if (!br || !dr) return false;
-            if (!Number.isFinite(br.left) || !Number.isFinite(dr.left)) return false;
-
-            try { startDl.style.position = 'relative'; } catch (e2) {}
-            try {
-              el.style.position = 'absolute';
-              el.style.left = `${Math.max(0, (br.left - dr.left) + (Number(padX) || 0))}px`;
-              el.style.top = '50%';
-              el.style.transform = 'translateY(-50%)';
-            } catch (e2) {}
-
-            try { startDl.appendChild(el); } catch (e2) { return false; }
-            return true;
-          } catch (e) {
-            return false;
-          }
-        };
-
-        let mounted = false;
-        try { mounted = __gmMountFoldUiAtBrace(toggle, 2); } catch (e2) { mounted = false; }
-        if (!mounted) {
-          try { ls.insertBefore(toggle, ls.firstChild); } catch (e2) {}
-        }
-
-        if (!isFolded) return;
-
-        const hiddenCount = Math.max(0, range.end - range.start);
-        for (let i = range.start + 1; i <= range.end; i++) {
-          const dl = dls[i];
-          if (!dl) continue;
-          dl.setAttribute('data-gm-fold-id', foldId);
-          dl.style.display = 'none';
-        }
-
-        if (lc) {
-          try {
-            startDl.setAttribute('data-gm-fold-start', foldId);
-            // Avoid editing inside folded line; expand first to edit.
-            if (lc.classList && lc.classList.contains('editable-line')) {
-              lc.setAttribute('contenteditable', 'false');
-            }
-          } catch (e) {}
-
-          const inline = document.createElement('span');
-          inline.className = 'gm-fold-inline';
-          inline.textContent = '{...}';
-          inline.setAttribute('contenteditable', 'false');
-          inline.setAttribute('data-gm-fold-id', foldId);
-          inline.title = `已折叠 ${hiddenCount} 行`;
-          inline.onmousedown = (ev) => { try { ev.preventDefault(); ev.stopPropagation(); } catch (e) {} };
-          inline.onclick = (ev) => {
-            try { ev.preventDefault(); ev.stopPropagation(); } catch (e) {}
-            try { window.__gmToggleFoldById(foldId); } catch (e) {}
-            return false;
-          };
-          // Inline hint also uses absolute positioning near brace.
-          let inlineMounted = false;
-          try { inlineMounted = __gmMountFoldUiAtBrace(inline, 12); } catch (e2) { inlineMounted = false; }
-          if (!inlineMounted) {
-            try { ls.appendChild(inline); } catch (e2) {}
-          }
-        }
-      } catch (e) {}
-    };
-
-    const __gmApplyCodeFolding = (force = false) => {
-      try {
-        if (window.__plainEditorFilename) return;
-        if (curFile === null || !files || !files[curFile] || !files[curFile].path) return;
-        const host = document.getElementById('diffView');
-        if (!host) return;
-
-        try {
-          const heavy = !!(host && String(host.dataset.gmHeavyDiff || '') === '1');
-          if (heavy && !force) return;
-        } catch (e2) {}
-
-        const scope = __gmGetFoldScope(host);
-        if (!scope) return;
-
-        __gmClearFoldsInScope(scope);
-
-        const dls = Array.from(scope.querySelectorAll('.dl'));
-        if (!dls.length) return;
-
-        const ranges = __gmComputeFoldRanges(scope);
-        if (!ranges || !ranges.length) return;
-
-        const state = __gmGetFoldStateSet(files[curFile].path);
-        if (!state) return;
-
-        window.__gmFoldIndexById = new Map();
-        ranges.forEach((r, idx) => {
-          const foldId = `gmfold_${idx}_${r.start}_${r.end}`;
-          const folded = state.has(foldId);
-          window.__gmFoldIndexById.set(foldId, r);
-          __gmApplyFoldToRange(scope, dls, r, folded, foldId);
-        });
-
-        try {
-          window.__gmToggleFoldById = (foldId) => {
-            try {
-              if (curFile === null || !files || !files[curFile] || !files[curFile].path) return;
-              const host = document.getElementById('diffView');
-              if (!host) return;
-              const scope = __gmGetFoldScope(host);
-              if (!scope) return;
-              const state = __gmGetFoldStateSet(files[curFile].path);
-              if (!state) return;
-              if (state.has(foldId)) state.delete(foldId);
-              else state.add(foldId);
-              __gmApplyCodeFolding(true);
-              if (typeof window.updateLineNumbers === 'function') window.updateLineNumbers();
-            } catch (e) {}
-          };
-        } catch (e) {}
-      } catch (e) {}
-    };
-
-    try { window.__gmApplyCodeFolding = __gmApplyCodeFolding; } catch (e) {}
-
-    const __gmSplitLineOnEnter = (lineEl) => {
-      try {
-        const host = document.getElementById('diffView');
-        if (!host || !lineEl || !host.contains(lineEl)) return false;
-        const dl = lineEl.closest ? lineEl.closest('.dl') : null;
-        if (!dl) return false;
-
-        const baseIdx = (() => {
-          try {
-            const ln = dl.querySelector ? dl.querySelector('.ln') : null;
-            const n = ln ? parseInt(String(ln.textContent || ''), 10) : NaN;
-            return isNaN(n) ? null : (n - 1);
-          } catch (e2) {
-            return null;
-          }
-        })();
-
-        try {
-          if (typeof __gmPushEditorSnapshot === 'function') __gmPushEditorSnapshot(host);
-        } catch (e2) {}
-
-        const col = (() => {
-          try { return Math.max(0, Number(getCaretOffset(lineEl)) || 0); } catch (e2) { return 0; }
-        })();
-
-        const raw = (() => {
-          try {
-            if (typeof __gmExtractPureTextFromLc === 'function') return String(__gmExtractPureTextFromLc(lineEl) || '');
-          } catch (e2) {}
-          return String(lineEl.textContent || '');
-        })();
-        const clean = (s) => String(s || '').replace(/[\r\n\u2028\u2029]/g, '');
-        const __gmStripFoldArtifacts = (s) => {
-          try {
-            return String(s || '')
-              .replace(/[\u25be\u25b8]/g, '')
-              .replace(/\{\.\.\.\}/g, '')
-              .replace(/\.\.\.\}/g, '')
-              .replace(/\{\.\.\./g, '')
-              .replace(/\.\.\./g, '');
-          } catch (e2) {
-            return String(s || '');
-          }
-        };
-        const text = __gmStripFoldArtifacts(clean(raw));
-        const indent = (() => {
-          try {
-            const m = text.match(/^[\t ]*/);
-            return m ? String(m[0] || '') : '';
-          } catch (e2) {
-            return '';
-          }
-        })();
-        const pos = Math.max(0, Math.min(col, text.length));
-        const left = text.slice(0, pos);
-        const right = text.slice(pos);
-
-        const IND = '    ';
-        const trimmedLeft = String(left || '').replace(/[\t ]+$/g, '');
-        const shouldExtraIndent = trimmedLeft.endsWith('{') || trimmedLeft.endsWith('(') || trimmedLeft.endsWith('[');
-        const baseIndent = indent;
-        const extraIndent = baseIndent + (shouldExtraIndent ? IND : '');
-        const mClose = shouldExtraIndent ? String(right || '').match(/^[\t ]*\}/) : null;
-
-        let newDl = null;
-        let newLine = null;
-        let closeDl = null;
-        let closeLine = null;
-        let inserted = null;
-        
-        const __gmPrepareClonedDl = (afterIdx) => {
-          let ndl = null;
-          try {
-            ndl = dl.cloneNode(true);
-          } catch (e2) {
-            return null;
-          }
-          if (!ndl) return null;
-
-          try {
-            ndl.classList.remove('added', 'modified', 'removed', 'find-hit');
-            if (!ndl.classList.contains('context')) ndl.classList.add('context');
-          } catch (e2) {}
-          
-          try {
-            ndl.removeAttribute('data-gm-fold-id');
-            ndl.removeAttribute('data-gm-fold-start');
-          } catch (e2) {}
-          
-          try {
-            const actions = ndl.querySelector('.dl-actions');
-            if (actions) actions.innerHTML = '';
-          } catch (e2) {}
-          
-          try {
-            const ls = ndl.querySelector('.ls');
-            if (ls) ls.textContent = ' ';
-          } catch (e2) {}
-
-          try {
-            const ln = ndl.querySelector ? ndl.querySelector('.ln') : null;
-            if (ln) ln.textContent = '';
-          } catch (e2) {}
-
-          try {
-            if (afterIdx !== null && afterIdx !== undefined && afterIdx >= 0) {
-              ndl.setAttribute('data-gm-insert-after', String(afterIdx));
-            }
-          } catch (e2) {}
-
-          const ln2 = ndl.querySelector ? ndl.querySelector('.editable-line') : null;
-          if (!ln2) return null;
-          return { dl: ndl, line: ln2 };
-        };
-
-        if (mClose) {
-          const rightTrim = String(right || '').replace(/^[\t ]*/g, '');
-          const mid = __gmPrepareClonedDl(baseIdx);
-          const close = __gmPrepareClonedDl((baseIdx !== null && baseIdx !== undefined) ? (baseIdx + 1) : baseIdx);
-          if (!mid || !close) return false;
-          newDl = mid.dl;
-          newLine = mid.line;
-          closeDl = close.dl;
-          closeLine = close.line;
-
-          lineEl.textContent = left;
-          newLine.textContent = extraIndent;
-          closeLine.textContent = baseIndent + rightTrim;
-          inserted = newLine;
-        } else {
-          const one = __gmPrepareClonedDl(baseIdx);
-          if (!one) return false;
-          newDl = one.dl;
-          newLine = one.line;
-          lineEl.textContent = left;
-          newLine.textContent = extraIndent + right;
-          inserted = newLine;
-        }
-        try { lineEl.dataset.dirty = '1'; } catch (e2) {}
-        try { inserted.dataset.dirty = '1'; } catch (e2) {}
-        try { if (closeLine) closeLine.dataset.dirty = '1'; } catch (e2) {}
-        try { lineEl.dispatchEvent(new Event('input', { bubbles: true })); } catch (e2) {}
-        try { inserted.dispatchEvent(new Event('input', { bubbles: true })); } catch (e2) {}
-        try { if (closeLine) closeLine.dispatchEvent(new Event('input', { bubbles: true })); } catch (e2) {}
-
-        try {
-          dl.parentNode.insertBefore(newDl, dl.nextSibling);
-          if (closeDl) {
-            newDl.parentNode.insertBefore(closeDl, newDl.nextSibling);
-          }
-        } catch (e2) {
-          return false;
-        }
-
-        window.__dirtyEdits = true;
-        scheduleAutoSave();
-        
-        // 更新行号 - 使用 setTimeout 确保 DOM 完全更新后再计算
-        setTimeout(() => {
-          if (typeof window.updateLineNumbers === 'function') {
-            window.updateLineNumbers();
-          }
-        }, 0);
-
-        try {
-          inserted.focus();
-          setCaretOffset(inserted, extraIndent.length);
-        } catch (e2) {}
-
-        try {
-          setTimeout(() => {
-            try { if (typeof window.__gmApplyCodeFolding === 'function') window.__gmApplyCodeFolding(); } catch (e3) {}
-          }, 0);
-        } catch (e2) {}
-        return true;
-      } catch (e) {
-        return false;
-      }
-    };
 
     const __gmRestoreEditorSnapshot = (host, snap) => {
       try {
@@ -6963,6 +6205,184 @@ flex-shrink:0;cursor:pointer;
       // 暴露为全局函数供其他地方使用
       window.__gmNormalizeLineText = __gmNormalizeLineText;
 
+      try {
+        if (!window.__gmFoldStateById) window.__gmFoldStateById = new Map();
+      } catch (e) {}
+
+      const __gmGetFoldScope = () => {
+        try {
+          const host = document.getElementById('diffView');
+          if (!host) return null;
+          const wrap = host.querySelector('.split-wrap');
+          if (wrap) {
+            const right = wrap.querySelector('.sp:last-child');
+            return right || host;
+          }
+          return host;
+        } catch (e) {
+          return null;
+        }
+      };
+
+      const __gmClearFoldUiInScope = (scope) => {
+        try {
+          if (!scope) return;
+          scope.querySelectorAll('.gm-fold-inline, .gm-fold-hint').forEach(el => {
+            try { el.remove(); } catch (e) {}
+          });
+          scope.querySelectorAll('.dl').forEach(dl => {
+            try {
+              if (!dl || !dl.style) return;
+              dl.style.display = '';
+            } catch (e) {}
+          });
+        } catch (e) {}
+      };
+
+      const __gmComputeFoldRanges = (scope) => {
+        try {
+          const dls = Array.from(scope.querySelectorAll('.dl'));
+          const ranges = [];
+          const stack = [];
+
+          const getText = (dl) => {
+            try {
+              const lc = dl && dl.querySelector ? dl.querySelector('.lc') : null;
+              const t = lc ? String(lc.textContent || '') : '';
+              return t.replace(/[\r\n\u2028\u2029]/g, '');
+            } catch (e) {
+              return '';
+            }
+          };
+
+          for (let i = 0; i < dls.length; i++) {
+            const dl = dls[i];
+            if (!dl || !dl.classList) continue;
+            if (dl.classList.contains('revert-block-hint') || dl.classList.contains('gm-gap-hint') || dl.classList.contains('gm-fold-hint')) continue;
+            const txt = getText(dl);
+            if (!txt) continue;
+            for (let j = 0; j < txt.length; j++) {
+              const ch = txt[j];
+              if (ch === '{') stack.push(i);
+              else if (ch === '}') {
+                const start = stack.pop();
+                if (start !== undefined && start !== null) {
+                  const a = Number(start);
+                  const b = Number(i);
+                  if (Number.isFinite(a) && Number.isFinite(b) && b - a >= 2) {
+                    ranges.push({ start: a, end: b });
+                  }
+                }
+              }
+            }
+          }
+          return ranges;
+        } catch (e) {
+          return [];
+        }
+      };
+
+      const __gmToggleFoldById = (id) => {
+        try {
+          const m = window.__gmFoldStateById;
+          if (!m) return;
+          const st = m.get(String(id));
+          if (!st) return;
+          const collapsed = !st.collapsed;
+          st.collapsed = collapsed;
+          const dls = st.dls || [];
+          for (let k = 0; k < dls.length; k++) {
+            const dl = dls[k];
+            if (!dl || !dl.style) continue;
+            dl.style.display = collapsed ? 'none' : '';
+          }
+          try {
+            const btn = st.btn;
+            if (btn) btn.textContent = collapsed ? '▸' : '▾';
+          } catch (e) {}
+        } catch (e) {}
+      };
+
+      window.__gmToggleFoldById = __gmToggleFoldById;
+
+      window.__gmApplyCodeFolding = (force) => {
+        try {
+          if (window.__plainEditorFilename) return;
+        } catch (e) {}
+        const scope = __gmGetFoldScope();
+        if (!scope) return;
+        __gmClearFoldUiInScope(scope);
+        try { if (window.__gmFoldStateById && window.__gmFoldStateById.clear) window.__gmFoldStateById.clear(); } catch (e) {}
+
+        const ranges = __gmComputeFoldRanges(scope);
+        if (!ranges || ranges.length === 0) return;
+        const dls = Array.from(scope.querySelectorAll('.dl'));
+
+        for (let r = 0; r < ranges.length; r++) {
+          const start = ranges[r].start;
+          const end = ranges[r].end;
+          const dlStart = dls[start];
+          if (!dlStart || !dlStart.querySelector) continue;
+          const lc = dlStart.querySelector('.lc');
+          if (!lc) continue;
+          if (lc.querySelector && lc.querySelector('.gm-fold-inline')) continue;
+          const id = `${start}-${end}-${r}`;
+
+          const btn = document.createElement('span');
+          btn.className = 'gm-fold-inline';
+          btn.setAttribute('contenteditable', 'false');
+          btn.setAttribute('data-fold-id', id);
+          btn.textContent = '▾';
+
+          // Insert fold button right after the first "{" in this line to match expected UX.
+          const inserted = (() => {
+            try {
+              const walker = document.createTreeWalker(lc, NodeFilter.SHOW_TEXT);
+              let n = null;
+              while ((n = walker.nextNode())) {
+                const s = String(n.nodeValue || '');
+                const idx = s.indexOf('{');
+                if (idx < 0) continue;
+                const after = n.splitText(idx + 1);
+                lc.insertBefore(btn, after);
+                return true;
+              }
+              return false;
+            } catch (e) {
+              return false;
+            }
+          })();
+          if (!inserted) {
+            try { lc.appendChild(btn); } catch (e) {}
+          }
+
+          const hidden = [];
+          for (let i = start + 1; i < end; i++) {
+            const dl = dls[i];
+            if (!dl || !dl.style) continue;
+            hidden.push(dl);
+            try { dl.setAttribute('data-gm-fold-id', id); } catch (e) {}
+          }
+          try { if (window.__gmFoldStateById) window.__gmFoldStateById.set(String(id), { collapsed: false, dls: hidden, btn }); } catch (e) {}
+        }
+      };
+
+      if (!window.__gmFoldUiClickInited) {
+        window.__gmFoldUiClickInited = true;
+        document.addEventListener('click', (e) => {
+          try {
+            const t = e && e.target;
+            if (!t || !t.getAttribute) return;
+            if (!t.classList || !t.classList.contains('gm-fold-inline')) return;
+            const id = String(t.getAttribute('data-fold-id') || '');
+            if (!id) return;
+            e.preventDefault();
+            try { e.stopPropagation(); } catch (e2) {}
+            if (typeof window.__gmToggleFoldById === 'function') window.__gmToggleFoldById(id);
+          } catch (e2) {}
+        }, true);
+      }
+
       const __gmCopyFromSelectionClean = (e) => {
         try {
           const host = document.getElementById('diffView');
@@ -6999,7 +6419,7 @@ flex-shrink:0;cursor:pointer;
               }
               
               // 移除所有UI元素
-              dl.querySelectorAll('.ln, .ls, .dl-actions, .line-revert, .hunk-revert, .commit-cb, .hint-tag, .hint-text, .hint-btn, .hint-actions, .gm-fold-inline, .fold-toggle').forEach(el => el.remove());
+              dl.querySelectorAll('.ln, .ls, .dl-actions, .line-revert, .hunk-revert, .commit-cb, .hint-tag, .hint-text, .hint-btn, .hint-actions, .gm-fold-inline').forEach(el => el.remove());
               
               // 提取 .lc 元素的文本
               const lc = dl.querySelector('.lc');
@@ -7038,7 +6458,7 @@ flex-shrink:0;cursor:pointer;
                   const frag2 = originalRange.cloneContents();
                   const tmp2 = document.createElement('div');
                   tmp2.appendChild(frag2);
-                  tmp2.querySelectorAll('.gm-fold-inline, .fold-toggle').forEach(el => { try { el.remove(); } catch (e) {} });
+                  tmp2.querySelectorAll('.gm-fold-inline').forEach(el => { try { el.remove(); } catch (e) {} });
                   const raw2 = String(tmp2.textContent || '');
                   const clean2 = __gmNormalizeLineText(raw2);
                   e.preventDefault();
@@ -8047,14 +7467,6 @@ flex-shrink:0;cursor:pointer;
         try { line.dataset.dirty = '1'; } catch (e2) {}
         window.__dirtyEdits = true;
         scheduleAutoSave();
-
-        try {
-          if (!window.__gmFoldRecalcTimer) window.__gmFoldRecalcTimer = null;
-          if (window.__gmFoldRecalcTimer) clearTimeout(window.__gmFoldRecalcTimer);
-          window.__gmFoldRecalcTimer = setTimeout(() => {
-            try { if (typeof window.__gmApplyCodeFolding === 'function') window.__gmApplyCodeFolding(); } catch (e3) {}
-          }, 80);
-        } catch (e2) {}
       } catch (e2) {}
     }, true);
 
@@ -8345,7 +7757,7 @@ flex-shrink:0;cursor:pointer;
 
         const hasFoldUi = (el) => {
           try {
-            return !!(el && el.querySelector && el.querySelector('.gm-fold-inline, .fold-toggle'));
+            return !!(el && el.querySelector && el.querySelector('.gm-fold-inline'));
           } catch (e) {
             return false;
           }
@@ -8353,8 +7765,8 @@ flex-shrink:0;cursor:pointer;
 
         const startEl = startContainer && (startContainer.nodeType === Node.ELEMENT_NODE ? startContainer : startContainer.parentElement);
         const endEl = endContainer && (endContainer.nodeType === Node.ELEMENT_NODE ? endContainer : endContainer.parentElement);
-        const startInFoldUi = !!(startEl && startEl.closest && startEl.closest('.gm-fold-inline, .fold-toggle'));
-        const endInFoldUi = !!(endEl && endEl.closest && endEl.closest('.gm-fold-inline, .fold-toggle'));
+        const startInFoldUi = !!(startEl && startEl.closest && startEl.closest('.gm-fold-inline'));
+        const endInFoldUi = !!(endEl && endEl.closest && endEl.closest('.gm-fold-inline'));
 
         // When fold UI is involved, copy whole lines to avoid leaking UI text into clipboard.
         const forceWholeLines = startInFoldUi || endInFoldUi || hasFoldUi(first) || hasFoldUi(last);
@@ -9702,7 +9114,7 @@ flex-shrink:0;cursor:pointer;
 
         const hasFoldUi = (el) => {
           try {
-            return !!(el && el.querySelector && el.querySelector('.gm-fold-inline, .fold-toggle'));
+            return !!(el && el.querySelector && el.querySelector('.gm-fold-inline'));
           } catch (e) {
             return false;
           }
@@ -9710,8 +9122,8 @@ flex-shrink:0;cursor:pointer;
 
         const startEl = startContainer && (startContainer.nodeType === Node.ELEMENT_NODE ? startContainer : startContainer.parentElement);
         const endEl = endContainer && (endContainer.nodeType === Node.ELEMENT_NODE ? endContainer : endContainer.parentElement);
-        const startInFoldUi = !!(startEl && startEl.closest && startEl.closest('.gm-fold-inline, .fold-toggle'));
-        const endInFoldUi = !!(endEl && endEl.closest && endEl.closest('.gm-fold-inline, .fold-toggle'));
+        const startInFoldUi = !!(startEl && startEl.closest && startEl.closest('.gm-fold-inline'));
+        const endInFoldUi = !!(endEl && endEl.closest && endEl.closest('.gm-fold-inline'));
         const forceWholeLines = startInFoldUi || endInFoldUi || hasFoldUi(first) || hasFoldUi(last);
 
         const startOffset = forceWholeLines
@@ -16309,6 +15721,7 @@ flex-shrink:0;cursor:pointer;
     requestAnimationFrame(() => {
       setTimeout(() => {
         try {
+          if (options && options.incremental) return;
           // 优先处理自动跳转到首次变更（仅首次打开文件时）
           if (autoScrollToFirstChangeOnce) {
             autoScrollToFirstChangeOnce = false;
@@ -16911,12 +16324,16 @@ flex-shrink:0;cursor:pointer;
 
     const __gmAppendPartsProgressively = (el, parts, chunkSize, done) => {
       let i = 0;
+      let finished = false;
       const step = () => {
         // 检查 render token 和 epoch，防止过期请求继续渲染
         if (!__gmRenderTokenAlive()) return;
         const currentEpoch = window.__gmLoadDiffEpoch || 0;
         if (el.__gmRenderEpoch && el.__gmRenderEpoch !== currentEpoch) {
-          console.log('__gmAppendPartsProgressively: epoch mismatch, stopping');
+          if (!finished) {
+            finished = true;
+            if (typeof done === 'function') done();
+          }
           return;
         }
         
@@ -16928,7 +16345,10 @@ flex-shrink:0;cursor:pointer;
         if (i < parts.length) {
           try { requestAnimationFrame(step); } catch (e) { setTimeout(step, 0); }
         } else {
-          if (typeof done === 'function') done();
+          if (!finished) {
+            finished = true;
+            if (typeof done === 'function') done();
+          }
         }
       };
       step();
@@ -17044,15 +16464,10 @@ flex-shrink:0;cursor:pointer;
 
     let __gmWorkingLineCount = 0;
     try { __gmWorkingLineCount = String(workingContent || '').split('\n').length; } catch (e) { __gmWorkingLineCount = 0; }
-        try {
+    try {
       const heavy = (__gmWorkingLineCount >= 5000);
       view.dataset.gmHeavyDiff = heavy ? '1' : '0';
       view.dataset.gmLineCount = String(__gmWorkingLineCount);
-
-      try {
-        const btn = document.getElementById('foldBtn');
-        if (btn) btn.style.display = heavy ? '' : 'none';
-      } catch (e2) {}
     } catch (e) {}
 
     // Build change navigation bar
@@ -17410,7 +16825,7 @@ flex-shrink:0;cursor:pointer;
         applyIndeterminateCheckboxes(view);
         updateAllBlockCheckboxes(view, file.path, hunks);
         setupEditableLineEditing();
-        try { if (typeof window.__gmApplyCodeFolding === 'function') window.__gmApplyCodeFolding(); } catch (e) {}
+        try { if (typeof window.__gmApplyCodeFolding === 'function') window.__gmApplyCodeFolding(true); } catch (e) {}
         try {
           if (typeof window.__gmAfterDiffRenderHook === 'function') {
             const fn = window.__gmAfterDiffRenderHook;
@@ -17702,7 +17117,7 @@ flex-shrink:0;cursor:pointer;
         applyIndeterminateCheckboxes(view);
         updateAllBlockCheckboxes(view, file.path, hunks);
         setupEditableLineEditing();
-        try { if (typeof window.__gmApplyCodeFolding === 'function') window.__gmApplyCodeFolding(); } catch (e) {}
+        try { if (typeof window.__gmApplyCodeFolding === 'function') window.__gmApplyCodeFolding(true); } catch (e) {}
         try {
           const first = view.querySelector('.editable-line');
           if (first && typeof first.focus === 'function') first.focus({ preventScroll: true });
@@ -17884,7 +17299,7 @@ flex-shrink:0;cursor:pointer;
         applyIndeterminateCheckboxes(view);
         updateAllBlockCheckboxes(view, file.path, hunks);
         setupEditableLineEditing();
-        try { if (typeof window.__gmApplyCodeFolding === 'function') window.__gmApplyCodeFolding(); } catch (e) {}
+        try { if (typeof window.__gmApplyCodeFolding === 'function') window.__gmApplyCodeFolding(true); } catch (e) {}
         try {
           if (typeof window.__gmAfterDiffRenderHook === 'function') {
             const fn = window.__gmAfterDiffRenderHook;
