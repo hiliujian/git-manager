@@ -2206,6 +2206,13 @@ flex-shrink:0;cursor:pointer;
     .spin{display:inline-block;width:12px;height:12px;border:2px solid var(--border);
       border-top-color:var(--accent);border-radius:50%;animation:sp .6s linear infinite;}
     @keyframes sp{to{transform:rotate(360deg);}}
+
+    #selfCheckBtn{display:none;}
+    #selfCheckBtn.gm-selfcheck-bad{display:inline-flex;animation:__gmSelfCheckBlink 1.05s ease-in-out infinite;}
+    @keyframes __gmSelfCheckBlink{
+      0%,100%{transform:translateY(0);filter:drop-shadow(0 0 0 rgba(255,80,80,0));opacity:1;}
+      50%{transform:translateY(-1px);filter:drop-shadow(0 0 10px rgba(255,80,80,.38));opacity:.72;}
+    }
   </style>
   <script defer src="https://cdn.jsdelivr.net/npm/markdown-it@14.1.0/dist/markdown-it.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/dompurify@3.0.8/dist/purify.min.js"></script>
@@ -9691,6 +9698,8 @@ flex-shrink:0;cursor:pointer;
       return;
     }
 
+    try { el.setAttribute('data-origin', String(originUrl || '').trim()); } catch (e0) {}
+
     const safeBase = (base || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const safeOriginText = (originUrl || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const isHttpUrl = /^https?:\/\//i.test(originUrl || '');
@@ -9755,6 +9764,7 @@ flex-shrink:0;cursor:pointer;
           clearTimeout(wsReconnectTimer);
           wsReconnectTimer = null;
         }
+        try { __gmUpdateSelfCheckButtonState(); } catch (eS0) {}
       };
 
       ws.onmessage = (event) => {
@@ -9794,6 +9804,7 @@ flex-shrink:0;cursor:pointer;
         } catch (e0) {}
         // 5秒后尝试重连
         __gmWsScheduleReconnect();
+        try { __gmUpdateSelfCheckButtonState(); } catch (eS1) {}
       };
     } catch (e) {
       console.error('WebSocket 连接失败:', e);
@@ -9989,37 +10000,13 @@ flex-shrink:0;cursor:pointer;
 
   function __gmRunSelfCheck() {
     try {
-      const yes = (v) => (v ? 'yes' : 'no');
-      const hidden = !!document.hidden;
-      const wsState = (() => {
-        try {
-          if (!ws) return 'null';
-          const rs = ws.readyState;
-          if (rs === WebSocket.CONNECTING) return 'CONNECTING';
-          if (rs === WebSocket.OPEN) return 'OPEN';
-          if (rs === WebSocket.CLOSING) return 'CLOSING';
-          if (rs === WebSocket.CLOSED) return 'CLOSED';
-          return String(rs);
-        } catch (e) {
-          return 'unknown';
-        }
-      })();
-
-      const pendingFilesUpdate = !!window.__gmPendingFilesUpdate;
-
-      const msg = [
-        `time: ${new Date().toLocaleString()}`,
-        `document.hidden: ${yes(hidden)}`,
-        `repo.valid: ${yes(!!window.__gmRepoValid)}`,
-        `wsConnected: ${yes(!!wsConnected)}`,
-        `wsConnecting: ${yes(!!wsConnecting)}`,
-        `ws: ${wsState}`,
-        `wsReconnectTimer: ${yes(!!wsReconnectTimer)}`,
-        `realTimeRefreshTimer: ${yes(!!refreshTimer)}`,
-        `externalWatchTimer: ${yes(!!window.__plainEditorExternalWatchTimer)}`,
-        `externalWatchInFlight: ${yes(!!window.__plainEditorExternalWatchInFlight)}`,
-        `pendingFilesUpdate: ${yes(pendingFilesUpdate)}`,
-      ].join('\n');
+      const issues = __gmGetSelfCheckIssues();
+      if (!issues || !issues.length) {
+        try { __gmUpdateSelfCheckButtonState(); } catch (e0) {}
+        try { toast('未发现问题', 'ok'); } catch (e1) {}
+        return;
+      }
+      const msg = __gmBuildSelfCheckMessage(issues);
 
       showCustomDialog({
         title: '自检信息',
@@ -10029,6 +10016,96 @@ flex-shrink:0;cursor:pointer;
     } catch (e) {
       try { toast('自检失败', 'err'); } catch (e2) {}
     }
+  }
+
+  function __gmGetSelfCheckIssues() {
+    try {
+      const hidden = !!document.hidden;
+      const pendingFilesUpdate = !!window.__gmPendingFilesUpdate;
+      const out = [];
+      try { if (!window.__gmRepoValid) out.push('repo 未打开或无效'); } catch (e0) {}
+      try {
+        const repoOk = !!window.__gmRepoValid;
+        const el = document.getElementById('repoLabel');
+        const origin0 = el ? String(el.getAttribute('data-origin') || '').trim() : '';
+        if (repoOk && !origin0) out.push('origin 未配置');
+      } catch (eO0) {}
+      try { if (!hidden && !wsConnected) out.push('WebSocket 未连接'); } catch (e1) {}
+      try { if (!hidden && wsReconnectTimer) out.push('WebSocket 正在重连'); } catch (e2) {}
+      try { if (pendingFilesUpdate) out.push('存在 pendingFilesUpdate（后台合并更新未处理）'); } catch (e3) {}
+      try {
+        const repoOk = !!window.__gmRepoValid;
+        const se = String(window.__gmLastSyncStatusError || '').trim();
+        if (repoOk && se) out.push('sync_status 异常：' + se);
+      } catch (eS0) {}
+      try {
+        const repoOk = !!window.__gmRepoValid;
+        const fe = String(window.__gmLastFilesError || '').trim();
+        if (repoOk && fe) out.push('files 异常：' + fe);
+      } catch (eF0) {}
+      try {
+        const repoOk = !!window.__gmRepoValid;
+        const le = String(window.__gmLastLogError || '').trim();
+        if (repoOk && le) out.push('log 异常：' + le);
+      } catch (eL0) {}
+      try {
+        const repoOk = !!window.__gmRepoValid;
+        const be = String(window.__gmLastBranchesError || '').trim();
+        if (repoOk && be) out.push('branches 异常：' + be);
+      } catch (eB0) {}
+      try {
+        const repoOk = !!window.__gmRepoValid;
+        const se2 = String(window.__gmLastStatusError || '').trim();
+        if (repoOk && se2) out.push('status 异常：' + se2);
+      } catch (eS1) {}
+      return out;
+    } catch (e) {
+      return ['自检异常'];
+    }
+  }
+
+  function __gmBuildSelfCheckMessage(issues) {
+    const yes = (v) => (v ? 'yes' : 'no');
+    const hidden = !!document.hidden;
+    const wsState = (() => {
+      try {
+        if (!ws) return 'null';
+        const rs = ws.readyState;
+        if (rs === WebSocket.CONNECTING) return 'CONNECTING';
+        if (rs === WebSocket.OPEN) return 'OPEN';
+        if (rs === WebSocket.CLOSING) return 'CLOSING';
+        if (rs === WebSocket.CLOSED) return 'CLOSED';
+        return String(rs);
+      } catch (e) {
+        return 'unknown';
+      }
+    })();
+    const pendingFilesUpdate = !!window.__gmPendingFilesUpdate;
+    return [
+      `issues: ${(issues || []).join('；')}`,
+      `time: ${new Date().toLocaleString()}`,
+      `document.hidden: ${yes(hidden)}`,
+      `repo.valid: ${yes(!!window.__gmRepoValid)}`,
+      `wsConnected: ${yes(!!wsConnected)}`,
+      `wsConnecting: ${yes(!!wsConnecting)}`,
+      `ws: ${wsState}`,
+      `wsReconnectTimer: ${yes(!!wsReconnectTimer)}`,
+      `realTimeRefreshTimer: ${yes(!!refreshTimer)}`,
+      `externalWatchTimer: ${yes(!!window.__plainEditorExternalWatchTimer)}`,
+      `externalWatchInFlight: ${yes(!!window.__plainEditorExternalWatchInFlight)}`,
+      `pendingFilesUpdate: ${yes(pendingFilesUpdate)}`,
+    ].join('\n');
+  }
+
+  function __gmUpdateSelfCheckButtonState() {
+    try {
+      const btn = document.getElementById('selfCheckBtn');
+      if (!btn) return;
+      const issues = __gmGetSelfCheckIssues();
+      const has = !!(issues && issues.length);
+      if (has) btn.classList.add('gm-selfcheck-bad');
+      else btn.classList.remove('gm-selfcheck-bad');
+    } catch (e) {}
   }
 
   async function handleFilesUpdate(newFiles) {
@@ -13337,12 +13414,19 @@ flex-shrink:0;cursor:pointer;
     err.textContent = '';
     try { localStorage.setItem('lastRepoPath', path); } catch (e) {}
     showApp(res.repo, res.branch);
+    try {
+      const u = String((res && res.origin_url) || '').trim();
+      const el0 = document.getElementById('repoLabel');
+      if (el0) el0.setAttribute('data-origin', u);
+      if (u) updateOriginLabel(u);
+    } catch (eOU0) {}
     try { __gmAiResetRepoScopedState(); } catch (e) {}
     try {
       const pid = String(__gmAiSelectedProfileId || (__gmAiConfig && __gmAiConfig.active_profile_id) || '');
       if (pid) loadAiChatHistory(pid).catch(()=>{});
     } catch (e) {}
     await refresh();
+    try { __gmUpdateSelfCheckButtonState(); } catch (e) {}
   }
 
   function goToOpener() {
@@ -13420,12 +13504,85 @@ flex-shrink:0;cursor:pointer;
     const repoLabelEl = document.getElementById('repoLabel');
     repoLabelEl.textContent = repo;
     repoLabelEl.setAttribute('data-repo', repo);
+    try { repoLabelEl.setAttribute('data-origin', ''); } catch (eO1) {}
     try {
       if (!repoLabelEl.__gmCopyBound) {
         repoLabelEl.__gmCopyBound = true;
         repoLabelEl.title = '点击复制路径';
         repoLabelEl.style.cursor = 'pointer';
+        repoLabelEl.__gmLongPressFired = false;
+        repoLabelEl.__gmLongPressTimer = 0;
+        repoLabelEl.__gmLongPressMove = 0;
+        const clearLongPressTimer = () => {
+          try {
+            if (repoLabelEl.__gmLongPressTimer) clearTimeout(repoLabelEl.__gmLongPressTimer);
+          } catch (e) {}
+          repoLabelEl.__gmLongPressTimer = 0;
+        };
+        const startLongPress = (e) => {
+          try {
+            if (!e || (e.button !== undefined && e.button !== 0)) return;
+          } catch (e0) {}
+          clearLongPressTimer();
+          repoLabelEl.__gmLongPressFired = false;
+          repoLabelEl.__gmLongPressMove = 0;
+          const x0 = Number(e && e.clientX || 0);
+          const y0 = Number(e && e.clientY || 0);
+          repoLabelEl.__gmLongPressTimer = setTimeout(async () => {
+            try {
+              if (repoLabelEl.__gmLongPressMove > 8) return;
+              repoLabelEl.__gmLongPressFired = true;
+              const cur = String(repoLabelEl.getAttribute('data-origin') || '').trim();
+              const next = await showPrompt({
+                title: '切换远程仓库地址（origin）',
+                message: '请输入新的远程 git 地址，将执行：git remote set-url origin <url>',
+                defaultValue: cur,
+                okText: '切换',
+                cancelText: '取消'
+              });
+              if (!next) return;
+              toast('正在更新远程地址...', 'info');
+              const r = await POST('/api/set_origin', { url: next });
+              if (r && r.error) {
+                toast(r.error, 'err');
+                return;
+              }
+              try {
+                const u = String((r && r.origin_url) || next || '').trim();
+                repoLabelEl.setAttribute('data-origin', u);
+                updateOriginLabel(u);
+              } catch (eU) {}
+              try { __gmUpdateSelfCheckButtonState(); } catch (eS0) {}
+              toast('✓ 已更新远程地址', 'ok');
+            } catch (e2) {}
+          }, 650);
+          const onMove = (ev) => {
+            try {
+              const dx = Number(ev && ev.clientX || 0) - x0;
+              const dy = Number(ev && ev.clientY || 0) - y0;
+              repoLabelEl.__gmLongPressMove = Math.max(repoLabelEl.__gmLongPressMove || 0, Math.sqrt(dx*dx + dy*dy));
+            } catch (e3) {}
+          };
+          const onUp = () => {
+            clearLongPressTimer();
+            try { document.removeEventListener('pointermove', onMove, true); } catch (e4) {}
+            try { document.removeEventListener('pointerup', onUp, true); } catch (e5) {}
+            try { document.removeEventListener('pointercancel', onUp, true); } catch (e6) {}
+          };
+          try { document.addEventListener('pointermove', onMove, true); } catch (e4) {}
+          try { document.addEventListener('pointerup', onUp, true); } catch (e5) {}
+          try { document.addEventListener('pointercancel', onUp, true); } catch (e6) {}
+        };
+        try { repoLabelEl.addEventListener('pointerdown', startLongPress, true); } catch (eLP) {}
         repoLabelEl.addEventListener('click', async (e) => {
+          try {
+            if (repoLabelEl.__gmLongPressFired) {
+              repoLabelEl.__gmLongPressFired = false;
+              e.preventDefault();
+              e.stopPropagation();
+              return;
+            }
+          } catch (eLP0) {}
           try {
             const t = e && e.target;
             const a = t && t.closest ? t.closest('a.origin-link-btn') : null;
@@ -13451,6 +13608,8 @@ flex-shrink:0;cursor:pointer;
     // 不再需要轮询模式，WebSocket会实时推送更新
     // 但保留作为备份
     startRealTimeRefresh();
+
+    try { __gmUpdateSelfCheckButtonState(); } catch (e) {}
   }
 
   function __gmResetRepoScopedState() {
@@ -13582,6 +13741,12 @@ flex-shrink:0;cursor:pointer;
         cur = (b && b.current) ? b.current : '';
       } catch (e) { cur = ''; }
       showApp(status.repo, cur);
+      try {
+        const u = String((status && status.origin_url) || '').trim();
+        const el0 = document.getElementById('repoLabel');
+        if (el0) el0.setAttribute('data-origin', u);
+        if (u) updateOriginLabel(u);
+      } catch (eOU1) {}
       try { __gmAiResetRepoScopedState(); } catch (e) {}
       try {
         const pid = String(__gmAiSelectedProfileId || (__gmAiConfig && __gmAiConfig.active_profile_id) || '');
@@ -13603,6 +13768,12 @@ flex-shrink:0;cursor:pointer;
     if (res && !res.error && res.repo) {
       if (err) err.textContent = '';
       showApp(res.repo, res.branch);
+      try {
+        const u = String((res && res.origin_url) || '').trim();
+        const el0 = document.getElementById('repoLabel');
+        if (el0) el0.setAttribute('data-origin', u);
+        if (u) updateOriginLabel(u);
+      } catch (eOU2) {}
       try { __gmAiResetRepoScopedState(); } catch (e) {}
       try {
         const pid = String(__gmAiSelectedProfileId || (__gmAiConfig && __gmAiConfig.active_profile_id) || '');
@@ -13637,13 +13808,42 @@ flex-shrink:0;cursor:pointer;
 
     try { window.__gmRepoValid = !!(stRes && stRes.valid && stRes.repo); } catch (e) {}
 
+    try {
+      if (!stRes || stRes.error || stRes.ok === false) {
+        window.__gmLastStatusError = String((stRes && (stRes.error || stRes.msg || stRes.message)) || '请求失败');
+      } else {
+        window.__gmLastStatusError = '';
+      }
+    } catch (eST0) {}
+
+    try {
+      if (!lRes || lRes.error || lRes.ok === false) {
+        window.__gmLastLogError = String((lRes && (lRes.error || lRes.msg || lRes.message)) || '请求失败');
+      } else {
+        window.__gmLastLogError = '';
+      }
+    } catch (eLG0) {}
+
+    try {
+      if (!bRes || bRes.error || bRes.ok === false) {
+        window.__gmLastBranchesError = String((bRes && (bRes.error || bRes.msg || bRes.message)) || '请求失败');
+      } else {
+        window.__gmLastBranchesError = '';
+      }
+    } catch (eBR0) {}
+
     if (fRes.error) {
+      try { window.__gmLastFilesError = String((fRes && (fRes.error || fRes.msg || fRes.message)) || '请求失败'); } catch (eFE0) {}
+      try { __gmUpdateSelfCheckButtonState(); } catch (eS0) {}
       __gmToastApiError('刷新失败', fRes, fRes.error);
       btn.style.opacity='';
       btn.style.pointerEvents='';
       try { setButtonBusy(fileListBtn, false); } catch (e) {}
       return;
     }
+
+    try { window.__gmLastFilesError = ''; } catch (eFE1) {}
+    try { __gmUpdateSelfCheckButtonState(); } catch (eS1) {}
 
     files   = fRes.files  || [];
     // Apply accurate per-file stats overrides when available
@@ -13661,7 +13861,7 @@ flex-shrink:0;cursor:pointer;
       }
     });
     // 映射日志数据字段: message -> msg, date -> time
-    logData = (lRes.log || []).map(log => ({
+    logData = (lRes && Array.isArray(lRes.log) ? lRes.log : []).map(log => ({
       ...log,
       msg: log.message || log.msg || '',
       time: log.date ? new Date(log.date).toLocaleString('zh-CN', {
@@ -13672,8 +13872,10 @@ flex-shrink:0;cursor:pointer;
         minute: '2-digit'
       }) : ''
     }));
-    lastBranchesRes = bRes;
-    if (bRes.current) document.getElementById('branchName').textContent = bRes.current;
+    lastBranchesRes = bRes || null;
+    try {
+      if (bRes && bRes.current) document.getElementById('branchName').textContent = bRes.current;
+    } catch (eBN0) {}
 
     try {
       const stagedBtn = document.getElementById('stagedBtn');
@@ -14240,6 +14442,8 @@ flex-shrink:0;cursor:pointer;
     const fRes = await __gmGETCancelable('files', '/api/files');
     if (window.__gmFilesEpoch !== epoch) return;
     if (fRes.error) {
+      try { window.__gmLastFilesError = String((fRes && (fRes.error || fRes.msg || fRes.message)) || '请求失败'); } catch (eFE0) {}
+      try { __gmUpdateSelfCheckButtonState(); } catch (eS0) {}
       try {
         const msg = String((fRes && (fRes.error || fRes.msg || fRes.message)) || '').trim();
         if (msg.indexOf('未打开仓库') >= 0 || msg.indexOf('未打开') >= 0) {
@@ -14252,6 +14456,8 @@ flex-shrink:0;cursor:pointer;
       } catch (e) {}
       return;
     }
+    try { window.__gmLastFilesError = ''; } catch (eFE1) {}
+    try { __gmUpdateSelfCheckButtonState(); } catch (eS1) {}
     const newFiles = fRes.files || [];
 
     const oldFiles = files;
@@ -21462,12 +21668,17 @@ flex-shrink:0;cursor:pointer;
       if ((window.__gmSyncStatusEpoch || 0) !== epoch) return;
 
       if (!res || res.error || res.ok === false) {
+        try { window.__gmLastSyncStatusError = String((res && (res.error || res.msg || res.message)) || '请求失败'); } catch (eSE0) {}
         ind.style.display = 'none';
         __gmSyncStatusFailCount = Math.min(8, (__gmSyncStatusFailCount || 0) + 1);
         const waitMs = Math.min(60000, 2000 * Math.pow(2, __gmSyncStatusFailCount - 1));
         __gmSyncStatusCooldownUntil = Date.now() + waitMs;
+        try { __gmUpdateSelfCheckButtonState(); } catch (eS1) {}
         return;
       }
+
+      try { window.__gmLastSyncStatusError = ''; } catch (eSE1) {}
+      try { __gmUpdateSelfCheckButtonState(); } catch (eS2) {}
 
       __gmSyncStatusFailCount = 0;
       __gmSyncStatusCooldownUntil = 0;

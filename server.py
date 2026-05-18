@@ -124,6 +124,42 @@ def get_repo_status():
         return False, str(e), {}
 
 
+def set_origin_url(url: str):
+    if not REPO_PATH:
+        return False, "未打开仓库", ""
+    raw = str(url or "").strip()
+    if not raw:
+        return False, "远程地址为空", ""
+    try:
+        out, err, code = run_git(["remote", "set-url", "origin", raw])
+        if code != 0:
+            msg = (err or out or "").strip()
+            return False, msg or "设置远程地址失败", ""
+    except Exception as e:
+        return False, str(e), ""
+
+    origin_url = ""
+    try:
+        out2, _, code2 = run_git(["config", "--get", "remote.origin.url"])
+        if code2 == 0:
+            origin_url = (out2 or "").strip()
+    except Exception:
+        origin_url = raw
+    return True, "", origin_url
+
+
+def get_current_branch():
+    if not REPO_PATH:
+        return ""
+    try:
+        out, _, code = run_git(["rev-parse", "--abbrev-ref", "HEAD"])
+        if code == 0:
+            return (out or "").strip()
+    except Exception:
+        return ""
+    return ""
+
+
 def open_repo(path: str):
     global REPO_PATH
     raw = str(path or "").strip()
@@ -5087,6 +5123,7 @@ def get_capabilities_spec():
         {"method": "GET", "path": "/api/status"},
         {"method": "GET", "path": "/api/sync_status", "query": {"fetch": "0|1"}},
         {"method": "POST", "path": "/api/open_repo", "body": {"path": "<abs path>"}},
+        {"method": "POST", "path": "/api/set_origin", "body": {"url": "<git remote url>"}},
         {"method": "GET", "path": "/api/staged_files"},
         {"method": "POST", "path": "/api/unstage_file", "body": {"path": "<rel path>"}},
         {"method": "POST", "path": "/api/discard_staged_file", "body": {"path": "<rel path>"}},
@@ -5290,6 +5327,15 @@ def get_capabilities_spec():
                 "path": {"type": "string", "desc": "仓库路径（绝对路径或可展开的用户路径）"},
             },
             "example": {"type": "open_repo", "path": "C:/path/to/repo"},
+        },
+        {
+            "type": "set_origin",
+            "desc": "设置当前仓库的远程 origin 地址（等同 git remote set-url origin <url>）。",
+            "required": ["url"],
+            "properties": {
+                "url": {"type": "string", "desc": "新的远程 git 地址，例如 https://gitee.com/xxx/yyy.git"},
+            },
+            "example": {"type": "set_origin", "url": "https://gitee.com/gzgdata/ntos-test.git"},
         },
         {
             "type": "staged_files",
@@ -6324,6 +6370,15 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
         if not ok:
             return False, msg or "open_repo failed", {"path": path0}
         return True, "", {"path": path0}
+
+    if t == "set_origin":
+        url0 = str(tool.get("url") or "").strip()
+        if not url0:
+            return False, "缺少 url", {}
+        ok, msg, origin_url = set_origin_url(url0)
+        if not ok:
+            return False, msg or "set_origin failed", {"url": url0}
+        return True, "", {"origin_url": origin_url}
 
     if t == "workspace_context":
         try:
@@ -7958,7 +8013,16 @@ def get_sync_status(do_fetch: bool = False):
     bout, berr, bcode = run_git(["branch", "--show-current"], timeout=30)
     branch = (bout or "").strip() if bcode == 0 else ""
     if not branch:
-        return False, {}, (berr or "无法获取当前分支")
+        # Detached HEAD or unborn branch: treat as a valid state.
+        # Sync-status is not meaningful without an upstream branch, but it shouldn't be a 400.
+        return True, {
+            "branch": "",
+            "upstream": None,
+            "ahead": 0,
+            "behind": 0,
+            "has_upstream": False,
+            "detached": True,
+        }, None
 
     upstream = ""
     uout, uerr, ucode = run_git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], timeout=30)
@@ -8847,9 +8911,28 @@ class Handler(BaseHTTPRequestHandler):
                     logger.error(f"打开仓库失败: {msg} - {raw}")
                     self.send_json({"error": msg or "打开仓库失败"}, 400)
                     return
-                _, cur = get_branches()
-                logger.info(f"成功打开仓库: {REPO_PATH} (分支: {cur})")
-                self.send_json({"ok": True, "repo": REPO_PATH, "branch": cur})
+                # 获取当前分支
+                branch = get_current_branch()
+                # 获取仓库远程地址
+                try:
+                    _, _, st0 = get_repo_status()
+                    origin_url = st0.get("origin_url") if isinstance(st0, dict) else ""
+                except Exception:
+                    origin_url = ""
+                self.send_json({"repo": REPO_PATH, "branch": branch, "origin_url": origin_url})
+
+            elif p == "/api/set_origin":
+                logger.info("处理 /api/set_origin 请求")
+                url0 = ""
+                try:
+                    url0 = str((data or {}).get("url") or "").strip()
+                except Exception:
+                    url0 = ""
+                ok, msg, origin_url = set_origin_url(url0)
+                if not ok:
+                    self.send_json({"error": msg or "设置远程地址失败"}, 400)
+                    return
+                self.send_json({"ok": True, "origin_url": origin_url})
 
             elif p == "/api/unstage_file":
                 logger.info("处理 /api/unstage_file 请求")
