@@ -18096,11 +18096,8 @@ flex-shrink:0;cursor:pointer;
           <span class="lc">${l.type!=='empty'?esc(l.text):''}</span>
         </div>`;
         } else {
-          const isSingleLine = group.lines.length === 1;
           const startLi = group.startIndex;
           const endLi = group.endIndex;
-          const startLineNum = group.lines[0].line.num;
-          const endLineNum = group.lines[group.lines.length - 1].line.num;
 
           const blockHint = (!readonly && group && group.lines && group.lines.length > 1) ?
                   `<div class="dl revert-block-hint" data-line-id="${hi}-${startLi}" data-hunk="${hi}" data-line="${startLi}">
@@ -18128,7 +18125,7 @@ flex-shrink:0;cursor:pointer;
           </div>`;
           }).join('');
 
-          return hintRow + lineRows;
+          return blockHint + lineRows;
         }
       }).join('');
 
