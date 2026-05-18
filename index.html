@@ -3043,6 +3043,11 @@ flex-shrink:0;cursor:pointer;
     }
 
     try {
+      __gmAiNextSendIsContinue = false;
+      __gmAiSetContinueState(false, '');
+    } catch (e) {}
+
+    try {
       __gmAiSessions = [];
       __gmAiActiveSessionId = '';
     } catch (e) {}
@@ -3865,6 +3870,8 @@ flex-shrink:0;cursor:pointer;
 
     // ensure websocket connected for streaming status
     try { connectWebSocket(); } catch (eWs0) {}
+
+    try { await __gmAiLoadCapabilitiesOnce(false); } catch (eCap0) {}
 
     if (ta) ta.value = '';
     const sid0 = String(__gmAiActiveSessionId || '').trim();
@@ -10692,10 +10699,15 @@ flex-shrink:0;cursor:pointer;
 
   function __gmAiContinueStorageKey(profileId, sessionId) {
     try {
+      let repoKey = '';
+      try {
+        const el0 = document.getElementById('repoLabel');
+        repoKey = String((el0 && (el0.getAttribute('data-repo') || el0.textContent)) || '').trim();
+      } catch (eR0) { repoKey = ''; }
       const pid = String(profileId || '').trim();
       const sid = String(sessionId || '').trim();
-      if (!pid || !sid) return '';
-      return `gm_ai_continue_state:${pid}:${sid}`;
+      if (!pid || !sid || !repoKey) return '';
+      return `gm_ai_continue_state:${encodeURIComponent(repoKey)}:${pid}:${sid}`;
     } catch (e) {
       return '';
     }
@@ -10720,8 +10732,14 @@ flex-shrink:0;cursor:pointer;
       const pid = String(profileId || __gmAiSelectedProfileId || __gmAiConfig.active_profile_id || '').trim();
       const sid = String(sessionId || __gmAiActiveSessionId || '').trim();
       const k = __gmAiContinueStorageKey(pid, sid);
-      if (!k) return;
-      localStorage.removeItem(k);
+      if (k) {
+        localStorage.removeItem(k);
+        return;
+      }
+      // Legacy key (without repo dimension)
+      if (pid && sid) {
+        try { localStorage.removeItem(`gm_ai_continue_state:${pid}:${sid}`); } catch (e2) {}
+      }
     } catch (e) {}
   }
 
@@ -10754,6 +10772,28 @@ flex-shrink:0;cursor:pointer;
         if (__gmAiContinueState.on) __gmAiPersistContinueState();
         else __gmAiClearPersistedContinueState();
       } catch (e2) {}
+    } catch (e) {}
+  }
+
+  function __gmAiRevalidateContinueStateForActiveSession() {
+    try {
+      if (__gmAiIsResponding) {
+        __gmAiSetContinueState(false, '');
+        return;
+      }
+      const msgs = Array.isArray(__gmAiChatMessages) ? __gmAiChatMessages : [];
+      let lastA = null;
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        const m = msgs[i];
+        if (m && String(m.role || '') === 'assistant') { lastA = m; break; }
+      }
+
+      // If the assistant message that implied a continue no longer exists, drop stale UI state.
+      const lastStage = String(lastA && lastA.stage || '');
+      const needContinueCtx = !!(lastA && !lastA.pending && lastStage === 'error');
+      if (!needContinueCtx && __gmAiContinueState && __gmAiContinueState.on) {
+        __gmAiSetContinueState(false, '');
+      }
     } catch (e) {}
   }
 
@@ -11133,6 +11173,7 @@ flex-shrink:0;cursor:pointer;
         __gmAiChatMessages.splice(i, 1);
       }
       __gmAiRenderChat();
+      try { __gmAiRevalidateContinueStateForActiveSession(); } catch (eC0) {}
       Promise.resolve(__gmAiSaveHistoryNow()).then(() => {
         try { __gmAiRefreshSendCounter(); } catch (e0) {}
       }).catch(()=>{});
@@ -12648,7 +12689,7 @@ flex-shrink:0;cursor:pointer;
       }
       __gmAiSelectedProfileId = pid;
 
-      try { await loadAiChatHistory(__gmAiSelectedProfileId); } catch (e0) {}
+      try { loadAiChatHistory(__gmAiSelectedProfileId).catch(() => {}); } catch (e0) {}
 
       __gmAiRenderProfileList();
 
@@ -13011,12 +13052,35 @@ flex-shrink:0;cursor:pointer;
         contextPoolJsonBlock = 'CONTEXT_POOL_JSON:\n' + JSON.stringify(pool, null, 2);
       } catch (eCP) { contextPoolJsonBlock = ''; }
 
+      let capTextBlock = '';
+      try {
+        const t = String(__gmAiCapabilitiesText || '').trim();
+        if (t) capTextBlock = 'CAPABILITIES_TEXT:\n' + t;
+      } catch (eCPT) { capTextBlock = ''; }
+
+      let capSpecBlock = '';
+      try {
+        if (__gmAiCapabilitiesSpec && typeof __gmAiCapabilitiesSpec === 'object') {
+          capSpecBlock = 'CAPABILITIES_SPEC_JSON:\n' + JSON.stringify(__gmAiCapabilitiesSpec, null, 2);
+        }
+      } catch (eCPS) { capSpecBlock = ''; }
+
+      let capBlock = '';
+      try {
+        const parts = [];
+        if (capTextBlock) parts.push(capTextBlock);
+        if (capSpecBlock) parts.push(capSpecBlock);
+        capBlock = parts.length ? ('\n\n【系统能力说明】\n' + parts.join('\n\n')) : '';
+        if (capBlock && capBlock.length > 12000) capBlock = capBlock.slice(0, 12000);
+      } catch (eCB) { capBlock = ''; }
+
       if (!path && !snippet) {
         if (!ws) return { dyn_context: '', context_refs: Array.isArray(refsIndex) ? refsIndex : [] };
         return {
           dyn_context: `【工作区信息】\n${ws}`
             + (contextPoolJsonBlock ? (`\n\n${contextPoolJsonBlock}`) : '')
-            + execSummaryBlock,
+            + execSummaryBlock
+            + capBlock,
           context_refs: Array.isArray(refsIndex) ? refsIndex : [],
         };
       }
@@ -13025,7 +13089,8 @@ flex-shrink:0;cursor:pointer;
         return {
           dyn_context: `【当前文件】\n${path}\n\n【工作区信息】\n${ws}`
             + (contextPoolJsonBlock ? (`\n\n${contextPoolJsonBlock}`) : '')
-            + execSummaryBlock,
+            + execSummaryBlock
+            + capBlock,
           context_refs: Array.isArray(refsIndex) ? refsIndex : [],
         };
       }
@@ -13036,7 +13101,8 @@ flex-shrink:0;cursor:pointer;
       return {
         dyn_context: sys
           + (contextPoolJsonBlock ? (`\n\n${contextPoolJsonBlock}`) : '')
-          + execSummaryBlock,
+          + execSummaryBlock
+          + capBlock,
         context_refs: Array.isArray(refsIndex) ? refsIndex : [],
       };
     } catch (e) {

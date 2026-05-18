@@ -16,7 +16,7 @@ import urllib.parse
 import uuid
 import py_compile
 import ssl
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs, unquote
 from datetime import datetime
 try:
@@ -6013,6 +6013,22 @@ def get_capabilities_spec():
     lines = []
     lines.append("系统接口索引（后端单一真源，自动生成）：")
     lines.append("")
+    lines.append("Action 联动卡片（Browser Flow）协议：")
+    lines.append("- 你可以在回复中输出一个 language=json 的代码块，前端会自动识别并渲染为可执行卡片（Browser Flow）。")
+    lines.append("- 代码块内容必须是严格 JSON（不要写注释/尾逗号/多余文字）。")
+    lines.append("- 触发条件：必须使用 Markdown 围栏代码块 ```json ... ```（小写 json），并且代码块内只放 JSON。")
+    lines.append("- 两种格式均可：")
+    lines.append("  1) [{\"action\":\"open\",\"params\":{...}}, ...]")
+    lines.append("  2) {\"session_id\":\"s1\",\"steps\":[{\"action\":\"open\",\"params\":{...}}, ...]}")
+    lines.append("- action 允许值：open/click/type/eval/text/screenshot/wait/close（会映射到 /api/browser_tool）。")
+    lines.append("- 最小可用示例（可直接照抄）：")
+    lines.append("  ```json")
+    lines.append("  [")
+    lines.append("    {\"action\":\"open\",\"params\":{\"url\":\"https://example.com\"}},")
+    lines.append("    {\"action\":\"screenshot\",\"params\":{}}")
+    lines.append("  ]")
+    lines.append("  ```")
+    lines.append("")
     lines.append("重要约束：")
     lines.append("- 优先使用 /api/* 完成业务 CRUD；只有接口确实无法覆盖时才使用 /api/run_cmd")
     lines.append("- run_cmd 是底层终端命令执行入口（不是普通业务功能），必须是单行命令，不允许换行/管道/重定向/复合命令")
@@ -11171,7 +11187,7 @@ def main():
         # 尝试启动HTTP服务器，如果端口被占用则尝试下一个端口
         for attempt in range(max_attempts):
             try:
-                srv = HTTPServer(("127.0.0.1", port), Handler)
+                srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
                 logger.info("=" * 60)
                 logger.info("Git Manager 后端启动成功!")
                 logger.info(f"HTTP 服务器: http://localhost:{port}")
