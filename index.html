@@ -6198,7 +6198,13 @@ flex-shrink:0;cursor:pointer;
           normalized = normalized.slice(0, -1);
         }
         // 3. 移除零宽字符和不间断空格（这些可能是编辑器添加的）
-        normalized = normalized.replace(/\u200b/g, '').replace(/\u00a0/g, ' ');
+        normalized = normalized
+          .replace(/[\u25be\u25b8]/g, '')
+          .replace(/\{\.\.\.\}/g, '')
+          .replace(/\.\.\.\}/g, '')
+          .replace(/\{\.\.\./g, '')
+          .replace(/\u200b/g, '')
+          .replace(/\u00a0/g, ' ');
         return normalized;
       };
       
@@ -9458,7 +9464,6 @@ flex-shrink:0;cursor:pointer;
     const waitMs = Math.min(wsReconnectDelayMaxMs, base + jitter);
     wsReconnectTimer = setTimeout(() => {
       wsReconnectTimer = null;
-      console.log(`尝试重新连接 WebSocket... (delay=${waitMs}ms)`);
       connectWebSocket();
     }, waitMs);
   }
@@ -9613,7 +9618,6 @@ flex-shrink:0;cursor:pointer;
       try { if (openTimer) { clearTimeout(openTimer); openTimer = null; } } catch (eT3) {}
       __gmWsScheduleReconnect();
       // 回退到轮询模式
-      console.log('回退到轮询模式');
     }
   }
 
@@ -9779,7 +9783,7 @@ flex-shrink:0;cursor:pointer;
         break;
 
       default:
-        console.log('未知的消息类型:', data.type);
+        break;
     }
   }
 
@@ -15576,7 +15580,7 @@ flex-shrink:0;cursor:pointer;
     // Load diff hunks
     try {
       if (window.__gmLoadDiffEpoch !== epoch) return;
-      const ctxParam = (diffMode === 'unified') ? `&ctx=${encodeURIComponent(changeViewCtx)}` : '';
+      const ctxParam = (diffMode === 'unified' || diffMode === 'split') ? `&ctx=${encodeURIComponent(changeViewCtx)}` : '';
       const res = await __gmGETCancelable('diff', `/api/diff?path=${encodeURIComponent(f.path)}&status=${f.status}${ctxParam}`);
       if (window.__gmLoadDiffEpoch !== epoch) return;
       if (res.error) {
@@ -16825,7 +16829,6 @@ flex-shrink:0;cursor:pointer;
         applyIndeterminateCheckboxes(view);
         updateAllBlockCheckboxes(view, file.path, hunks);
         setupEditableLineEditing();
-        try { if (typeof window.__gmApplyCodeFolding === 'function') window.__gmApplyCodeFolding(true); } catch (e) {}
         try {
           if (typeof window.__gmAfterDiffRenderHook === 'function') {
             const fn = window.__gmAfterDiffRenderHook;
@@ -17036,13 +17039,13 @@ flex-shrink:0;cursor:pointer;
               tip: (l.type === 'modified') ? __nn(l.old_text, '') : (l.type === 'removed' ? __nn(l.text, '') : '')
             };
 
-            const curNum = Number(cur.num);
-            if (firstShownNum === null && Number.isFinite(curNum)) firstShownNum = curNum;
-            if (Number.isFinite(curNum) && lastShownNum !== null && Number.isFinite(lastShownNum) && curNum > lastShownNum + 1) {
-              rowParts.push(renderGapRow(lastShownNum, curNum));
+            const curGapNum = Number(__nn(l.new, NaN));
+            if (firstShownNum === null && Number.isFinite(curGapNum)) firstShownNum = curGapNum;
+            if (Number.isFinite(curGapNum) && lastShownNum !== null && Number.isFinite(lastShownNum) && curGapNum > lastShownNum + 1) {
+              rowParts.push(renderGapRow(lastShownNum, curGapNum));
             }
             rowParts.push(renderRow(cur));
-            if (Number.isFinite(curNum)) lastShownNum = curNum;
+            if (Number.isFinite(curGapNum)) lastShownNum = curGapNum;
             li++;
             continue;
           }
@@ -17080,13 +17083,13 @@ flex-shrink:0;cursor:pointer;
               tip: (x.type === 'modified') ? __nn(x.old_text, '') : (x.type === 'removed' ? __nn(x.text, '') : '')
             };
 
-            const curNum = Number(cur.num);
-            if (firstShownNum === null && Number.isFinite(curNum)) firstShownNum = curNum;
-            if (Number.isFinite(curNum) && lastShownNum !== null && Number.isFinite(lastShownNum) && curNum > lastShownNum + 1) {
-              rowParts.push(renderGapRow(lastShownNum, curNum));
+            const curGapNum = Number(__nn(x.new, NaN));
+            if (firstShownNum === null && Number.isFinite(curGapNum)) firstShownNum = curGapNum;
+            if (Number.isFinite(curGapNum) && lastShownNum !== null && Number.isFinite(lastShownNum) && curGapNum > lastShownNum + 1) {
+              rowParts.push(renderGapRow(lastShownNum, curGapNum));
             }
             rowParts.push(renderRow(cur));
-            if (Number.isFinite(curNum)) lastShownNum = curNum;
+            if (Number.isFinite(curGapNum)) lastShownNum = curGapNum;
           }
         }
       });
@@ -17117,7 +17120,6 @@ flex-shrink:0;cursor:pointer;
         applyIndeterminateCheckboxes(view);
         updateAllBlockCheckboxes(view, file.path, hunks);
         setupEditableLineEditing();
-        try { if (typeof window.__gmApplyCodeFolding === 'function') window.__gmApplyCodeFolding(true); } catch (e) {}
         try {
           const first = view.querySelector('.editable-line');
           if (first && typeof first.focus === 'function') first.focus({ preventScroll: true });
@@ -17299,7 +17301,6 @@ flex-shrink:0;cursor:pointer;
         applyIndeterminateCheckboxes(view);
         updateAllBlockCheckboxes(view, file.path, hunks);
         setupEditableLineEditing();
-        try { if (typeof window.__gmApplyCodeFolding === 'function') window.__gmApplyCodeFolding(true); } catch (e) {}
         try {
           if (typeof window.__gmAfterDiffRenderHook === 'function') {
             const fn = window.__gmAfterDiffRenderHook;
@@ -17356,7 +17357,7 @@ flex-shrink:0;cursor:pointer;
         try { bindDiffLabelCloseBtn(String(fileObj.path || '')); } catch (e) {}
       };
 
-      const ctxParam = (diffMode === 'unified') ? `&ctx=${encodeURIComponent(changeViewCtx)}` : '';
+      const ctxParam = (diffMode === 'unified' || diffMode === 'split') ? `&ctx=${encodeURIComponent(changeViewCtx)}` : '';
       const st = (status !== undefined && status !== null) ? status : f.status;
       const diffRes = await GET(`/api/diff?path=${encodeURIComponent(f.path)}&status=${st}${ctxParam}`);
       if (diffRes && diffRes.error) return;
@@ -17633,7 +17634,7 @@ flex-shrink:0;cursor:pointer;
         }
 
         try {
-          const ctxParam = (diffMode === 'unified') ? `&ctx=${encodeURIComponent(changeViewCtx)}` : '';
+          const ctxParam = (diffMode === 'unified' || diffMode === 'split') ? `&ctx=${encodeURIComponent(changeViewCtx)}` : '';
           const st = (files[curFile] && files[curFile].status !== undefined) ? files[curFile].status : f.status;
           const diffRes = await GET(`/api/diff?path=${encodeURIComponent(f.path)}&status=${st}${ctxParam}`);
           if (!(diffRes && diffRes.error)) {
@@ -17898,7 +17899,6 @@ flex-shrink:0;cursor:pointer;
     // 检查 epoch，防止过期请求渲染 UI
     const currentEpoch = window.__gmLoadDiffEpoch || 0;
     if (container.__gmVdEpoch && container.__gmVdEpoch !== currentEpoch) {
-      console.log('renderVirtualDiff: epoch mismatch, skipping render');
       return;
     }
 
@@ -17971,7 +17971,6 @@ flex-shrink:0;cursor:pointer;
       // 检查 epoch，防止过期请求继续渲染
       const currentEpoch = window.__gmLoadDiffEpoch || 0;
       if (container.__gmVdEpoch && container.__gmVdEpoch !== currentEpoch) {
-        console.log('renderVirtualDiff scroll: epoch mismatch, skipping');
         return;
       }
       
@@ -18761,7 +18760,7 @@ flex-shrink:0;cursor:pointer;
             old_text: line.old_text,
           },
           status,
-          ctx: (diffMode === 'unified') ? changeViewCtx : 5
+          ctx: (diffMode === 'unified' || diffMode === 'split') ? changeViewCtx : 5
         });
 
         if (!res.ok) {
@@ -18788,7 +18787,7 @@ flex-shrink:0;cursor:pointer;
           __gmToastError('撤回失败', '已恢复');
         } else {
           // 成功后，从后端获取最新的diff数据和文件统计（保持 ctx 一致，避免行索引映射错位）
-          const ctxParam = (diffMode === 'unified') ? `&ctx=${encodeURIComponent(changeViewCtx)}` : '';
+          const ctxParam = (diffMode === 'unified' || diffMode === 'split') ? `&ctx=${encodeURIComponent(changeViewCtx)}` : '';
           const diffRes = await GET(`/api/diff?path=${encodeURIComponent(filepath)}&status=${status}${ctxParam}`);
           if (diffRes.hunks) {
             const prevHunks = curHunks;
@@ -19126,7 +19125,7 @@ flex-shrink:0;cursor:pointer;
           start_line_index: startLineIdx,
           end_line_index: endLineIdx,
           status,
-          ctx: (diffMode === 'unified') ? changeViewCtx : 5
+          ctx: (diffMode === 'unified' || diffMode === 'split') ? changeViewCtx : 5
         });
 
         if (!res.ok) {
@@ -19153,7 +19152,7 @@ flex-shrink:0;cursor:pointer;
           __gmToastError('撤回失败', '多行撤回失败，已恢复');
         } else {
           // 成功后，从后端获取最新的diff数据和文件统计（保持 ctx 一致，避免行索引映射错位）
-          const ctxParam = (diffMode === 'unified') ? `&ctx=${encodeURIComponent(changeViewCtx)}` : '';
+          const ctxParam = (diffMode === 'unified' || diffMode === 'split') ? `&ctx=${encodeURIComponent(changeViewCtx)}` : '';
           const diffRes = await GET(`/api/diff?path=${encodeURIComponent(filepath)}&status=${status}${ctxParam}`);
           if (diffRes.hunks) {
             const prevHunks = curHunks;
@@ -19331,7 +19330,7 @@ flex-shrink:0;cursor:pointer;
             window.__dirtyEdits = false;
 
             try {
-              const ctxParam = (diffMode === 'unified') ? `&ctx=${encodeURIComponent(changeViewCtx)}` : '';
+              const ctxParam = (diffMode === 'unified' || diffMode === 'split') ? `&ctx=${encodeURIComponent(changeViewCtx)}` : '';
               const diffRes = await GET(`/api/diff?path=${encodeURIComponent(filepath)}&status=${status}${ctxParam}`);
               if (diffRes && diffRes.hunks) {
                 curHunks = diffRes.hunks;
@@ -19400,7 +19399,7 @@ flex-shrink:0;cursor:pointer;
           __gmToastError('撤回失败', '已恢复');
         } else {
           // 成功后，从后端获取最新的diff数据和文件统计（保持 ctx 一致，避免行索引映射错位）
-          const ctxParam = (diffMode === 'unified') ? `&ctx=${encodeURIComponent(changeViewCtx)}` : '';
+          const ctxParam = (diffMode === 'unified' || diffMode === 'split') ? `&ctx=${encodeURIComponent(changeViewCtx)}` : '';
           const diffRes = await GET(`/api/diff?path=${encodeURIComponent(filepath)}&status=${status}${ctxParam}`);
           if (diffRes.hunks) {
             curHunks = diffRes.hunks;
@@ -19692,7 +19691,7 @@ flex-shrink:0;cursor:pointer;
         const totalLines = commitLinesTotalByPath.get(f.path);
         const lineIsPartial = (lineSet && lineSet.size > 0 && Number.isFinite(totalLines) && totalLines > 0 && lineSet.size < totalLines);
         if (lineIsPartial && !unsupportedLines) {
-          const ctx = (diffMode === 'unified') ? changeViewCtx : 5;
+          const ctx = (diffMode === 'unified' || diffMode === 'split') ? changeViewCtx : 5;
           res = await POST('/api/commit_lines', {
             message: msg,
             path: f.path,
@@ -19712,7 +19711,7 @@ flex-shrink:0;cursor:pointer;
         const selectedSet = ensureDefaultHunkSelection(f.path, curHunks.length);
         const isPartial = selectedSet.size > 0 && selectedSet.size < curHunks.length;
         if (!res && isPartial && !unsupportedHunks) {
-          const ctx = (diffMode === 'unified') ? changeViewCtx : 5;
+          const ctx = (diffMode === 'unified' || diffMode === 'split') ? changeViewCtx : 5;
           res = await POST('/api/commit_hunks', {
             message: msg,
             path: f.path,
