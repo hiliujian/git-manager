@@ -592,6 +592,8 @@
     .icon-btn{width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;
       border-radius:3px;border:none;background:transparent;color:var(--text2);cursor:pointer;transition:all .12s;}
     .icon-btn:hover{background:var(--bg5);color:var(--text);}
+    #codeFoldBtn.on{background:rgba(80,220,140,0.12);color:var(--accent2);}
+    [data-theme="light"] #codeFoldBtn.on{background:rgba(12,166,120,0.12);color:var(--accent2);}
 
     /* ── COLLAPSE BUTTONS ── */
     .collapse-btn{width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;
@@ -1184,10 +1186,10 @@
     .gm-fold-hint .lc{color:var(--text3);}
 
     .gm-fold-inline{
+      position:absolute;
       display:inline-flex;
       align-items:center;
       justify-content:center;
-      margin-left:2px;
       padding:0 4px;
       border-radius:4px;
       font-size:10px;
@@ -1196,10 +1198,10 @@
       background:rgba(255,255,255,0.06);
       cursor:pointer;
       user-select:none;
-      vertical-align:baseline;
       white-space:nowrap;
       opacity:0;
       transition:opacity .12s ease;
+      z-index:2;
     }
     [data-theme="light"] .gm-fold-inline{background:rgba(0,0,0,0.06);}
     .gm-fold-inline:hover{color:var(--text2);background:rgba(255,255,255,0.10);}
@@ -1943,7 +1945,7 @@ flex-shrink:0;cursor:pointer;
     .hunk-btns::selection, .hunk-btns *::selection{background:transparent;color:inherit;}
 
     /* Diff line */
-    .dl{display:flex;font-family:'JetBrains Mono',monospace;font-size:12px;line-height:20px;min-height:20px;white-space:nowrap;cursor:default;}
+    .dl{display:flex;position:relative;font-family:'JetBrains Mono',monospace;font-size:12px;line-height:20px;min-height:20px;white-space:nowrap;cursor:default;}
     .dl:hover{filter:brightness(1.18);}
     .dl.added{background:#0e240e;}
     .dl.added .ln{background:#133013;}
@@ -2371,6 +2373,14 @@ flex-shrink:0;cursor:pointer;
       <div class="dtab" id="dtUnified" data-action="setDiffMode" data-mode="unified">变更视图</div>
       <div class="diff-filelabel" id="diffLabel"></div>
       <div class="row">
+        <button class="icon-btn" id="codeFoldBtn" data-action="applyCodeFolding" title="代码折叠">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 6h10"/>
+            <path d="M4 12h6"/>
+            <path d="M4 18h10"/>
+            <path d="M18 9l-3 3 3 3"/>
+          </svg>
+        </button>
         <button class="btn" data-action="navFile" data-step="-1">‹ 上个</button>
         <button class="btn" data-action="navFile" data-step="1">下个 ›</button>
         <button class="btn red" id="revertFileBtn" style="display:none" data-action="showModal" data-modal="revertFileModal">
@@ -4116,7 +4126,8 @@ flex-shrink:0;cursor:pointer;
       const dl = tgt.closest ? tgt.closest('.dl') : null;
       if (!dl) return null;
       const lns = dl.querySelectorAll ? dl.querySelectorAll('.ln') : [];
-      for (let i = 0; i < lns.length; i++) {
+      // Prefer the newest/right-side line number (unified view has old/new columns).
+      for (let i = lns.length - 1; i >= 0; i--) {
         const s = String(lns[i].textContent || '').trim();
         const n = parseInt(s, 10);
         if (Number.isFinite(n) && n > 0) return n;
@@ -4328,6 +4339,12 @@ flex-shrink:0;cursor:pointer;
             return;
           }
 
+          if (act === 'closeActiveFromRecent') {
+            e.preventDefault();
+            closeActiveFromRecent();
+            return;
+          }
+
           if (act === 'editAiProfile') { e.preventDefault(); editAiProfile(String(el.getAttribute('data-id') || '')); return; }
           if (act === '__gmAiUndoByGroupId') { e.preventDefault(); __gmAiUndoByGroupId(String(el.getAttribute('data-gid') || '')); return; }
           if (act === 'selectLogFile') { e.preventDefault(); selectLogFile(parseInt(String(el.getAttribute('data-idx') || ''), 10)); return; }
@@ -4384,6 +4401,40 @@ flex-shrink:0;cursor:pointer;
             const mode = String(el.getAttribute('data-mode') || '');
             if (!mode) return;
             setDiffMode(mode, el);
+            return;
+          }
+
+          if (act === 'applyCodeFolding') {
+            e.preventDefault();
+            try {
+              if (window.__plainEditorFilename && document.getElementById('plainEditorTextarea')) return;
+            } catch (e0) {}
+            try {
+              window.__gmFoldUiEnabled = !window.__gmFoldUiEnabled;
+              try { localStorage.setItem('gm_fold_ui_enabled', window.__gmFoldUiEnabled ? '1' : '0'); } catch (e3) {}
+              try {
+                const btn = document.getElementById('codeFoldBtn');
+                if (btn && btn.classList) {
+                  if (window.__gmFoldUiEnabled) btn.classList.add('on');
+                  else btn.classList.remove('on');
+                }
+              } catch (e4) {}
+            } catch (e1) {}
+
+            if (window.__gmFoldUiEnabled) {
+              try { if (typeof window.__gmApplyCodeFolding === 'function') window.__gmApplyCodeFolding(true); } catch (e2) {}
+            } else {
+              try {
+                if (typeof window.__gmApplyCodeFolding === 'function') {
+                  // Clear fold UI only (apply clears and then re-adds; here we just clear by toggling through scope)
+                  const host = document.getElementById('diffView');
+                  if (host) {
+                    host.querySelectorAll('.gm-fold-inline, .gm-fold-hint').forEach(el => { try { el.remove(); } catch (e5) {} });
+                    host.querySelectorAll('.dl').forEach(dl => { try { dl.style.display = ''; } catch (e6) {} });
+                  }
+                }
+              } catch (e7) {}
+            }
             return;
           }
 
@@ -6215,6 +6266,32 @@ flex-shrink:0;cursor:pointer;
         if (!window.__gmFoldStateById) window.__gmFoldStateById = new Map();
       } catch (e) {}
 
+      if (window.__gmFoldUiEnabled === undefined) {
+        try {
+          const v = localStorage.getItem('gm_fold_ui_enabled');
+          if (v === null || v === undefined || v === '') window.__gmFoldUiEnabled = false;
+          else window.__gmFoldUiEnabled = (v === '1' || v === 'true');
+        } catch (e) {
+          window.__gmFoldUiEnabled = false;
+        }
+      }
+
+      try {
+        const btn = document.getElementById('codeFoldBtn');
+        if (btn && btn.classList) {
+          if (window.__gmFoldUiEnabled) btn.classList.add('on');
+          else btn.classList.remove('on');
+        }
+      } catch (e) {}
+
+      window.__gmMaybeApplyCodeFoldingAfterRender = () => {
+        try {
+          if (!window.__gmFoldUiEnabled) return;
+          if (window.__plainEditorFilename && document.getElementById('plainEditorTextarea')) return;
+        } catch (e0) {}
+        try { if (typeof window.__gmApplyCodeFolding === 'function') window.__gmApplyCodeFolding(true); } catch (e2) {}
+      };
+
       const __gmGetFoldScope = () => {
         try {
           const host = document.getElementById('diffView');
@@ -6311,6 +6388,37 @@ flex-shrink:0;cursor:pointer;
 
       window.__gmToggleFoldById = __gmToggleFoldById;
 
+      const __gmPositionFoldBtn = (dl, lc, btn) => {
+        try {
+          if (!dl || !lc || !btn) return;
+          const dlRect = dl.getBoundingClientRect();
+          let x = 2;
+          let y = 2;
+          try {
+            const walker = document.createTreeWalker(lc, NodeFilter.SHOW_TEXT);
+            let n = null;
+            while ((n = walker.nextNode())) {
+              const s = String(n.nodeValue || '');
+              const idx = s.indexOf('{');
+              if (idx < 0) continue;
+              const r = document.createRange();
+              r.setStart(n, idx);
+              r.setEnd(n, Math.min(idx + 1, s.length));
+              const rect = (r.getClientRects && r.getClientRects()[0]) ? r.getClientRects()[0] : null;
+              if (rect) {
+                x = Math.max(0, Math.round(rect.right - dlRect.left + 2));
+                y = Math.max(0, Math.round(rect.top - dlRect.top + 2));
+              }
+              break;
+            }
+          } catch (e) {}
+          try { btn.style.left = `${x}px`; } catch (e) {}
+          try { btn.style.top = `${y}px`; } catch (e) {}
+        } catch (e) {}
+      };
+
+      try { window.__gmPositionFoldBtn = __gmPositionFoldBtn; } catch (e) {}
+
       window.__gmApplyCodeFolding = (force) => {
         try {
           if (window.__plainEditorFilename) return;
@@ -6340,27 +6448,8 @@ flex-shrink:0;cursor:pointer;
           btn.setAttribute('data-fold-id', id);
           btn.textContent = '▾';
 
-          // Insert fold button right after the first "{" in this line to match expected UX.
-          const inserted = (() => {
-            try {
-              const walker = document.createTreeWalker(lc, NodeFilter.SHOW_TEXT);
-              let n = null;
-              while ((n = walker.nextNode())) {
-                const s = String(n.nodeValue || '');
-                const idx = s.indexOf('{');
-                if (idx < 0) continue;
-                const after = n.splitText(idx + 1);
-                lc.insertBefore(btn, after);
-                return true;
-              }
-              return false;
-            } catch (e) {
-              return false;
-            }
-          })();
-          if (!inserted) {
-            try { lc.appendChild(btn); } catch (e) {}
-          }
+          try { dlStart.appendChild(btn); } catch (e) {}
+          try { __gmPositionFoldBtn(dlStart, lc, btn); } catch (e) {}
 
           const hidden = [];
           for (let i = start + 1; i < end; i++) {
@@ -6387,6 +6476,50 @@ flex-shrink:0;cursor:pointer;
             if (typeof window.__gmToggleFoldById === 'function') window.__gmToggleFoldById(id);
           } catch (e2) {}
         }, true);
+      }
+
+      if (!window.__gmFoldOverlayRepositionInited) {
+        window.__gmFoldOverlayRepositionInited = true;
+        let __gmFoldOverlayRaf = 0;
+        const __gmScheduleFoldOverlayReposition = () => {
+          try {
+            if (__gmFoldOverlayRaf) return;
+            __gmFoldOverlayRaf = requestAnimationFrame(() => {
+              __gmFoldOverlayRaf = 0;
+              const scope = __gmGetFoldScope();
+              if (!scope) return;
+              const btns = Array.from(scope.querySelectorAll('.gm-fold-inline'));
+              for (let i = 0; i < btns.length; i++) {
+                const btn = btns[i];
+                const dl = btn && btn.closest ? btn.closest('.dl') : null;
+                if (!dl || !dl.querySelector) continue;
+                const lc = dl.querySelector('.lc');
+                if (!lc) continue;
+                __gmPositionFoldBtn(dl, lc, btn);
+              }
+            });
+          } catch (e) {}
+        };
+
+        try {
+          const view = document.getElementById('diffView');
+          if (view) view.addEventListener('scroll', __gmScheduleFoldOverlayReposition, { passive: true });
+        } catch (e) {}
+        try { window.addEventListener('resize', __gmScheduleFoldOverlayReposition, { passive: true }); } catch (e) {}
+        try {
+          document.addEventListener('input', (e) => {
+            try {
+              const t = e && e.target;
+              if (!t) return;
+              const line = (t.closest && t.closest('.editable-line')) ? t.closest('.editable-line') : null;
+              const dl = (line && line.closest) ? line.closest('.dl') : null;
+              if (!dl || !dl.querySelector) return;
+              const btn = dl.querySelector('.gm-fold-inline');
+              const lc = dl.querySelector('.lc');
+              if (btn && lc) __gmPositionFoldBtn(dl, lc, btn);
+            } catch (e2) {}
+          }, true);
+        } catch (e) {}
       }
 
       const __gmCopyFromSelectionClean = (e) => {
@@ -7376,6 +7509,7 @@ flex-shrink:0;cursor:pointer;
         const __gmNormalizeDlAfterEdit = (lineEl) => {
           try {
             if (!lineEl || !lineEl.closest) return;
+
             const dl = lineEl.closest('.dl');
             if (!dl) return;
             const lc = dl.querySelector ? dl.querySelector('.lc.editable-line') : null;
@@ -7405,20 +7539,44 @@ flex-shrink:0;cursor:pointer;
             // Flatten possible <span> splits inside lc and merge stray siblings text.
             const cur = String(lc.textContent || '');
             const next = prefix + cur + suffix;
+            
+            // 检查是否有子元素需要扁平化
             let hasElementChild = false;
+            let isPureTextNode = false;
             try {
               const cn = lc.childNodes || [];
-              for (let i = 0; i < cn.length; i++) {
-                const n = cn[i];
-                if (n && n.nodeType === Node.ELEMENT_NODE) { hasElementChild = true; break; }
+              // 如果只有一个子节点且是文本节点，说明结构已经是纯净的
+              if (cn.length === 1 && cn[0].nodeType === Node.TEXT_NODE) {
+                isPureTextNode = true;
+              } else {
+                for (let i = 0; i < cn.length; i++) {
+                  const n = cn[i];
+                  if (n && n.nodeType === Node.ELEMENT_NODE) { 
+                    hasElementChild = true; 
+                    break; 
+                  }
+                }
               }
             } catch (e2) {}
-            const needsFlatten = touched || hasElementChild;
-            if (needsFlatten) {
-              if (next !== cur) lc.textContent = next;
-              else lc.textContent = cur;
+            
+            // 关键修复:只有在真正需要更新DOM时才设置textContent
+            // 1. 如果已经是纯文本节点且内容没变,完全跳过textContent设置
+            // 2. 只有在有stray节点或子元素或内容变化时才更新
+            const contentChanged = (next !== cur);
+            
+            if (isPureTextNode && !touched && !contentChanged) {
+              // 最常见的情况:纯文本节点,没有stray节点,内容没变 -> 完全不设置textContent
+              // 这避免了破坏beforeinput中刚设置好的光标位置
+              return false;
+            }
+            
+            if (touched || hasElementChild || contentChanged) {
+              // 只在真正需要时才设置textContent
+              lc.textContent = next;
+              return true;
             }
           } catch (e) {}
+          return false;
         };
 
         const rawTarget = e && e.target;
@@ -7464,12 +7622,16 @@ flex-shrink:0;cursor:pointer;
         const __gmCaretBeforeNormalize = (() => {
           try { return Math.max(0, Number(getCaretOffset(line)) || 0); } catch (e2) { return 0; }
         })();
-        try { __gmNormalizeDlAfterEdit(line); } catch (e2) {}
-        try {
-          const t = String(line.textContent || '').replace(/[\r\n\u2028\u2029]/g, '');
-          const off = Math.max(0, Math.min(__gmCaretBeforeNormalize, t.length));
-          setCaretOffsetNoFocus(line, off);
-        } catch (e2) {}
+        const didNormalize = (() => {
+          try { return !!__gmNormalizeDlAfterEdit(line); } catch (e2) { return false; }
+        })();
+        if (didNormalize) {
+          try {
+            const t = String(line.textContent || '').replace(/[\r\n\u2028\u2029]/g, '');
+            const off = Math.max(0, Math.min(__gmCaretBeforeNormalize, t.length));
+            setCaretOffsetNoFocus(line, off);
+          } catch (e2) {}
+        }
         try { line.dataset.dirty = '1'; } catch (e2) {}
         window.__dirtyEdits = true;
         scheduleAutoSave();
@@ -7640,7 +7802,27 @@ flex-shrink:0;cursor:pointer;
         // 在宿主模式下,不需要单独设置 contenteditable
         // 只需要 focus 到这一行即可
         try { el.setAttribute('spellcheck', 'false'); } catch (e) {}
-        el.focus();
+        try {
+          const hasInlineModified = !!(el.querySelector && el.querySelector('.im-ch'));
+          if (hasInlineModified) {
+            const prevOff = (() => {
+              try { return Math.max(0, Number(getCaretOffset(el)) || 0); } catch (e2) { return 0; }
+            })();
+            el.textContent = String(el.textContent || '');
+            try {
+              const t = String(el.textContent || '');
+              const off = Math.max(0, Math.min(prevOff, t.length));
+              setCaretOffsetNoFocus(el, off);
+            } catch (e3) {}
+          }
+        } catch (e) {}
+        try {
+          if (document.activeElement !== el) {
+            try { el.focus({ preventScroll: true }); } catch (e0) { try { el.focus(); } catch (e1) {} }
+          }
+        } catch (e2) {
+          try { el.focus(); } catch (e3) {}
+        }
         __activeEditableLine = el;
       } catch (e) {}
     };
@@ -9200,17 +9382,28 @@ flex-shrink:0;cursor:pointer;
       const range = sel.getRangeAt(0);
       if (!el.contains(range.startContainer)) {
         try {
-          const len = (el.textContent || '').length;
-          const elRange = document.createRange();
-          elRange.selectNodeContents(el);
-          const cmpStart = range.compareBoundaryPoints(Range.START_TO_START, elRange);
-          if (cmpStart <= 0) return 0;
-          const cmpEnd = range.compareBoundaryPoints(Range.START_TO_END, elRange);
-          if (cmpEnd >= 0) return len;
-          return len;
-        } catch (e2) {
-          return (el.textContent || '').length;
-        }
+          const fn = sel.focusNode;
+          const an = sel.anchorNode;
+          if (fn && el.contains(fn)) {
+            const r2 = document.createRange();
+            r2.setStart(fn, Math.max(0, Number(sel.focusOffset) || 0));
+            r2.collapse(true);
+            const pre2 = r2.cloneRange();
+            pre2.selectNodeContents(el);
+            pre2.setEnd(r2.startContainer, r2.startOffset);
+            return pre2.toString().length;
+          }
+          if (an && el.contains(an)) {
+            const r3 = document.createRange();
+            r3.setStart(an, Math.max(0, Number(sel.anchorOffset) || 0));
+            r3.collapse(true);
+            const pre3 = r3.cloneRange();
+            pre3.selectNodeContents(el);
+            pre3.setEnd(r3.startContainer, r3.startOffset);
+            return pre3.toString().length;
+          }
+        } catch (e2) {}
+        return (el.textContent || '').length;
       }
       const pre = range.cloneRange();
       pre.selectNodeContents(el);
@@ -9221,17 +9414,38 @@ flex-shrink:0;cursor:pointer;
     }
   }
 
+  const __isCeHost = () => {
+    try {
+      const host = document.getElementById('diffView');
+      return !!(host && String(host.getAttribute('data-ce-host') || '') === '1');
+    } catch (e) {
+      return false;
+    }
+  };
+
   function setCaretOffset(el, offset){
     try {
       el.focus();
-      const text = el.firstChild;
       const sel = window.getSelection();
       if (!sel) return;
       const range = document.createRange();
-      if (text && text.nodeType === Node.TEXT_NODE) {
-        const pos = Math.max(0, Math.min(offset, text.textContent.length));
-        range.setStart(text, pos);
-      } else {
+      const targetOffset = Math.max(0, Number(offset) || 0);
+      let remaining = targetOffset;
+      let placed = false;
+      try {
+        const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+        let n = null;
+        while ((n = walker.nextNode())) {
+          const len = (n && n.nodeValue != null) ? String(n.nodeValue).length : 0;
+          if (remaining <= len) {
+            range.setStart(n, remaining);
+            placed = true;
+            break;
+          }
+          remaining -= len;
+        }
+      } catch (e) {}
+      if (!placed) {
         range.selectNodeContents(el);
         range.collapse(false);
       }
@@ -9244,14 +9458,26 @@ flex-shrink:0;cursor:pointer;
 
   function setCaretOffsetNoFocus(el, offset){
     try {
-      const text = el.firstChild;
       const sel = window.getSelection();
       if (!sel) return;
       const range = document.createRange();
-      if (text && text.nodeType === Node.TEXT_NODE) {
-        const pos = Math.max(0, Math.min(offset, text.textContent.length));
-        range.setStart(text, pos);
-      } else {
+      const targetOffset = Math.max(0, Number(offset) || 0);
+      let remaining = targetOffset;
+      let placed = false;
+      try {
+        const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+        let n = null;
+        while ((n = walker.nextNode())) {
+          const len = (n && n.nodeValue != null) ? String(n.nodeValue).length : 0;
+          if (remaining <= len) {
+            range.setStart(n, remaining);
+            placed = true;
+            break;
+          }
+          remaining -= len;
+        }
+      } catch (e) {}
+      if (!placed) {
         range.selectNodeContents(el);
         range.collapse(false);
       }
@@ -15563,7 +15789,7 @@ flex-shrink:0;cursor:pointer;
          </svg>
        </button>`;
 
-      try { bindDiffLabelCloseBtn(String(fileObj.path || '')); } catch (e) {}
+      try { bindDiffLabelCloseBtn(); } catch (e) {}
     };
 
     // Update label (best-effort, may be refined after hunks load)
@@ -16684,7 +16910,7 @@ flex-shrink:0;cursor:pointer;
 
           let cellText = (line.type === 'empty') ? '' : esc(line.text || '');
           
-          if (!canEdit && line.type === 'modified') {
+          if (line.type === 'modified') {
             const oldT = __nn(line.oldText, __nn(line.text, ''));
             const newT = __nn(line.newText, __nn(line.text, ''));
             const html = buildInlineModifiedHtml(oldT, newT);
@@ -16829,6 +17055,7 @@ flex-shrink:0;cursor:pointer;
         applyIndeterminateCheckboxes(view);
         updateAllBlockCheckboxes(view, file.path, hunks);
         setupEditableLineEditing();
+        try { if (typeof window.__gmMaybeApplyCodeFoldingAfterRender === 'function') window.__gmMaybeApplyCodeFoldingAfterRender(); } catch (e) {}
         try {
           if (typeof window.__gmAfterDiffRenderHook === 'function') {
             const fn = window.__gmAfterDiffRenderHook;
@@ -16965,7 +17192,7 @@ flex-shrink:0;cursor:pointer;
           content = esc(__nn(line.text, ''));
         }
 
-        if (!canEdit && line.type === 'modified') {
+        if (line.type === 'modified') {
           const html = buildInlineModifiedHtml(__nn(line.tip, ''), __nn(line.text, ''));
           content = html.newHtml;
         }
@@ -17120,6 +17347,7 @@ flex-shrink:0;cursor:pointer;
         applyIndeterminateCheckboxes(view);
         updateAllBlockCheckboxes(view, file.path, hunks);
         setupEditableLineEditing();
+        try { if (typeof window.__gmMaybeApplyCodeFoldingAfterRender === 'function') window.__gmMaybeApplyCodeFoldingAfterRender(); } catch (e) {}
         try {
           const first = view.querySelector('.editable-line');
           if (first && typeof first.focus === 'function') first.focus({ preventScroll: true });
@@ -17154,7 +17382,7 @@ flex-shrink:0;cursor:pointer;
         let content = esc(line.text);
 
         // 可编辑时禁用 modified 的 inline 富文本高亮，否则编辑手感割裂且 textContent 不稳定
-        if (!canEdit && line.type === 'modified') {
+        if (line.type === 'modified') {
           const html = buildInlineModifiedHtml(__nn(line.tip, ''), __nn(line.text, ''));
           content = html.newHtml;
         }
@@ -17301,6 +17529,7 @@ flex-shrink:0;cursor:pointer;
         applyIndeterminateCheckboxes(view);
         updateAllBlockCheckboxes(view, file.path, hunks);
         setupEditableLineEditing();
+        try { if (typeof window.__gmMaybeApplyCodeFoldingAfterRender === 'function') window.__gmMaybeApplyCodeFoldingAfterRender(); } catch (e) {}
         try {
           if (typeof window.__gmAfterDiffRenderHook === 'function') {
             const fn = window.__gmAfterDiffRenderHook;
@@ -17354,7 +17583,7 @@ flex-shrink:0;cursor:pointer;
          </svg>
        </button>`;
 
-        try { bindDiffLabelCloseBtn(String(fileObj.path || '')); } catch (e) {}
+        try { bindDiffLabelCloseBtn(); } catch (e) {}
       };
 
       const ctxParam = (diffMode === 'unified' || diffMode === 'split') ? `&ctx=${encodeURIComponent(changeViewCtx)}` : '';
@@ -17706,7 +17935,7 @@ flex-shrink:0;cursor:pointer;
        </svg>
      </button>`;
     try { addToRecentFilesLog(String(commitHash || ''), String(filepath || ''), String(status || 'M')); } catch (e) {}
-    try { bindDiffLabelCloseBtn(`log|${String(commitHash || '').trim()}|${String(filepath || '').trim()}`); } catch (e) {}
+    try { bindDiffLabelCloseBtn(); } catch (e) {}
     
     // 检查 epoch，防止过期请求更新 UI
     if (window.__gmLoadDiffEpoch === epoch) {
@@ -17736,7 +17965,7 @@ flex-shrink:0;cursor:pointer;
          <line x1="6" y1="6" x2="18" y2="18"></line>
        </svg>
      </button>`;
-    try { bindDiffLabelCloseBtn(`log|${String(commitHash || '').trim()}|${String(filepath || '').trim()}`); } catch (e) {}
+    try { bindDiffLabelCloseBtn(); } catch (e) {}
 
     // 再次检查 epoch，防止过期请求渲染 UI
     if (window.__gmLoadDiffEpoch !== epoch) return;
@@ -20129,13 +20358,31 @@ flex-shrink:0;cursor:pointer;
     }
   }
 
-  function bindDiffLabelCloseBtn(path) {
+  function bindDiffLabelCloseBtn() {
     const btn = document.getElementById('diffLabelCloseBtn');
     if (!btn) return;
-    const p = String(path || '');
-    btn.setAttribute('data-action', 'removeRecentFileByPath');
-    btn.setAttribute('data-path', p);
+    btn.setAttribute('data-action', 'closeActiveFromRecent');
+    try { btn.removeAttribute('data-path'); } catch (e) {}
     btn.onclick = null;
+  }
+
+  function closeActiveFromRecent() {
+    const key = (() => {
+      try {
+        if (window.__plainEditorFilename) return String(window.__plainEditorFilename || '');
+      } catch (e) {}
+      try {
+        if (curLogFile && curLogFile.commit_hash && curLogFile.path) {
+          return `log|${String(curLogFile.commit_hash || '').trim()}|${String(curLogFile.path || '').trim()}`;
+        }
+      } catch (e) {}
+      try {
+        if (curFile !== null && files && files[curFile] && files[curFile].path) return String(files[curFile].path || '');
+      } catch (e) {}
+      return '';
+    })();
+    if (!key) return;
+    removeRecentFileByPath(key);
   }
 
   function showModal(id) {
@@ -22170,7 +22417,7 @@ flex-shrink:0;cursor:pointer;
          </svg>
        </button>`;
 
-    try { bindDiffLabelCloseBtn(String(filename || '')); } catch (e) {}
+    try { bindDiffLabelCloseBtn(); } catch (e) {}
     
     // 隐藏撤回按钮
     document.getElementById('revertFileBtn').style.display = 'none';
