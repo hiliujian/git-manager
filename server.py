@@ -703,6 +703,31 @@ def _undo_record(group_id: str, entry: dict):
         logger.debug(f"Exception ignored: {e}")
 
 
+def _undo_drop_groups(group_ids: list[str]):
+    gids_in = [str(x).strip() for x in (group_ids or []) if x is not None and str(x).strip()]
+    if not gids_in:
+        return 0
+    removed = 0
+    with undo_lock:
+        for gid in gids_in:
+            if gid in _undo_groups:
+                try:
+                    del _undo_groups[gid]
+                except Exception as e:
+                    logger.debug(f"Exception ignored: {e}")
+            try:
+                if gid in _undo_group_order:
+                    _undo_group_order[:] = [g for g in _undo_group_order if str(g) != gid]
+            except Exception as e:
+                logger.debug(f"Exception ignored: {e}")
+            removed += 1
+    try:
+        _undo_save_state()
+    except Exception:
+        pass
+    return removed
+
+
 def _hivo_agent_mark_started(run_id: str, session_id: str):
     try:
         rid = str(run_id or "").strip()
@@ -6182,6 +6207,24 @@ def _ai_trim_messages_to_budget(messages: list, max_total_tokens: int, reserve_o
 
         min_keep = len(sys_msgs) + 1
 
+        def truncate_system_messages():
+            if len(sys_msgs) <= 1:
+                return False
+            changed = False
+            for i in range(1, len(sys_msgs)):
+                m = out[i]
+                cur_t = _ai_estimate_text_tokens(m.get("content"))
+                if cur_t <= 0:
+                    continue
+                keep_t = max(32, int(cur_t * 0.6))
+                m2 = dict(m)
+                m2["content"] = _ai_truncate_text_to_tokens(m.get("content"), keep_t)
+                out[i] = m2
+                changed = True
+                if _ai_estimate_messages_tokens(out) + reserve <= max_total:
+                    return True
+            return changed
+
         def total_ok():
             return (_ai_estimate_messages_tokens(out) + reserve) <= max_total
 
@@ -6244,6 +6287,8 @@ def _ai_trim_messages_to_budget(messages: list, max_total_tokens: int, reserve_o
         guard = 0
         while (not total_ok()) and guard < 200:
             guard += 1
+            if truncate_system_messages():
+                continue
             if len(out) <= min_keep:
                 break
             if truncate_long_message("assistant"):
@@ -6265,7 +6310,7 @@ def _ai_trim_messages_to_budget(messages: list, max_total_tokens: int, reserve_o
         return messages if isinstance(messages, list) else []
 
 
-def ai_chat(messages: list, temperature: float | None = None, profile_id: str | None = None):
+def ai_chat(messages: list, temperature: float | None = None, profile_id: str | None = None, timeout_s: int = 60):
     with ai_config_lock:
         cfg = load_hivo_ai_config()
     prof = _ai_pick_profile(cfg, profile_id)
@@ -6330,9 +6375,14 @@ def ai_chat(messages: list, temperature: float | None = None, profile_id: str | 
         method="POST",
     )
     try:
+        try:
+            tmo = int(timeout_s or 0)
+        except Exception:
+            tmo = 60
+        tmo = max(5, min(120, int(tmo)))
         https_handler = urllib.request.HTTPSHandler(context=_AI_SSL_CONTEXT) if _AI_SSL_CONTEXT else urllib.request.HTTPSHandler()
         opener = urllib.request.build_opener(https_handler)
-        with opener.open(req, timeout=60) as resp:
+        with opener.open(req, timeout=tmo) as resp:
             raw = resp.read().decode("utf-8", errors="replace")
             data = json.loads(raw or "{}")
     except urllib.error.HTTPError as e:
@@ -7650,7 +7700,8 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
 
     if str(agent_conf.get("mode") or "").strip() == "fallback_chat":
         _hivo_ws_emit(run_id, session_id, "thinking", _hivo_status_message(cfg, "thinking"))
-        ok, msg, result = ai_chat(msgs, temperature=None, profile_id=profile_id)
+        rem = max(5, int(agent_deadline - time.time()))
+        ok, msg, result = ai_chat(msgs, temperature=None, profile_id=profile_id, timeout_s=min(60, rem))
         if not ok:
             err = msg or "对话失败"
             _hivo_ws_emit(run_id, session_id, "error", err)
@@ -7699,7 +7750,8 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
             _hivo_ws_emit(run_id, session_id, "error", "用户取消")
             _hivo_ws_emit_final(run_id, session_id, final, ok=False, extra={"rounds": round_i + 1, "can_continue": True, "continue_reason": "cancelled"})
             return False, final, run_id
-        ok, msg, result = ai_chat(msgs, temperature=None, profile_id=profile_id)
+        rem = max(5, int(agent_deadline - time.time()))
+        ok, msg, result = ai_chat(msgs, temperature=None, profile_id=profile_id, timeout_s=min(60, rem))
         if not ok:
             err = msg or "对话失败"
             _hivo_ws_emit(run_id, session_id, "error", err)
@@ -10037,6 +10089,26 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 removed = _undo_clear_for_session(sid)
                 self.send_json({"ok": True, "session_id": sid, "removed": int(removed), "session_undo_steps": _undo_get_steps_for_session(sid)})
+
+            elif p == "/api/undo_drop":
+                logger.info("处理 /api/undo_drop 请求")
+                gids = []
+                try:
+                    if isinstance(data, dict):
+                        raw = data.get("group_ids")
+                        if isinstance(raw, list):
+                            gids = [str(x) for x in raw if x is not None and str(x).strip()]
+                        else:
+                            g0 = str(data.get("group_id") or "").strip()
+                            if g0:
+                                gids = [g0]
+                except Exception:
+                    gids = []
+                if not gids:
+                    self.send_json({"ok": False, "msg": "缺少 group_ids"}, 400)
+                    return
+                removed = _undo_drop_groups(gids)
+                self.send_json({"ok": True, "removed": int(removed)})
 
             elif p == "/api/ai_chat":
                 t0 = time.time()

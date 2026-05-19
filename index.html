@@ -3846,6 +3846,62 @@ flex-shrink:0;cursor:pointer;
     }
   }
 
+  function __gmAiBuildMessagesForSend(allMsgs) {
+    try {
+      const arr = Array.isArray(allMsgs) ? allMsgs : [];
+      const sys = [];
+      const rest = [];
+      for (const m of arr) {
+        if (!m || typeof m !== 'object') continue;
+        const role = String(m.role || '').trim();
+        if (role !== 'user' && role !== 'assistant' && role !== 'system') continue;
+        if (role === 'assistant' && m.pending) continue;
+        const content = String(m.content || '');
+        if (!content) continue;
+        const item = { role, content };
+        if (role === 'user') {
+          const ug = String(m.undo_gid || '').trim();
+          if (ug) item.undo_gid = ug;
+        }
+        if (role === 'system') sys.push(item);
+        else rest.push(item);
+      }
+
+      const MAX_TOTAL_CHARS = 90000;
+      const MAX_ONE_MSG_CHARS = 16000;
+      const KEEP_LAST = 24;
+
+      const trunc = (s, maxLen) => {
+        const t = String(s || '');
+        if (t.length <= maxLen) return t;
+        const head = Math.max(2000, Math.floor(maxLen * 0.7));
+        const tail = Math.max(500, maxLen - head - 50);
+        return t.slice(0, head) + `\n...（已截断 ${t.length - head - tail} 字）...\n` + t.slice(Math.max(head, t.length - tail));
+      };
+
+      const rest2 = rest.length > KEEP_LAST ? rest.slice(rest.length - KEEP_LAST) : rest;
+      const out0 = [...sys, ...rest2].map((m) => {
+        if (!m || !m.content) return m;
+        if (String(m.content).length <= MAX_ONE_MSG_CHARS) return m;
+        return { ...m, content: trunc(m.content, MAX_ONE_MSG_CHARS) };
+      });
+
+      let out = out0;
+      const totalLen = () => {
+        try { return out.reduce((a, x) => a + String((x && x.content) || '').length, 0); } catch (e) { return 0; }
+      };
+      while (out.length > sys.length + 2 && totalLen() > MAX_TOTAL_CHARS) {
+        // drop earliest non-system message
+        const idx = out.findIndex((m) => String(m && m.role) !== 'system');
+        if (idx < 0) break;
+        out.splice(idx, 1);
+      }
+      return out;
+    } catch (e) {
+      return Array.isArray(allMsgs) ? allMsgs : [];
+    }
+  }
+
   async function __gmAiSendAgentNow() {
     const ta = document.getElementById('aiChatInput');
     const text = ta ? String(ta.value || '').trim() : '';
@@ -3892,13 +3948,14 @@ flex-shrink:0;cursor:pointer;
     const dynCtx = (ctxPkg && typeof ctxPkg.dyn_context === 'string') ? String(ctxPkg.dyn_context || '') : '';
     const ctxRefs = (ctxPkg && Array.isArray(ctxPkg.context_refs)) ? ctxPkg.context_refs : [];
 
+    const messagesForSend = __gmAiBuildMessagesForSend(__gmAiChatMessages);
     const res = await api('/api/hivo_agent', {
       method: 'POST',
       body: JSON.stringify({
         profile_id: pid,
         session_id: __gmAiActiveSessionId,
         user_text: text,
-        messages: __gmAiChatMessages,
+        messages: messagesForSend,
         dyn_context: dynCtx,
         context_refs: ctxRefs,
         undo_gid: turnUndoGid,
@@ -10807,13 +10864,24 @@ flex-shrink:0;cursor:pointer;
       if (!Number.isFinite(i)) return;
       if (!Array.isArray(__gmAiChatMessages)) return;
       if (i < 0 || i >= __gmAiChatMessages.length) return;
+      const removed = [];
       const cur = __gmAiChatMessages[i];
       const curRole = String(cur && cur.role || '');
       if (curRole === 'user') {
+        removed.push(...__gmAiChatMessages.slice(i));
         __gmAiChatMessages.splice(i);
       } else {
+        removed.push(__gmAiChatMessages[i]);
         __gmAiChatMessages.splice(i, 1);
       }
+      try {
+        const gids = Array.from(new Set((removed || []).map(m => String((m && (m.undo_gid || m.undoGid)) || '').trim()).filter(Boolean)));
+        if (gids.length) {
+          POST('/api/undo_drop', { group_ids: gids }).then(() => {
+            try { __gmAiRefreshSendCounter(); } catch (e0) {}
+          }).catch(()=>{});
+        }
+      } catch (eG) {}
       __gmAiRenderChat();
       try { __gmAiRevalidateContinueStateForActiveSession(); } catch (eC0) {}
       Promise.resolve(__gmAiSaveHistoryNow()).then(() => {
@@ -12504,6 +12572,7 @@ flex-shrink:0;cursor:pointer;
     if (sid.startsWith(__gmAiEphemeralSessionPrefix)) {
       __gmAiChatMessages = [];
       __gmAiRenderChat();
+      try { __gmAiLastUndoSteps = 0; } catch (eU0) {}
       try { __gmAiRefreshSendCounter(); } catch (eC0) {}
       return;
     }
@@ -12570,13 +12639,14 @@ flex-shrink:0;cursor:pointer;
     __gmAiChatMessages = [];
     __gmAiRenderHistoryChips();
     __gmAiRenderChat();
+    try { __gmAiLastUndoSteps = 0; } catch (eU0) {}
+    try { __gmAiRefreshSendCounter(); } catch (eC0) {}
     try { __gmAiSetContinueState(false, ''); } catch (eCS0) {}
     try {
       const ta = document.getElementById('aiChatInput');
       if (ta) ta.value = '';
     } catch (e0Ta) {}
     try { __gmAiPersistDraftForActiveSession(); } catch (e0d2) {}
-    try { await __gmAiRefreshSendCounter(); } catch (eC0) {}
     toast('✓ 已新建会话', 'ok');
   }
 
@@ -13516,6 +13586,15 @@ flex-shrink:0;cursor:pointer;
     try { __pos(); } catch (e0) {}
 
     const sid = String(__gmAiActiveSessionId || '').trim();
+
+    try {
+      if (!sid || sid.startsWith(__gmAiEphemeralSessionPrefix)) {
+        el.innerHTML = '<div style="padding:6px 8px;color:var(--text2);font-size:12px;">暂无可撤回记录</div>';
+        try { __pos(); } catch (e3) {}
+        return;
+      }
+    } catch (e) {}
+
     const seq = (++__gmAiUndoHistoryReqSeq);
     try {
       el.innerHTML = '<div style="padding:6px 8px;color:var(--text2);font-size:12px;">加载中...</div>';
