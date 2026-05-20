@@ -9722,6 +9722,7 @@ flex-shrink:0;cursor:pointer;
   // WebSocket 连接
   let ws = null;
   let wsReconnectTimer = null;
+  let wsPingTimer = null;
   let wsConnected = false;
   let wsConnecting = false;
   let wsReconnectDelayMs = 5000;
@@ -9740,6 +9741,7 @@ flex-shrink:0;cursor:pointer;
   }
 
   function __gmWsScheduleReconnect() {
+    try { if (document.hidden) return; } catch (e0) {}
     if (wsReconnectTimer) return;
     const base = __gmWsNextReconnectDelayMs();
     // Small jitter to avoid multi-tab sync reconnect storms
@@ -9853,6 +9855,18 @@ flex-shrink:0;cursor:pointer;
           clearTimeout(wsReconnectTimer);
           wsReconnectTimer = null;
         }
+        try {
+          if (wsPingTimer) {
+            clearInterval(wsPingTimer);
+            wsPingTimer = null;
+          }
+          wsPingTimer = setInterval(() => {
+            try {
+              if (!ws || ws.readyState !== WebSocket.OPEN) return;
+              ws.send(JSON.stringify({ type: 'ping', ts: Date.now() }));
+            } catch (e0) {}
+          }, 15000);
+        } catch (eP0) {}
         try { __gmUpdateSelfCheckButtonState(); } catch (eS0) {}
       };
 
@@ -9866,13 +9880,35 @@ flex-shrink:0;cursor:pointer;
       };
 
       ws.onerror = (error) => {
-        console.error('WebSocket 错误:', error);
+        try {
+          console.error('WebSocket 错误:', error, { readyState: ws ? ws.readyState : 'null', url: WS_URL });
+        } catch (e0) {
+          console.error('WebSocket 错误:', error);
+        }
       };
 
-      ws.onclose = () => {
+      ws.onclose = (event) => {
         wsConnected = false;
         wsConnecting = false;
         try { if (openTimer) { clearTimeout(openTimer); openTimer = null; } } catch (eT2) {}
+        try {
+          window.__gmWsLastClose = {
+            ts: Date.now(),
+            code: Number(event && event.code || 0),
+            reason: String(event && event.reason || ''),
+            wasClean: !!(event && event.wasClean),
+            url: String(WS_URL || ''),
+          };
+        } catch (eLC0) {}
+        try {
+          console.warn('WebSocket 关闭', window.__gmWsLastClose);
+        } catch (eLC1) {}
+        try {
+          if (wsPingTimer) {
+            clearInterval(wsPingTimer);
+            wsPingTimer = null;
+          }
+        } catch (eP1) {}
         try {
           if (__gmAiIsResponding) {
             const msgs = Array.isArray(__gmAiChatMessages) ? __gmAiChatMessages : [];
@@ -13921,25 +13957,39 @@ flex-shrink:0;cursor:pointer;
     try { closeFindBar(); } catch (e) {}
     try { clearFindHighlights(); } catch (e) {}
 
-    // 关闭WebSocket连接
-    try {
-      if (ws) {
-        ws.close();
-        ws = null;
-      }
-      if (wsReconnectTimer) {
-        clearTimeout(wsReconnectTimer);
-        wsReconnectTimer = null;
-      }
-    } catch (e) {}
+    function __gmSafeCloseWsAndTimers() {
+      try {
+        if (ws) {
+          ws.close();
+          ws = null;
+        }
+        if (wsReconnectTimer) {
+          clearTimeout(wsReconnectTimer);
+          wsReconnectTimer = null;
+        }
+        if (wsPingTimer) {
+          clearInterval(wsPingTimer);
+          wsPingTimer = null;
+        }
+      } catch (e) {}
 
-    // Stop real-time refresh
-    try { stopRealTimeRefresh(); } catch (e) {}
+      try {
+        wsConnected = false;
+        wsConnecting = false;
+        if (wsReconnectTimer) {
+          clearTimeout(wsReconnectTimer);
+          wsReconnectTimer = null;
+        }
+        if (wsPingTimer) {
+          clearInterval(wsPingTimer);
+          wsPingTimer = null;
+        }
+      } catch (e7) {}
+    }
+
+    try { __gmSafeCloseWsAndTimers(); } catch (e) {}
 
     try {
-      findQuery = '';
-      findMatches = [];
-      findPos = -1;
       findLineHits = null;
       __gmFindOverlayScrollHandlers = [];
       __gmFindOverlayRaf = 0;
@@ -24203,26 +24253,20 @@ flex-shrink:0;cursor:pointer;
     try { __gmStopExternalEditorWatch(); } catch (e0) {}
     try { stopRealTimeRefresh(); } catch (e1) {}
     try {
-      if (ws) {
-        try { ws.onopen = null; } catch (e2) {}
-        try { ws.onmessage = null; } catch (e3) {}
-        try { ws.onerror = null; } catch (e4) {}
-        try { ws.onclose = null; } catch (e5) {}
-        try { ws.close(); } catch (e6) {}
-        ws = null;
-      }
-      wsConnected = false;
-      wsConnecting = false;
-      if (wsReconnectTimer) {
-        clearTimeout(wsReconnectTimer);
-        wsReconnectTimer = null;
+      if (wsPingTimer) {
+        clearInterval(wsPingTimer);
+        wsPingTimer = null;
       }
     } catch (e7) {}
   }
 
   function __gmOnPageVisible() {
     try { __gmStartExternalEditorWatch(); } catch (e0) {}
-    try { connectWebSocket(); } catch (e1) {}
+    try {
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        connectWebSocket();
+      }
+    } catch (e1) { try { connectWebSocket(); } catch (e2) {} }
 
     try {
       setTimeout(() => {

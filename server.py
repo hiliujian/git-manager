@@ -9,6 +9,7 @@ import time
 import re
 from collections import deque, OrderedDict
 import subprocess, os, sys, logging, threading, hashlib, difflib, shutil, mimetypes, base64
+import queue
 from pathlib import Path
 import urllib.request
 import urllib.error
@@ -26,6 +27,11 @@ except ImportError:
     WEBSOCKET_AVAILABLE = False
     print("警告: websockets 库未安装，WebSocket功能将不可用")
     print("安装方法: pip install websockets")
+
+try:
+    from websockets.exceptions import ConnectionClosed  # type: ignore
+except Exception:
+    ConnectionClosed = None
 
 try:
     import chardet
@@ -92,6 +98,7 @@ REPO_PATH = None
 WS_PORT = 7843  # WebSocket端口号
 ws_clients = set()  # WebSocket客户端集合
 ws_clients_lock = threading.Lock()
+ws_client_queues = {}  # client -> Queue[str]
 
 
 def get_repo_status():
@@ -998,22 +1005,31 @@ def broadcast_to_clients(message):
     """向所有WebSocket客户端广播消息"""
     if not WEBSOCKET_AVAILABLE:
         return
-    
-    disconnected = set()
+
+    try:
+        payload = json.dumps(message)
+    except Exception:
+        return
+
     with ws_clients_lock:
         clients = list(ws_clients)
-
-    for client in clients:
-        try:
-            client.send(json.dumps(message))
-        except Exception as e:
-            logger.warning(f"向客户端发送消息失败: {e}")
-            disconnected.add(client)
-    
-    # 移除断开的客户端
-    if disconnected:
-        with ws_clients_lock:
-            ws_clients.difference_update(disconnected)
+        for client in clients:
+            q = ws_client_queues.get(client)
+            if q is None:
+                q = queue.Queue(maxsize=200)
+                ws_client_queues[client] = q
+            try:
+                q.put_nowait(payload)
+            except Exception:
+                # queue full or other error -> drop client
+                try:
+                    ws_clients.discard(client)
+                except Exception:
+                    pass
+                try:
+                    ws_client_queues.pop(client, None)
+                except Exception:
+                    pass
 
 
 def _hivo_cfg_path():
@@ -2472,6 +2488,8 @@ def handle_websocket(websocket: ServerConnection):
     logger.info(f"新的WebSocket连接: {websocket.remote_address}")
     with ws_clients_lock:
         ws_clients.add(websocket)
+        if websocket not in ws_client_queues:
+            ws_client_queues[websocket] = queue.Queue(maxsize=200)
     
     try:
         # 发送欢迎消息
@@ -2488,12 +2506,47 @@ def handle_websocket(websocket: ServerConnection):
                 'files': files
             }))
         
-        # 接收客户端消息
-        for message in websocket:
+        # 主循环：仅在此线程调用 websocket.send（线程安全）
+        while True:
+            # drain outgoing queue
+            try:
+                q = None
+                with ws_clients_lock:
+                    q = ws_client_queues.get(websocket)
+                if q is not None:
+                    while True:
+                        try:
+                            payload = q.get_nowait()
+                        except Exception:
+                            break
+                        websocket.send(payload)
+            except Exception as e:
+                logger.warning(f"WebSocket发送失败: {e}")
+                break
+
+            # receive client message with short timeout so we can keep draining queue
+            try:
+                message = websocket.recv(timeout=0.5)
+            except TimeoutError:
+                continue
+            except Exception as e:
+                try:
+                    if ConnectionClosed is not None and isinstance(e, ConnectionClosed):
+                        code = getattr(e, "code", None)
+                        reason = getattr(e, "reason", "")
+                        logger.info(f"WebSocket接收关闭: code={code}, reason={reason}")
+                    else:
+                        logger.error(f"WebSocket接收异常: {e}")
+                except Exception:
+                    logger.error(f"WebSocket接收异常: {e}")
+                break
+
+            if message is None:
+                continue
             try:
                 data = json.loads(message)
                 msg_type = data.get('type')
-                
+
                 if msg_type == 'ping':
                     websocket.send(json.dumps({'type': 'pong'}))
                 elif msg_type == 'request_files':
@@ -2505,7 +2558,7 @@ def handle_websocket(websocket: ServerConnection):
                         }))
                 else:
                     logger.warning(f"未知的WebSocket消息类型: {msg_type}")
-                    
+
             except json.JSONDecodeError:
                 logger.warning(f"无效的JSON消息: {message}")
             except Exception as e:
@@ -2516,6 +2569,10 @@ def handle_websocket(websocket: ServerConnection):
     finally:
         with ws_clients_lock:
             ws_clients.discard(websocket)
+            try:
+                ws_client_queues.pop(websocket, None)
+            except Exception:
+                pass
         ra = None
         try:
             ra = websocket.remote_address
@@ -7587,7 +7644,17 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
         agent_timeout_s = 0
     if agent_timeout_s <= 0:
         agent_timeout_s = 300
-    agent_deadline = time.time() + max(30, min(1800, agent_timeout_s))
+
+    # Hard cap: avoid extremely long runs (mainstream agent UX expects bounded wall time)
+    agent_deadline = time.time() + max(30, min(600, agent_timeout_s))
+
+    try:
+        llm_timeout_s = int(cfg.get("llm_timeout_s") or 0)
+    except Exception:
+        llm_timeout_s = 0
+    if llm_timeout_s <= 0:
+        llm_timeout_s = 45
+    llm_timeout_s = max(10, min(90, int(llm_timeout_s)))
     repeat_conf = cfg.get("repeat_block") if isinstance(cfg.get("repeat_block"), dict) else {}
     rep_window = int(repeat_conf.get("window") or 3)
     rep_max_same = int(repeat_conf.get("max_same") or 2)
@@ -7701,7 +7768,7 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
     if str(agent_conf.get("mode") or "").strip() == "fallback_chat":
         _hivo_ws_emit(run_id, session_id, "thinking", _hivo_status_message(cfg, "thinking"))
         rem = max(5, int(agent_deadline - time.time()))
-        ok, msg, result = ai_chat(msgs, temperature=None, profile_id=profile_id, timeout_s=min(60, rem))
+        ok, msg, result = ai_chat(msgs, temperature=None, profile_id=profile_id, timeout_s=min(llm_timeout_s, rem))
         if not ok:
             err = msg or "对话失败"
             _hivo_ws_emit(run_id, session_id, "error", err)
@@ -7751,7 +7818,7 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
             _hivo_ws_emit_final(run_id, session_id, final, ok=False, extra={"rounds": round_i + 1, "can_continue": True, "continue_reason": "cancelled"})
             return False, final, run_id
         rem = max(5, int(agent_deadline - time.time()))
-        ok, msg, result = ai_chat(msgs, temperature=None, profile_id=profile_id, timeout_s=min(60, rem))
+        ok, msg, result = ai_chat(msgs, temperature=None, profile_id=profile_id, timeout_s=min(llm_timeout_s, rem))
         if not ok:
             err = msg or "对话失败"
             _hivo_ws_emit(run_id, session_id, "error", err)
@@ -8760,6 +8827,16 @@ class Handler(BaseHTTPRequestHandler):
                     logger.debug(f"[{rid}] 响应成功 {status}: {self.path}")
                 else:
                     logger.debug(f"响应成功 {status}: {self.path}")
+        except (ConnectionAbortedError, BrokenPipeError, ConnectionResetError) as e:
+            # 客户端主动中止/断开连接（例如页面刷新/取消请求）
+            try:
+                rid = self._ensure_req_id()
+            except Exception:
+                rid = ""
+            if rid:
+                logger.debug(f"[{rid}] 客户端已断开，响应发送中止: {e}")
+            else:
+                logger.debug(f"客户端已断开，响应发送中止: {e}")
         except Exception as e:
             logger.error(f"发送 JSON 响应失败: {e}", exc_info=True)
 
