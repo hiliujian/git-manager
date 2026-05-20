@@ -12736,6 +12736,46 @@ flex-shrink:0;cursor:pointer;
     } catch (e) {}
   }
 
+  function __gmInitAutoSaveToggle() {
+    const el = document.getElementById('autoSaveToggle');
+    if (!el) return;
+    if (el.__gmBound) return;
+    el.__gmBound = true;
+
+    const KEY = 'gm_auto_save_enabled';
+    const loadVal = () => {
+      try {
+        const v = localStorage.getItem(KEY);
+        if (v === null || v === undefined || v === '') return null;
+        const s = String(v).trim().toLowerCase();
+        if (s === '1' || s === 'true' || s === 'on') return true;
+        if (s === '0' || s === 'false' || s === 'off') return false;
+        return null;
+      } catch (e) {
+        return null;
+      }
+    };
+    const saveVal = (b) => {
+      try { localStorage.setItem(KEY, b ? '1' : '0'); } catch (e) {}
+    };
+
+    const init = loadVal();
+    const enabled = (init === null) ? !!el.checked : !!init;
+    window.__autoSaveEnabled = enabled;
+    el.checked = enabled;
+
+    el.addEventListener('change', (e) => {
+      try {
+        const v = !!(e && e.target ? e.target.checked : el.checked);
+        window.__autoSaveEnabled = v;
+        saveVal(v);
+        if (!v) {
+          try { if (typeof window.setEditStatus === 'function') window.setEditStatus('自动保存已关闭（Ctrl+S 立即保存）'); } catch (e2) {}
+        }
+      } catch (e2) {}
+    });
+  }
+
   async function saveAiProfiles() {
     try {
       __gmAiSyncEditingProfileFromEditor();
@@ -20759,7 +20799,9 @@ flex-shrink:0;cursor:pointer;
   function closeActiveFromRecent() {
     const key = (() => {
       try {
-        if (window.__plainEditorFilename) return String(window.__plainEditorFilename || '');
+        if (__gmIsPlainEditorMode()) {
+          return String(window.__plainEditorFilename || '');
+        }
       } catch (e) {}
       try {
         if (curLogFile && curLogFile.commit_hash && curLogFile.path) {
@@ -22248,6 +22290,7 @@ flex-shrink:0;cursor:pointer;
   initChangeNavigationWheelScroll();
   __gmBindDiffViewDelegation();
   __gmBindStaticUiDelegation();
+  __gmInitAutoSaveToggle();
 
   // ── Git Sync Status Indicator ───────────────────────────────────────────────
   let __gmSyncStatusInFlight = false;
