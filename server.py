@@ -3284,14 +3284,11 @@ def save_file_content(filepath: str, content: str, force_encoding: str = None):
         try:
             if file_exists:
                 with open(full, "rb") as rf:
-                    data = rf.read()
-                # Check if file has CRLF or LF
-                if b"\r\n" in data:
+                    raw_eol = rf.read()
+                if b"\r\n" in raw_eol:
                     target_eol = "\r\n"
-                    logger.debug(f"检测到文件 {filepath} 使用 CRLF 换行符")
-                elif b"\n" in data:
+                elif b"\n" in raw_eol:
                     target_eol = "\n"
-                    logger.debug(f"检测到文件 {filepath} 使用 LF 换行符")
         except Exception as e:
             logger.warning(f"检测文件换行符失败: {e}")
 
@@ -6579,6 +6576,12 @@ def _ai_build_system_context_text():
         "```\n\n"
         
         "# 工具使用指南\n\n"
+
+        "## Action Card（前端联动执行）\n"
+        "- 当你需要调用工具（例如 save_file / delete_file / run_cmd 等）并且需要用户确认时：\n"
+        "  1) **直接输出一个 JSON 代码块**，内容为工具调用对象：`{\"type\": \"<tool>\", ...}`\n"
+        "  2) 前端会自动识别并渲染 **Action Card**，用户点击卡片按钮即可执行\n"
+        "- 不要让用户回复“确认/yes”来触发工具，也不要输出“等待确认后我将执行 save_file”这类流程描述\n\n"
         
         "## 必须遵循的规则\n"
         "1. **单一真源**：只使用 TOOL_REGISTRY_JSON 中定义的工具\n"

@@ -3149,6 +3149,21 @@ flex-shrink:0;cursor:pointer;
             } catch (e) { return null; }
           };
 
+          const __gmAiTryParseToolCall = () => {
+            try {
+              const lang = getLang();
+              if (lang !== 'json') return null;
+              const raw = getCmdText();
+              if (!raw) return null;
+              if (!raw.startsWith('{')) return null;
+              const obj = JSON.parse(raw);
+              if (!obj || typeof obj !== 'object') return null;
+              const t = String(obj.type || '').trim();
+              if (!t) return null;
+              return obj;
+            } catch (e) { return null; }
+          };
+
           const __gmAiRenderBrowserActionCard = (parsed) => {
             try {
               if (!parsed || !parsed.steps || !parsed.steps.length) return;
@@ -3350,6 +3365,151 @@ flex-shrink:0;cursor:pointer;
             } catch (e) {}
           };
 
+          const __gmAiRenderToolActionCard = (tool) => {
+            try {
+              if (!tool || typeof tool !== 'object') return;
+              const type = String(tool.type || '').trim();
+              if (!type) return;
+              if (pre.getAttribute('data-has-tool-card') === '1') return;
+
+              // Only render if capabilities declares this tool type.
+              const spec = (__gmAiCapabilitiesSpec && typeof __gmAiCapabilitiesSpec === 'object') ? __gmAiCapabilitiesSpec : null;
+              const tools = spec && Array.isArray(spec.agent_tools) ? spec.agent_tools : [];
+              const allow = tools.some(x => x && String(x.type || '').trim() === type);
+              if (!allow) return;
+
+              // Find matching endpoint. Convention: POST /api/<type>
+              const eps = spec && Array.isArray(spec.endpoints) ? spec.endpoints : [];
+              let endpoint = '';
+              try {
+                const cand = '/api/' + type;
+                const okEp = eps.some(ep => ep && String(ep.method || '').toUpperCase() === 'POST' && String(ep.path || '') === cand);
+                if (okEp) endpoint = cand;
+              } catch (e0) { endpoint = ''; }
+              if (!endpoint) return;
+
+              pre.setAttribute('data-has-tool-card', '1');
+
+              const card = document.createElement('div');
+              card.className = 'ai-action-card';
+
+              const hd = document.createElement('div');
+              hd.className = 'ai-action-card-hd';
+              const title = document.createElement('div');
+              title.className = 'ai-action-card-title';
+              title.textContent = type;
+              const btns = document.createElement('div');
+              btns.className = 'ai-action-card-btns';
+
+              const runBtn = document.createElement('button');
+              runBtn.type = 'button';
+              runBtn.className = 'btn';
+              runBtn.textContent = '执行';
+
+              const retryBtn = document.createElement('button');
+              retryBtn.type = 'button';
+              retryBtn.className = 'btn';
+              retryBtn.textContent = '重试';
+              retryBtn.style.display = 'none';
+
+              btns.appendChild(runBtn);
+              btns.appendChild(retryBtn);
+              hd.appendChild(title);
+              hd.appendChild(btns);
+
+              const stepsBox = document.createElement('div');
+              stepsBox.className = 'ai-action-steps';
+              try {
+                const payload = Object.assign({}, tool);
+                delete payload.type;
+                const keys = Object.keys(payload);
+                for (const k0 of keys.slice(0, 6)) {
+                  const row = document.createElement('div');
+                  row.className = 'ai-action-step';
+                  const k = document.createElement('div');
+                  k.className = 'k';
+                  k.textContent = String(k0);
+                  const v = document.createElement('div');
+                  v.className = 'v';
+                  const vv = payload[k0];
+                  v.textContent = (typeof vv === 'string') ? vv : JSON.stringify(vv);
+                  row.appendChild(k);
+                  row.appendChild(v);
+                  stepsBox.appendChild(row);
+                }
+              } catch (eK) {}
+
+              const logEl = document.createElement('div');
+              logEl.className = 'ai-action-log';
+              logEl.style.margin = '0 10px 10px 10px';
+              logEl.textContent = '就绪';
+
+              card.appendChild(hd);
+              card.appendChild(stepsBox);
+              card.appendChild(logEl);
+              pre.appendChild(card);
+
+              const setLog = (txt, cls) => {
+                try {
+                  logEl.classList.remove('ok');
+                  logEl.classList.remove('err');
+                  if (cls === 'ok') logEl.classList.add('ok');
+                  if (cls === 'err') logEl.classList.add('err');
+                  logEl.textContent = String(txt || '');
+                } catch (e) {}
+              };
+
+              const setRunning = (v0) => {
+                const v1 = !!v0;
+                runBtn.disabled = v1;
+                retryBtn.style.display = (!v1) ? '' : 'none';
+                if (v1) retryBtn.style.display = 'none';
+              };
+
+              const runTool = async () => {
+                const payload = Object.assign({}, tool);
+                delete payload.type;
+                let preview = '';
+                try { preview = JSON.stringify(payload, null, 2); } catch (eP0) { preview = String(payload || ''); }
+                try {
+                  const ok = await showConfirm({
+                    title: `确认执行 ${type}`,
+                    message: preview,
+                    okText: '执行',
+                    cancelText: '取消',
+                    danger: true,
+                  });
+                  if (!ok) return;
+                } catch (eC0) {}
+
+                setRunning(true);
+                setLog('执行中...', null);
+                try {
+                  const r = await POST(endpoint, payload);
+                  if (!(r && r.ok)) {
+                    setLog(String((r && (r.msg || r.error)) || '执行失败'), 'err');
+                    return;
+                  }
+                  setLog('✓ 执行完成', 'ok');
+                  try { await refresh(); } catch (eR0) {}
+                } catch (e2) {
+                  setLog(String((e2 && e2.message) || e2 || '执行失败'), 'err');
+                } finally {
+                  setRunning(false);
+                }
+              };
+
+              runBtn.addEventListener('click', (e) => {
+                try { e.preventDefault(); e.stopPropagation(); } catch (e0) {}
+                runTool();
+              });
+              retryBtn.addEventListener('click', (e) => {
+                try { e.preventDefault(); e.stopPropagation(); } catch (e0) {}
+                runTool();
+              });
+            } catch (e) {}
+          };
+
           try {
             if (pre.getAttribute('data-pre-wrapped') !== '1') {
               const wrap = document.createElement('div');
@@ -3447,6 +3607,13 @@ flex-shrink:0;cursor:pointer;
               __gmAiRenderBrowserActionCard(parsed);
             }
           } catch (eCard) {}
+
+          try {
+            const tool = __gmAiTryParseToolCall();
+            if (tool) {
+              __gmAiRenderToolActionCard(tool);
+            }
+          } catch (eCard2) {}
 
           const btn = document.createElement('button');
           btn.type = 'button';
@@ -10894,49 +11061,83 @@ flex-shrink:0;cursor:pointer;
     } catch (e) {}
   }
 
-  function aiDeleteMsg(idx) {
+  async function aiDeleteMsg(idx) {
     try {
       const i = Number(idx);
       if (!Number.isFinite(i)) return;
       if (!Array.isArray(__gmAiChatMessages)) return;
       if (i < 0 || i >= __gmAiChatMessages.length) return;
+
       const removed = [];
       const cur = __gmAiChatMessages[i];
       const curRole = String(cur && cur.role || '');
       if (curRole === 'user') {
         removed.push(...__gmAiChatMessages.slice(i));
-        __gmAiChatMessages.splice(i);
       } else {
         removed.push(__gmAiChatMessages[i]);
+      }
+
+      let gids = [];
+      try {
+        gids = Array.from(new Set((removed || []).map(m => String((m && (m.undo_gid || m.undoGid)) || '').trim()).filter(Boolean)));
+      } catch (eG0) { gids = []; }
+
+      // If this deletion maps to undo groups, deleting must also undo the underlying working tree changes.
+      if (gids.length) {
+        try {
+          const ok = await showConfirm({
+            title: '确认删除并撤回',
+            message: `将撤回 ${gids.length} 组数据操作，并删除对应对话。\n\n继续？`,
+            okText: '撤回并删除',
+            cancelText: '取消',
+            danger: true,
+          });
+          if (!ok) return;
+        } catch (eC0) {}
+
+        // Undo in reverse order to respect chronological edits.
+        for (const g of gids.slice().reverse()) {
+          try {
+            const u = await POST('/api/undo', { group_id: g });
+            const m = String((u && (u.msg || u.error)) || '');
+            const noop = Boolean(u && (u.noop === true)) || (m.indexOf('无可撤销') >= 0);
+            const ok1 = Boolean(u && u.ok) && (!noop) && (u.applied !== false);
+            if (!ok1 && !noop) {
+              toast('撤销失败：' + (m || '撤销失败'), 'err');
+              return;
+            }
+          } catch (eU0) {
+            toast('撤销失败：请求异常', 'err');
+            return;
+          }
+        }
+      }
+
+      // Now remove messages from UI/history.
+      if (curRole === 'user') {
+        __gmAiChatMessages.splice(i);
+      } else {
         __gmAiChatMessages.splice(i, 1);
       }
-      try {
-        const gids = Array.from(new Set((removed || []).map(m => String((m && (m.undo_gid || m.undoGid)) || '').trim()).filter(Boolean)));
-        if (gids.length) {
-          POST('/api/undo_drop', { group_ids: gids }).then(() => {
-            try { __gmAiRefreshSendCounter(); } catch (e0) {}
-          }).catch(()=>{});
-        }
-      } catch (eG) {}
+
       __gmAiRenderChat();
-      try { __gmAiRevalidateContinueStateForActiveSession(); } catch (eC0) {}
-      Promise.resolve(__gmAiSaveHistoryNow()).then(() => {
-        try { __gmAiRefreshSendCounter(); } catch (e0) {}
-      }).catch(()=>{});
+      try { __gmAiRevalidateContinueStateForActiveSession(); } catch (eC1) {}
+      try { await __gmAiSaveHistoryNow(); } catch (eS0) {}
+      try { await __gmAiRefreshSendCounter(); } catch (eC2) {}
+
       try {
         if (!__gmAiChatMessages.length) {
           const sid = String(__gmAiActiveSessionId || '').trim();
           if (sid) {
-            POST('/api/undo_clear', { session_id: sid }).then(() => {
-              try { __gmAiLastUndoSteps = 0; } catch (e0) {}
-              try { __gmAiRefreshSendCounter(); } catch (e1) {}
-            }).catch(()=>{});
-          } else {
-            try { __gmAiLastUndoSteps = 0; } catch (e0) {}
-            try { __gmAiRefreshSendCounter(); } catch (e1) {}
+            await POST('/api/undo_clear', { session_id: sid });
           }
+          __gmAiLastUndoSteps = 0;
+          try { __gmAiRefreshSendCounter(); } catch (e1) {}
         }
       } catch (e2) {}
+
+      // After undo, refresh working tree view.
+      try { await refresh(); } catch (eR0) {}
     } catch (e) {}
   }
 
@@ -13572,9 +13773,6 @@ flex-shrink:0;cursor:pointer;
     const el = document.createElement('div');
     el.id = 'aiUndoHistory';
     el.className = 'ai-undo-history';
-    el.addEventListener('click', (e) => {
-      try { e.stopPropagation(); } catch (e2) {}
-    });
     document.body.appendChild(el);
     __gmAiUndoHistoryEl = el;
     return el;
@@ -13736,6 +13934,14 @@ flex-shrink:0;cursor:pointer;
         try { __gmAiOpenUndoHistoryPanel(); } catch (e0) {}
         return;
       }
+      try {
+        const hp = __gmAiUndoHistoryEl;
+        if (hp && hp.classList && hp.classList.contains('show')) {
+          if (t && hp.contains && hp.contains(t)) {
+            return;
+          }
+        }
+      } catch (e2) {}
       try { __gmAiCloseUndoHistoryPanel(); } catch (e1) {}
     }, true);
   } catch (e) {}
@@ -13811,11 +14017,66 @@ flex-shrink:0;cursor:pointer;
     try { window.__gmRepoValid = false; } catch (e) {}
   }
 
+  function __gmResetUiStateForRepoSwitch(prevRepo, nextRepo) {
+    try {
+      const p = String(prevRepo || '').trim();
+      const n = String(nextRepo || '').trim();
+      if (p && n && p === n) return;
+    } catch (e) {}
+
+    try {
+      fileFilter = '';
+      logFilter = '';
+    } catch (e) {}
+
+    try {
+      const ff = document.getElementById('fileFilterInput');
+      if (ff) ff.value = '';
+    } catch (e) {}
+    try { filterFiles(''); } catch (e) {}
+    try {
+      const lf = document.getElementById('logFilterInput');
+      if (lf) lf.value = '';
+    } catch (e) {}
+    try { filterLog(''); } catch (e) {}
+    try {
+      const bs = document.getElementById('branchMenuSearch');
+      if (bs) bs.value = '';
+    } catch (e) {}
+    try { renderBranchMenu(); } catch (e) {}
+
+    try { closeBranchMenu(); } catch (e) {}
+    try { __gmHideFileFilterPanel(); } catch (e) {}
+    try {
+      __gmChangeTypeFilterSet = new Set();
+      __gmSmartFileFilterEnabled = false;
+    } catch (e) {}
+
+    try {
+      checkedSet = new Set();
+      curFile = null;
+      curHunks = [];
+      curFileContent = '';
+      baseFileContent = null;
+    } catch (e) {}
+
+    try {
+      logMode = 'list';
+      curCommit = null;
+      curCommitFiles = [];
+    } catch (e) {}
+  }
+
   function showApp(repo, branch) {
     document.getElementById('opener').style.display = 'none';
     const app = document.getElementById('app');
     app.style.display = 'flex';
     app.style.flex    = '1';
+    try {
+      const repoLabelEl0 = document.getElementById('repoLabel');
+      const prevRepo = repoLabelEl0 ? String(repoLabelEl0.getAttribute('data-repo') || '') : '';
+      __gmResetUiStateForRepoSwitch(prevRepo, repo);
+    } catch (e) {}
     try { window.__gmRepoValid = true; } catch (e) {}
     try {
       __gmAbortGroup('files');
