@@ -6068,14 +6068,14 @@ flex-shrink:0;cursor:pointer;
         try {
           const wrap = host.querySelector('.split-wrap');
           const scope = wrap ? (host.querySelector('.sp.sp-editable') || wrap.querySelector('.sp:last-child') || host) : host;
-          const dls = Array.from(scope.querySelectorAll('.dl:not(.revert-block-hint):not(.gm-gap-hint):not(.empty):not(.removed)'));
+          const dls = Array.from(scope.querySelectorAll('.dl:not(.revert-block-hint):not(.gm-gap-hint):not(.removed)'));
           const ids = [];
           const texts = [];
           for (let i = 0; i < dls.length; i++) {
             const dl = dls[i];
             const lc = dl && dl.querySelector ? dl.querySelector('.lc') : null;
             if (!lc) continue;
-            const id0 = String(dl.getAttribute ? (dl.getAttribute('data-line-id') || '') : '');
+            const id0 = String(dl.getAttribute ? (dl.getAttribute('data-edit-id') || dl.getAttribute('data-line-id') || '') : '');
             const key = id0 ? id0 : `idx:${i}`;
             ids.push(key);
             texts.push(String(lc.textContent || ''));
@@ -6375,30 +6375,72 @@ flex-shrink:0;cursor:pointer;
           return prevScroll;
         })();
 
+        const __gmGetEditableScope = () => {
+          try {
+            const wrap = host.querySelector('.split-wrap');
+            if (wrap) {
+              const editablePanel = host.querySelector('.sp.sp-editable');
+              if (editablePanel) return editablePanel;
+              return wrap.querySelector('.sp:last-child') || host;
+            }
+            return host;
+          } catch (e2) {
+            return host;
+          }
+        };
+
+        const __gmBuildSnapLineMap = () => {
+          try {
+            if (snap && Array.isArray(snap.lineIds) && Array.isArray(snap.lineTexts) && snap.lineIds.length === snap.lineTexts.length) {
+              const map = new Map();
+              for (let i = 0; i < snap.lineIds.length; i++) {
+                map.set(String(snap.lineIds[i] || ''), String(snap.lineTexts[i] || ''));
+              }
+              return map;
+            }
+          } catch (e2) {}
+          return null;
+        };
+
+        const __gmApplyLineMapToScope = (scope, map) => {
+          try {
+            if (!scope || !map) return 0;
+            const dls = Array.from(scope.querySelectorAll('.dl:not(.revert-block-hint):not(.gm-gap-hint):not(.gm-fold-hint)'));
+            let applied = 0;
+            for (let i = 0; i < dls.length; i++) {
+              const dl = dls[i];
+              try { if (dl && dl.classList && dl.classList.contains('removed')) continue; } catch (e2) {}
+              if (!dl || !dl.getAttribute) continue;
+              const id0 = String(dl.getAttribute('data-edit-id') || dl.getAttribute('data-line-id') || '');
+              const key = id0 ? id0 : `idx:${i}`;
+              if (!map.has(key)) continue;
+              const lc = dl.querySelector ? dl.querySelector('.lc') : null;
+              if (!lc) continue;
+              const nextText = map.get(key);
+              if (String(lc.textContent || '') !== String(nextText || '')) {
+                lc.textContent = String(nextText || '');
+                applied++;
+              }
+            }
+            return applied;
+          } catch (e2) {
+            return 0;
+          }
+        };
+
         // Fast-path restore: if snapshot carries line texts for current scope, update only textContent
         // without rebuilding DOM to keep Ctrl+Z responsive for single-line edits.
         try {
           if (snap && Array.isArray(snap.lineIds) && Array.isArray(snap.lineTexts) && snap.lineIds.length === snap.lineTexts.length) {
-            const scope = (() => {
-              try {
-                const wrap = host.querySelector('.split-wrap');
-                if (wrap) {
-                  const editablePanel = host.querySelector('.sp.sp-editable');
-                  if (editablePanel) return editablePanel;
-                  return wrap.querySelector('.sp:last-child') || host;
-                }
-                return host;
-              } catch (e2) {
-                return host;
-              }
-            })();
-
-            const curDls = Array.from(scope.querySelectorAll('.dl:not(.revert-block-hint):not(.gm-gap-hint):not(.empty):not(.removed)[data-line-id]'));
+            const scope = __gmGetEditableScope();
+            const curDls = Array.from(scope.querySelectorAll('.dl:not(.revert-block-hint):not(.gm-gap-hint):not(.removed)'));
             if (curDls.length === snap.lineIds.length) {
               let ok = true;
               for (let i = 0; i < curDls.length; i++) {
-                const id = String(curDls[i].getAttribute('data-line-id') || '');
-                if (id !== String(snap.lineIds[i] || '')) { ok = false; break; }
+                const dl = curDls[i];
+                const id0 = String(dl && dl.getAttribute ? (dl.getAttribute('data-edit-id') || dl.getAttribute('data-line-id') || '') : '');
+                const key = id0 ? id0 : `idx:${i}`;
+                if (key !== String(snap.lineIds[i] || '')) { ok = false; break; }
               }
               if (ok) {
                 for (let i = 0; i < curDls.length; i++) {
@@ -6456,44 +6498,47 @@ flex-shrink:0;cursor:pointer;
           const curMode = (diffMode !== undefined && diffMode !== null) ? String(diffMode) : '';
           if (snapMode && curMode && snapMode !== curMode) {
             try {
+              try {
+                const map0 = __gmBuildSnapLineMap();
+                if (map0) {
+                  const scope0 = __gmGetEditableScope();
+                  const applied0 = __gmApplyLineMapToScope(scope0, map0);
+                  if (applied0 > 0) {
+                    try { setupEditableLineEditing(); } catch (e2) {}
+                    try { __gmRestoreDiffScrollState(host, targetScroll); } catch (e2) {}
+                    try {
+                      requestAnimationFrame(() => {
+                        try { __gmRestoreDiffScrollState(host, targetScroll); } catch (e3) {}
+                        try {
+                          const scope = __gmGetEditableScope();
+                          const lines = Array.from(scope.querySelectorAll('.editable-line'));
+                          const line = (snap.idx >= 0 && snap.idx < lines.length) ? lines[snap.idx] : (lines[0] || null);
+                          if (line) {
+                            try { line.focus({ preventScroll: true }); } catch (e3) { try { line.focus(); } catch (e4) {} }
+                            try {
+                              const col = Math.max(0, Math.min(Number(snap.col) || 0, (line.textContent || '').length));
+                              setCaretOffsetNoFocus(line, col);
+                            } catch (e3) {}
+                          }
+                        } catch (e3) {}
+                      });
+                    } catch (e2) {}
+                    return;
+                  }
+                }
+              } catch (e2) {}
+
               const f = (curFile !== null && files && files[curFile]) ? files[curFile] : null;
-              if (f && Array.isArray(curHunks)) {
-                const changeLocations = buildChangeLocationsFromHunks(curHunks);
-                renderDiffWithFullContext(f, curHunks, false, changeLocations);
+              const hunksToRender = (Array.isArray(curHunks) && curHunks.length) ? curHunks : (Array.isArray(snap.hunks) ? snap.hunks : null);
+              if (f && Array.isArray(hunksToRender)) {
+                const changeLocations = buildChangeLocationsFromHunks(hunksToRender);
+                renderDiffWithFullContext(f, hunksToRender, false, changeLocations);
 
                 try {
-                  if (Array.isArray(snap.lineIds) && Array.isArray(snap.lineTexts) && snap.lineIds.length === snap.lineTexts.length) {
-                    const map = new Map();
-                    for (let i = 0; i < snap.lineIds.length; i++) {
-                      map.set(String(snap.lineIds[i] || ''), String(snap.lineTexts[i] || ''));
-                    }
-
-                    const scope = (() => {
-                      try {
-                        const wrap = host.querySelector('.split-wrap');
-                        if (wrap) {
-                          const editablePanel = host.querySelector('.sp.sp-editable');
-                          if (editablePanel) return editablePanel;
-                          return wrap.querySelector('.sp:last-child') || host;
-                        }
-                        return host;
-                      } catch (e2) {
-                        return host;
-                      }
-                    })();
-
-                    const dls = Array.from(scope.querySelectorAll('.dl:not(.revert-block-hint):not(.gm-gap-hint):not(.gm-fold-hint):not(.empty)'));
-                    for (let i = 0; i < dls.length; i++) {
-                      const dl = dls[i];
-                      try { if (dl && dl.classList && dl.classList.contains('removed')) continue; } catch (e2) {}
-                      if (!dl || !dl.getAttribute) continue;
-                      const id0 = String(dl.getAttribute('data-line-id') || '');
-                      const key = id0 ? id0 : `idx:${i}`;
-                      if (!map.has(key)) continue;
-                      const lc = dl.querySelector ? dl.querySelector('.lc') : null;
-                      if (!lc) continue;
-                      lc.textContent = map.get(key);
-                    }
+                  const map = __gmBuildSnapLineMap();
+                  if (map) {
+                    const scope = __gmGetEditableScope();
+                    __gmApplyLineMapToScope(scope, map);
                   }
                 } catch (e2) {}
 
@@ -6503,17 +6548,7 @@ flex-shrink:0;cursor:pointer;
                   requestAnimationFrame(() => {
                     try { __gmRestoreDiffScrollState(host, targetScroll); } catch (e3) {}
                     try {
-                      const scope = (() => {
-                        try {
-                          const wrap = host.querySelector('.split-wrap');
-                          if (wrap) {
-                            const editablePanel = host.querySelector('.sp.sp-editable');
-                            if (editablePanel) return editablePanel;
-                            return wrap.querySelector('.sp:last-child') || host;
-                          }
-                          return host;
-                        } catch (e4) { return host; }
-                      })();
+                      const scope = __gmGetEditableScope();
                       const lines = Array.from(scope.querySelectorAll('.editable-line'));
                       const line = (snap.idx >= 0 && snap.idx < lines.length) ? lines[snap.idx] : (lines[0] || null);
                       if (line) {
@@ -6551,19 +6586,7 @@ flex-shrink:0;cursor:pointer;
           requestAnimationFrame(() => {
             try { __gmRestoreDiffScrollState(host, targetScroll); } catch (e3) {}
 
-            const scope = (() => {
-              try {
-                const wrap = host.querySelector('.split-wrap');
-                if (wrap) {
-                  const editablePanel = host.querySelector('.sp.sp-editable');
-                  if (editablePanel) return editablePanel;
-                  return wrap.querySelector('.sp:last-child') || host;
-                }
-                return host;
-              } catch (e3) {
-                return host;
-              }
-            })();
+            const scope = __gmGetEditableScope();
             const lines = Array.from(scope.querySelectorAll('.editable-line'));
             const line = (snap.idx >= 0 && snap.idx < lines.length) ? lines[snap.idx] : (lines[0] || null);
             if (line) {
@@ -6585,19 +6608,7 @@ flex-shrink:0;cursor:pointer;
           });
           return;
         } catch (e2) {}
-        const scope = (() => {
-          try {
-            const wrap = host.querySelector('.split-wrap');
-            if (wrap) {
-              const editablePanel = host.querySelector('.sp.sp-editable');
-              if (editablePanel) return editablePanel;
-              return wrap.querySelector('.sp:last-child') || host;
-            }
-            return host;
-          } catch (e3) {
-            return host;
-          }
-        })();
+        const scope = __gmGetEditableScope();
         const lines = Array.from(scope.querySelectorAll('.editable-line'));
         const line = (snap.idx >= 0 && snap.idx < lines.length) ? lines[snap.idx] : (lines[0] || null);
         if (line) {
@@ -6692,14 +6703,14 @@ flex-shrink:0;cursor:pointer;
 
         const lineSnap = (() => {
           try {
-            const dls = Array.from(scope.querySelectorAll('.dl:not(.revert-block-hint):not(.gm-gap-hint):not(.empty):not(.removed)'));
+            const dls = Array.from(scope.querySelectorAll('.dl:not(.revert-block-hint):not(.gm-gap-hint):not(.removed)'));
             const ids = [];
             const texts = [];
             for (let i = 0; i < dls.length; i++) {
               const dl = dls[i];
               const lc = dl && dl.querySelector ? dl.querySelector('.lc') : null;
               if (!lc) continue;
-              const id0 = String(dl.getAttribute ? (dl.getAttribute('data-line-id') || '') : '');
+              const id0 = String(dl.getAttribute ? (dl.getAttribute('data-edit-id') || dl.getAttribute('data-line-id') || '') : '');
               const key = id0 ? id0 : `idx:${i}`;
               ids.push(key);
               texts.push(String(lc.textContent || ''));
@@ -18400,8 +18411,8 @@ flex-shrink:0;cursor:pointer;
         const newText = __nn(newTextRaw, '');
         
                 
-        leftLines.push({type:'context', num:oldPtr, text:oldText});
-        rightLines.push({type:'context', num:newPtr, text:newText});
+        leftLines.push({type:'context', num:oldPtr, text:oldText, absLineIndex: oldPtr - 1});
+        rightLines.push({type:'context', num:newPtr, text:newText, absLineIndex: newPtr - 1});
         oldPtr++;
         newPtr++;
       };
@@ -18416,13 +18427,13 @@ flex-shrink:0;cursor:pointer;
             pushContext();
           } else if (oldPtr < oldStart) {
             const oldText = __nn(baseLines[oldPtr - 1], '');
-            leftLines.push({type:'context', num:oldPtr, text:oldText});
-            rightLines.push({type:'empty', num:'', text:''});
+            leftLines.push({type:'context', num:oldPtr, text:oldText, absLineIndex: oldPtr - 1});
+            rightLines.push({type:'empty', num:'', text:'', placeholder: true});
             oldPtr++;
           } else {
             const newText = __nn(curLines[newPtr - 1], '');
-            leftLines.push({type:'empty', num:'', text:''});
-            rightLines.push({type:'context', num:newPtr, text:newText});
+            leftLines.push({type:'empty', num:'', text:'', placeholder: true});
+            rightLines.push({type:'context', num:newPtr, text:newText, absLineIndex: newPtr - 1});
             newPtr++;
           }
         }
@@ -18432,25 +18443,27 @@ flex-shrink:0;cursor:pointer;
           if (dl.type === 'context') {
             const oldText = __nn(baseLines[oldPtr - 1], __nn(dl.text, ''));
             const newText = __nn(curLines[newPtr - 1], __nn(dl.text, ''));
-            leftLines.push({type:'context', num:oldPtr, text:oldText});
-            rightLines.push({type:'context', num:newPtr, text:newText});
+            leftLines.push({type:'context', num:oldPtr, text:oldText, absLineIndex: oldPtr - 1});
+            rightLines.push({type:'context', num:newPtr, text:newText, absLineIndex: newPtr - 1});
             oldPtr++;
             newPtr++;
           } else if (dl.type === 'added') {
             const newText = __nn(curLines[newPtr - 1], __nn(dl.text, ''));
-            leftLines.push({type:'empty', num:'', text:''});
+            leftLines.push({type:'empty', num:'', text:'', placeholder: true});
             rightLines.push({type:'added', num:newPtr, text:newText, hunkIndex, originalLineIndex: lineIndex});
+            try { rightLines[rightLines.length - 1].absLineIndex = newPtr - 1; } catch (e) {}
             newPtr++;
           } else if (dl.type === 'removed') {
             const oldText = __nn(baseLines[oldPtr - 1], __nn(dl.text, ''));
             leftLines.push({type:'removed', num:oldPtr, text:oldText, hunkIndex, originalLineIndex: lineIndex});
-            rightLines.push({type:'empty', num:'', text:''});
+            rightLines.push({type:'empty', num:'', text:'', placeholder: true});
             oldPtr++;
           } else if (dl.type === 'modified') {
             const oldText = __nn(baseLines[oldPtr - 1], __nn(dl.old_text, ''));
             const newText = __nn(curLines[newPtr - 1], __nn(dl.text, ''));
             leftLines.push({type:'modified', num:oldPtr, text:oldText, newText: newText, hunkIndex, originalLineIndex: lineIndex});
             rightLines.push({type:'modified', num:newPtr, text:newText, oldText: oldText, hunkIndex, originalLineIndex: lineIndex});
+            try { rightLines[rightLines.length - 1].absLineIndex = newPtr - 1; } catch (e) {}
             oldPtr++;
             newPtr++;
           }
@@ -18463,14 +18476,14 @@ flex-shrink:0;cursor:pointer;
       }
       while (oldPtr <= baseLines.length) {
         const oldText = __nn(baseLines[oldPtr - 1], '');
-        leftLines.push({type:'context', num:oldPtr, text:oldText});
-        rightLines.push({type:'empty', num:'', text:''});
+        leftLines.push({type:'context', num:oldPtr, text:oldText, absLineIndex: oldPtr - 1});
+        rightLines.push({type:'empty', num:'', text:'', placeholder: true});
         oldPtr++;
       }
       while (newPtr <= curLines.length) {
         const newText = __nn(curLines[newPtr - 1], '');
-        leftLines.push({type:'empty', num:'', text:''});
-        rightLines.push({type:'context', num:newPtr, text:newText});
+        leftLines.push({type:'empty', num:'', text:'', placeholder: true});
+        rightLines.push({type:'context', num:newPtr, text:newText, absLineIndex: newPtr - 1});
         newPtr++;
       }
 
@@ -18503,7 +18516,15 @@ flex-shrink:0;cursor:pointer;
 
           const lineIdAttr = (ctl && ctl.hunkIndex !== undefined && ctl.originalLineIndex !== undefined)
                   ? ` data-line-id="${ctl.hunkIndex}-${ctl.originalLineIndex}" data-hunk="${ctl.hunkIndex}" data-line="${ctl.originalLineIndex}"`
-                  : '';
+                  : (ctl && ctl.absLineIndex !== undefined && ctl.absLineIndex !== null)
+                    ? ` data-line-id="abs:${Number(ctl.absLineIndex)}" data-abs-line="${Number(ctl.absLineIndex)}"`
+                    : '';
+
+          const editIdAttr = (ctl && ctl.absLineIndex !== undefined && ctl.absLineIndex !== null)
+                  ? ` data-edit-id="abs:${Number(ctl.absLineIndex)}"`
+                  : (ctl && ctl.hunkIndex !== undefined && ctl.originalLineIndex !== undefined)
+                    ? ` data-edit-id="${ctl.hunkIndex}-${ctl.originalLineIndex}"`
+                    : '';
 
           const checkedAttr = lineCheckedAttr(ctl.hunkIndex, ctl.originalLineIndex);
           const commitCb = (showCommitCb && columnType === 'right' && !readonly && ctl.hunkIndex !== undefined && ctl.originalLineIndex !== undefined) ?
@@ -18536,7 +18557,7 @@ flex-shrink:0;cursor:pointer;
           }
 
           const lsHtml = (columnType === 'left') ? '' : `<span class="ls" contenteditable="false">${s}</span>`;
-          return `<div class="dl ${line.type}"${lineIdAttr}>${actions}${lsHtml}<span class="ln" contenteditable="false">${line.num||''}</span><span${lcAttrs}>${cellText}</span></div>`;
+          return `<div class="dl ${line.type}"${lineIdAttr}${editIdAttr}>${actions}${lsHtml}<span class="ln" contenteditable="false">${line.num||''}</span><span${lcAttrs}>${cellText}</span></div>`;
         };
 
         const renderHintRow = (columnType, count, showBtn, hunkIndex, startIdx, endIdx) => {
@@ -18717,8 +18738,8 @@ flex-shrink:0;cursor:pointer;
       const pushContext = () => {
         const oldText = __nn(baseLines[oldPtr - 1], '');
         const newText = __nn(curLines[newPtr - 1], '');
-        leftLines.push({type:'context', num:oldPtr, text:oldText});
-        rightLines.push({type:'context', num:newPtr, text:newText});
+        leftLines.push({type:'context', num:oldPtr, text:oldText, absLineIndex: oldPtr - 1});
+        rightLines.push({type:'context', num:newPtr, text:newText, absLineIndex: newPtr - 1});
         oldPtr++;
         newPtr++;
       };
@@ -18731,13 +18752,13 @@ flex-shrink:0;cursor:pointer;
             pushContext();
           } else if (oldPtr < oldStart) {
             const oldText = __nn(baseLines[oldPtr - 1], '');
-            leftLines.push({type:'context', num:oldPtr, text:oldText});
-            rightLines.push({type:'empty', num:'', text:''});
+            leftLines.push({type:'context', num:oldPtr, text:oldText, absLineIndex: oldPtr - 1});
+            rightLines.push({type:'empty', num:'', text:'', placeholder: true});
             oldPtr++;
           } else {
             const newText = __nn(curLines[newPtr - 1], '');
-            leftLines.push({type:'empty', num:'', text:''});
-            rightLines.push({type:'context', num:newPtr, text:newText});
+            leftLines.push({type:'empty', num:'', text:'', placeholder: true});
+            rightLines.push({type:'context', num:newPtr, text:newText, absLineIndex: newPtr - 1});
             newPtr++;
           }
         }
@@ -18748,23 +18769,31 @@ flex-shrink:0;cursor:pointer;
             const newText = __nn(curLines[newPtr - 1], __nn(dl.text, ''));
             leftLines.push({type:'context', num:oldPtr, text:oldText, hunkIndex, originalLineIndex: lineIndex});
             rightLines.push({type:'context', num:newPtr, text:newText, hunkIndex, originalLineIndex: lineIndex});
+            try { leftLines[leftLines.length - 1].absLineIndex = oldPtr - 1; } catch (e) {}
+            try { rightLines[rightLines.length - 1].absLineIndex = newPtr - 1; } catch (e) {}
             oldPtr++;
             newPtr++;
           } else if (dl.type === 'added') {
             const newText = __nn(curLines[newPtr - 1], __nn(dl.text, ''));
             leftLines.push({type:'empty', num:'', text:'', hunkIndex, originalLineIndex: lineIndex});
             rightLines.push({type:'added', num:newPtr, text:newText, hunkIndex, originalLineIndex: lineIndex});
+            try { leftLines[leftLines.length - 1].placeholder = true; } catch (e) {}
+            try { rightLines[rightLines.length - 1].absLineIndex = newPtr - 1; } catch (e) {}
             newPtr++;
           } else if (dl.type === 'removed') {
             const oldText = __nn(baseLines[oldPtr - 1], __nn(dl.text, ''));
             leftLines.push({type:'removed', num:oldPtr, text:oldText, hunkIndex, originalLineIndex: lineIndex});
             rightLines.push({type:'empty', num:'', text:'', hunkIndex, originalLineIndex: lineIndex});
+            try { rightLines[rightLines.length - 1].placeholder = true; } catch (e) {}
+            try { leftLines[leftLines.length - 1].absLineIndex = oldPtr - 1; } catch (e) {}
             oldPtr++;
           } else if (dl.type === 'modified') {
             const oldText = __nn(baseLines[oldPtr - 1], __nn(dl.old_text, ''));
             const newText = __nn(curLines[newPtr - 1], __nn(dl.text, ''));
             leftLines.push({type:'modified', num:oldPtr, oldText, text:oldText, hunkIndex, originalLineIndex: lineIndex});
             rightLines.push({type:'modified', num:newPtr, newText, text:newText, hunkIndex, originalLineIndex: lineIndex});
+            try { leftLines[leftLines.length - 1].absLineIndex = oldPtr - 1; } catch (e) {}
+            try { rightLines[rightLines.length - 1].absLineIndex = newPtr - 1; } catch (e) {}
             oldPtr++;
             newPtr++;
           }
@@ -18774,14 +18803,14 @@ flex-shrink:0;cursor:pointer;
       while (oldPtr <= baseLines.length && newPtr <= curLines.length) pushContext();
       while (oldPtr <= baseLines.length) {
         const oldText = __nn(baseLines[oldPtr - 1], '');
-        leftLines.push({type:'context', num:oldPtr, text:oldText});
-        rightLines.push({type:'empty', num:'', text:''});
+        leftLines.push({type:'context', num:oldPtr, text:oldText, absLineIndex: oldPtr - 1});
+        rightLines.push({type:'empty', num:'', text:'', placeholder: true});
         oldPtr++;
       }
       while (newPtr <= curLines.length) {
         const newText = __nn(curLines[newPtr - 1], '');
-        leftLines.push({type:'empty', num:'', text:''});
-        rightLines.push({type:'context', num:newPtr, text:newText});
+        leftLines.push({type:'empty', num:'', text:'', placeholder: true});
+        rightLines.push({type:'context', num:newPtr, text:newText, absLineIndex: newPtr - 1});
         newPtr++;
       }
 
@@ -18792,6 +18821,18 @@ flex-shrink:0;cursor:pointer;
         if (!line || line.type === 'empty') {
           return `<div class="dl empty"><span class="dl-actions" contenteditable="false"></span><span class="ls" contenteditable="false"></span><span class="ln" contenteditable="false"></span><span class="lc" contenteditable="false"></span></div>`;
         }
+
+        const lineIdAttr = (line.hunkIndex !== undefined && line.originalLineIndex !== undefined)
+                ? ` data-line-id="${line.hunkIndex}-${line.originalLineIndex}" data-hunk="${line.hunkIndex}" data-line="${line.originalLineIndex}"`
+                : (line.absLineIndex !== undefined && line.absLineIndex !== null)
+                  ? ` data-line-id="abs:${Number(line.absLineIndex)}" data-abs-line="${Number(line.absLineIndex)}"`
+                  : '';
+
+        const editIdAttr = (line.absLineIndex !== undefined && line.absLineIndex !== null)
+                ? ` data-edit-id="abs:${Number(line.absLineIndex)}"`
+                : (line.hunkIndex !== undefined && line.originalLineIndex !== undefined)
+                  ? ` data-edit-id="${line.hunkIndex}-${line.originalLineIndex}"`
+                  : '';
 
         let s = ' ';
         if (line.type === 'added') s = '+';
@@ -18818,16 +18859,12 @@ flex-shrink:0;cursor:pointer;
           content = html.newHtml;
         }
 
-        const canEdit = (!readonly) && (line.type !== 'removed');
+        const canEdit = (!readonly) && (line.type !== 'removed') && !(line && line.placeholder);
         const lcAttrs = canEdit ? ' class="lc editable-line" tabindex="0"' : ' class="lc" contenteditable="false"';
-
-        const lineIdAttr = (line.hunkIndex !== undefined && line.originalLineIndex !== undefined)
-                ? ` data-line-id="${line.hunkIndex}-${line.originalLineIndex}" data-hunk="${line.hunkIndex}" data-line="${line.originalLineIndex}"`
-                : '';
 
         const ln = (line.type === 'removed' || (line.type === 'context' && (!R || R.type === 'empty'))) ? __nn(L && L.num, __nn(line.num, '')) : __nn(R && R.num, __nn(line.num, ''));
 
-        return `<div class="dl ${line.type}"${lineIdAttr}>
+        return `<div class="dl ${line.type}"${lineIdAttr}${editIdAttr}>
         <span class="dl-actions" contenteditable="false">${revertBtn}</span>
         <span class="ls" contenteditable="false">${s}</span>
         <span class="ln" contenteditable="false">${ln || ''}</span>
