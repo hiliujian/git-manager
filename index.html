@@ -2861,13 +2861,40 @@ flex-shrink:0;cursor:pointer;
     };
 
     const rows = files0.map((f, idx) => {
+      const kind = (f && f.kind) ? String(f.kind) : 'staged';
+      if (kind === 'stash') {
+        const ref = esc(f && f.ref ? f.ref : '');
+        const text = esc(f && f.text ? f.text : '');
+        return `
+<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--border);">
+  <div style="flex:1;min-width:0;">
+    <div title="${text}" style="display:flex;align-items:center;gap:8px;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="flex:0 0 auto;opacity:.85">
+        <path d="M12 2l7 4v6c0 5-3 9-7 10C8 21 5 17 5 12V6l7-4z"/>
+      </svg>
+      <span style="min-width:0;overflow:hidden;text-overflow:ellipsis;">${text}</span>
+      <span style="color:var(--text3);flex:0 0 auto">(stash)</span>
+    </div>
+  </div>
+  <button class="btn" style="padding:2px 10px" data-action="popOneStashFromPanel" data-idx="${idx}" data-ref="${ref}">恢复</button>
+  <button class="btn red" style="padding:2px 10px" data-action="dropOneStashFromPanel" data-idx="${idx}" data-ref="${ref}">丢弃</button>
+</div>`;
+      }
+
       const p = esc(f && f.path ? f.path : '');
       const st = esc(f && f.status ? f.status : '');
       const stTxt = st ? `(${st})` : '';
       return `
 <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--border);">
   <div style="flex:1;min-width:0;">
-    <div title="${p}" style="font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${p} <span style="color:var(--text3)">${stTxt}</span></div>
+    <div title="${p}" style="display:flex;align-items:center;gap:8px;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="flex:0 0 auto;opacity:.85">
+        <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+        <polyline points="14 2 14 8 20 8"/>
+      </svg>
+      <span style="min-width:0;overflow:hidden;text-overflow:ellipsis;">${p}</span>
+      <span style="color:var(--text3);flex:0 0 auto">${stTxt}</span>
+    </div>
   </div>
   <button class="btn" style="padding:2px 10px" data-action="unstageOneStagedFromPanel" data-idx="${idx}">恢复</button>
   <button class="btn red" style="padding:2px 10px" data-action="discardOneStagedFromPanel" data-idx="${idx}">丢弃</button>
@@ -2889,14 +2916,117 @@ flex-shrink:0;cursor:pointer;
         __gmRenderStagedList();
         return;
       }
-      __gmStagedPanelFiles = Array.isArray(res.files) ? res.files : [];
-      if (desc) desc.textContent = __gmStagedPanelFiles.length ? `共 ${__gmStagedPanelFiles.length} 个暂存区文件` : '暂无暂存区文件';
+      const stagedFiles = Array.isArray(res.files) ? res.files : [];
+
+      let stashItems = [];
+      try {
+        const ls = await GET('/api/stash_list');
+        const stashes = (ls && ls.ok && Array.isArray(ls.stashes)) ? ls.stashes : [];
+        stashItems = (stashes || []).map((line, i) => {
+          return { kind: 'stash', ref: `stash@{${i}}`, text: String(line || '').trim() };
+        });
+      } catch (e2) {
+        stashItems = [];
+      }
+
+      __gmStagedPanelFiles = [...stagedFiles, ...stashItems];
+      const stagedCount = stagedFiles.length;
+      const stashCount = stashItems.length;
+      if (desc) {
+        if (!stagedCount && !stashCount) desc.textContent = '暂无暂存区文件';
+        else if (!stagedCount && stashCount) desc.textContent = `共 ${stashCount} 条 stash`;
+        else if (stagedCount && !stashCount) desc.textContent = `共 ${stagedCount} 个暂存区文件`;
+        else desc.textContent = `暂存区 ${stagedCount} 个文件，stash ${stashCount} 条`;
+      }
       __gmRenderStagedList();
     } catch (e) {
       if (desc) desc.textContent = '加载失败';
       __gmStagedPanelFiles = [];
       __gmRenderStagedList();
     }
+  }
+
+  async function popOneStashFromPanel(idx, ref0) {
+    const f = (__gmStagedPanelFiles || [])[idx];
+    const ref = String(ref0 || (f && f.ref) || '').trim();
+    const text = String((f && f.text) || '').trim();
+    if (!ref) return;
+    try { closeModal('stagedModal'); } catch (e) {}
+    const ok = await showConfirm({
+      title: '恢复 stash',
+      message: `将应用并弹出该 stash：\n\n${text || ref}\n\n确认继续？`,
+      okText: '恢复修改',
+      cancelText: '取消',
+      danger: true,
+    });
+    if (!ok) { try { showModal('stagedModal'); } catch (e) {} return; }
+    const popRes = await POST('/api/stash_pop', { ref });
+    if (popRes && popRes.ok) {
+      toast('✓ 已恢复 stash 的修改', 'ok');
+      await refresh();
+      try { showModal('stagedModal'); } catch (e) {}
+      await loadStagedPanelFiles();
+      return;
+    }
+    if (popRes && popRes.has_conflict) {
+      const kept = !!(popRes && popRes.stash_kept);
+      const top2 = (popRes && popRes.stash_top) ? String(popRes.stash_top || '') : '';
+      const hint = kept
+        ? (`\n\n提示：stash 仍然保留（未丢失）${top2 ? `：\n${top2}` : ''}。解决冲突后可再次点击恢复。`)
+        : '\n\n提示：通常冲突时 stash 不会自动丢弃；可在命令行用 git stash list 检查。';
+      await showConfirm({
+        title: '⚠️ 恢复时发生冲突',
+        message: '恢复 stash 的修改时发生冲突，请手动解决冲突。\n\n冲突文件:\n  • ' +
+          (popRes.conflict_files || []).join('\n  • ') + hint,
+        okText: '知道了',
+        hideCancel: true,
+        danger: true,
+      });
+      await refresh();
+      try { showModal('stagedModal'); } catch (e) {}
+      await loadStagedPanelFiles();
+      return;
+    }
+    await showConfirm({
+      title: '恢复失败',
+      message: (popRes && (popRes.error || popRes.msg || popRes.message)) ? (popRes.error || popRes.msg || popRes.message) : '恢复 stash 的修改失败',
+      okText: '知道了',
+      hideCancel: true,
+      danger: true,
+    });
+    try { showModal('stagedModal'); } catch (e) {}
+  }
+
+  async function dropOneStashFromPanel(idx, ref0) {
+    const f = (__gmStagedPanelFiles || [])[idx];
+    const ref = String(ref0 || (f && f.ref) || '').trim();
+    const text = String((f && f.text) || '').trim();
+    if (!ref) return;
+    try { closeModal('stagedModal'); } catch (e) {}
+    const ok = await showConfirm({
+      title: '丢弃 stash',
+      message: `将永久删除该 stash（不可撤销）：\n\n${text || ref}\n\n确认继续？`,
+      okText: '确认丢弃',
+      cancelText: '取消',
+      danger: true,
+    });
+    if (!ok) { try { showModal('stagedModal'); } catch (e) {} return; }
+    const dr = await POST('/api/stash_drop', { ref });
+    if (dr && dr.ok) {
+      toast('✓ 已丢弃 stash', 'ok');
+      await refresh();
+      try { showModal('stagedModal'); } catch (e) {}
+      await loadStagedPanelFiles();
+      return;
+    }
+    await showConfirm({
+      title: '丢弃失败',
+      message: (dr && (dr.error || dr.msg || dr.message)) ? (dr.error || dr.msg || dr.message) : '丢弃 stash 失败',
+      okText: '知道了',
+      hideCancel: true,
+      danger: true,
+    });
+    try { showModal('stagedModal'); } catch (e) {}
   }
 
   async function unstageOneStagedFromPanel(idx) {
@@ -2948,21 +3078,58 @@ flex-shrink:0;cursor:pointer;
 
   async function unstageAllStagedFromPanel() {
     try { closeModal('stagedModal'); } catch (e) {}
+    const items0 = Array.isArray(__gmStagedPanelFiles) ? __gmStagedPanelFiles : [];
+    const stagedCount = items0.filter(x => !(x && x.kind === 'stash')).length;
+    const stashCount = items0.filter(x => (x && x.kind === 'stash')).length;
     const ok = await showConfirm({
       title: '全部恢复到工作区',
-      message: '将取消全部暂存（保留工作区改动）。确认继续？',
+      message: (stashCount > 0)
+        ? (`将取消全部暂存（保留工作区改动），并恢复全部 stash 的修改到工作区。\n\n` +
+           `暂存区文件：${stagedCount} 个\n` +
+           `stash：${stashCount} 条\n\n` +
+           '确认继续？')
+        : '将取消全部暂存（保留工作区改动）。确认继续？',
       okText: '全部恢复',
       cancelText: '取消',
     });
     if (!ok) { try { showModal('stagedModal'); } catch (e) {} return; }
     try {
-      const res = await POST('/api/unstage_all_staged', {});
-      if (res && res.ok) {
-        toast('✓ 已全部恢复', 'ok');
-        await refresh();
-        return;
+      if (stagedCount > 0) {
+        const res = await POST('/api/unstage_all_staged', {});
+        if (!(res && res.ok)) {
+          toast(String((res && (res.error || res.msg)) || '操作失败'), 'err');
+          try { showModal('stagedModal'); } catch (e) {}
+          return;
+        }
       }
-      toast(String((res && (res.error || res.msg)) || '操作失败'), 'err');
+
+      if (stashCount > 0) {
+        let guard = 0;
+        while (guard < 200) {
+          guard++;
+          const ls = await GET('/api/stash_list');
+          const curCnt = Number((ls && ls.ok && ls.stash_count) ? ls.stash_count : 0) || 0;
+          if (curCnt <= 0) break;
+          const popRes = await POST('/api/stash_pop', { ref: 'stash@{0}' });
+          if (popRes && popRes.ok) continue;
+          if (popRes && popRes.has_conflict) {
+            await showConfirm({
+              title: '⚠️ 恢复时发生冲突',
+              message: '恢复 stash 的修改时发生冲突，请先手动解决冲突。\n\n冲突文件:\n  • ' + (popRes.conflict_files || []).join('\\n  • '),
+              okText: '知道了',
+              hideCancel: true,
+              danger: true,
+            });
+            break;
+          }
+          toast(String((popRes && (popRes.error || popRes.msg || popRes.message)) || '恢复 stash 失败'), 'err');
+          break;
+        }
+      }
+
+      toast('✓ 已全部恢复', 'ok');
+      await refresh();
+      return;
     } catch (e) {
       toast('操作失败', 'err');
     }
@@ -2971,22 +3138,49 @@ flex-shrink:0;cursor:pointer;
 
   async function discardAllStagedFromPanel() {
     try { closeModal('stagedModal'); } catch (e) {}
+    const items0 = Array.isArray(__gmStagedPanelFiles) ? __gmStagedPanelFiles : [];
+    const stagedCount = items0.filter(x => !(x && x.kind === 'stash')).length;
+    const stashCount = items0.filter(x => (x && x.kind === 'stash')).length;
     const ok = await showConfirm({
       title: '全部丢弃暂存区内容',
-      message: '将丢弃全部暂存区内容，并同步丢弃相关工作区改动，恢复到 HEAD。此操作不可撤销！\n\n确认继续？',
+      message: (stashCount > 0)
+        ? (`将丢弃全部暂存区内容，并同步丢弃相关工作区改动，恢复到 HEAD；同时丢弃全部 stash（永久删除）。此操作不可撤销！\n\n` +
+           `暂存区文件：${stagedCount} 个\n` +
+           `stash：${stashCount} 条\n\n` +
+           '确认继续？')
+        : '将丢弃全部暂存区内容，并同步丢弃相关工作区改动，恢复到 HEAD。此操作不可撤销！\n\n确认继续？',
       okText: '全部丢弃',
       cancelText: '取消',
       danger: true,
     });
     if (!ok) { try { showModal('stagedModal'); } catch (e) {} return; }
     try {
-      const res = await POST('/api/discard_all_staged', {});
-      if (res && res.ok) {
-        toast('✓ 已全部丢弃', 'ok');
-        await refresh();
-        return;
+      if (stagedCount > 0) {
+        const res = await POST('/api/discard_all_staged', {});
+        if (!(res && res.ok)) {
+          toast(String((res && (res.error || res.msg)) || '操作失败'), 'err');
+          try { showModal('stagedModal'); } catch (e) {}
+          return;
+        }
       }
-      toast(String((res && (res.error || res.msg)) || '操作失败'), 'err');
+
+      if (stashCount > 0) {
+        let guard = 0;
+        while (guard < 200) {
+          guard++;
+          const ls = await GET('/api/stash_list');
+          const curCnt = Number((ls && ls.ok && ls.stash_count) ? ls.stash_count : 0) || 0;
+          if (curCnt <= 0) break;
+          const dr = await POST('/api/stash_drop', { ref: 'stash@{0}' });
+          if (dr && dr.ok) continue;
+          toast(String((dr && (dr.error || dr.msg || dr.message)) || '丢弃 stash 失败'), 'err');
+          break;
+        }
+      }
+
+      toast('✓ 已全部丢弃', 'ok');
+      await refresh();
+      return;
     } catch (e) {
       toast('操作失败', 'err');
     }
@@ -4599,6 +4793,8 @@ flex-shrink:0;cursor:pointer;
           if (act === 'discardAllStagedFromPanel') { e.preventDefault(); discardAllStagedFromPanel(); return; }
           if (act === 'unstageOneStagedFromPanel') { e.preventDefault(); unstageOneStagedFromPanel(parseInt(String(el.getAttribute('data-idx') || ''), 10)); return; }
           if (act === 'discardOneStagedFromPanel') { e.preventDefault(); discardOneStagedFromPanel(parseInt(String(el.getAttribute('data-idx') || ''), 10)); return; }
+          if (act === 'popOneStashFromPanel') { e.preventDefault(); popOneStashFromPanel(parseInt(String(el.getAttribute('data-idx') || ''), 10), String(el.getAttribute('data-ref') || '')); return; }
+          if (act === 'dropOneStashFromPanel') { e.preventDefault(); dropOneStashFromPanel(parseInt(String(el.getAttribute('data-idx') || ''), 10), String(el.getAttribute('data-ref') || '')); return; }
           if (act === 'undoLastRevertFromTip') { e.preventDefault(); undoLastRevertFromTip(); return; }
           if (act === 'hideUndoTip') { e.preventDefault(); hideUndoTip(); return; }
 
@@ -15732,10 +15928,18 @@ flex-shrink:0;cursor:pointer;
       const stagedBtnText = document.getElementById('stagedBtnText');
       const hasStaged = Boolean(stRes && stRes.has_staged_changes);
       const cnt = Number((stRes && stRes.staged_count) || 0) || 0;
+      const hasStash = Boolean(stRes && stRes.has_stash);
+      const cnt2 = Number((stRes && stRes.stash_count) || 0) || 0;
       if (stagedBtn) {
-        stagedBtn.style.display = hasStaged ? 'flex' : 'none';
-        const label = (hasStaged && cnt > 0) ? (`暂存(${cnt})`) : '暂存';
+        stagedBtn.style.display = (hasStaged || hasStash) ? 'flex' : 'none';
+        let label = '暂存';
+        const totalCnt = (hasStaged ? cnt : 0) + (hasStash ? cnt2 : 0);
+        if (totalCnt > 0) label = `暂存(${totalCnt})`;
         if (stagedBtnText) stagedBtnText.textContent = label;
+        try {
+          if (hasStash && cnt2 > 0) stagedBtn.title = `检测到 stash：${cnt2} 条`;
+          else stagedBtn.removeAttribute('title');
+        } catch (eT) {}
       }
     } catch (e) {}
 
@@ -16165,17 +16369,8 @@ flex-shrink:0;cursor:pointer;
             toast('恢复修改中...', 'warn');
             const popRes = await POST('/api/stash_pop', {});
             setButtonBusy(btn, false);
-            if (popRes && popRes.ok) {
-              toast('✓ 已恢复修改', 'ok');
-            } else {
-              const msg2 = (popRes && (popRes.error || popRes.msg || popRes.message)) ? (popRes.error || popRes.msg || popRes.message) : '恢复修改失败';
-              const kept = !!(popRes && popRes.stash_kept);
-              const top = (popRes && popRes.stash_top) ? String(popRes.stash_top || '') : '';
-              const cfs = (popRes && Array.isArray(popRes.conflict_files)) ? popRes.conflict_files : [];
-              const list = cfs.length ? ('\n\n冲突文件：\n' + cfs.slice(0, 12).map(x => ' - ' + x).join('\n') + (cfs.length > 12 ? `\n... 还有 ${cfs.length - 12} 个` : '')) : '';
-              const hint = (kept ? (`\n\n提示：stash 仍然保留（未丢失）${top ? `：\n${top}` : ''}。请先解决冲突后再尝试恢复。`) : '\n\n提示：请检查 stash 列表确认是否仍在（通常冲突时不会自动丢弃）。');
-              __gmToastApiError('恢复修改失败', popRes, msg2 + list + hint);
-            }
+            if (popRes && popRes.ok) toast('✓ 已恢复修改', 'ok');
+            else __gmToastApiError('恢复修改失败', popRes, (popRes && (popRes.error || popRes.msg || popRes.message)) ? (popRes.error || popRes.msg || popRes.message) : '恢复修改失败');
           }
           await refresh();
           return;
@@ -22715,29 +22910,9 @@ flex-shrink:0;cursor:pointer;
               if (popRes && popRes.ok) {
                 toast('✓ 已恢复暂存的修改', 'ok');
                 await refresh();
-              } else if (popRes && popRes.has_conflict) {
-                const kept = !!(popRes && popRes.stash_kept);
-                const top = (popRes && popRes.stash_top) ? String(popRes.stash_top || '') : '';
-                const hint = kept
-                  ? (`\n\n提示：stash 仍然保留（未丢失）${top ? `：\n${top}` : ''}。解决冲突后可再次点击恢复。`)
-                  : '\n\n提示：通常冲突时 stash 不会自动丢弃；可在命令行用 git stash list 检查。';
-                await showConfirm({
-                  title: '⚠️ 恢复时发生冲突',
-                  message: '恢复暂存的修改时发生冲突，请手动解决冲突。\n\n冲突文件:\n  • ' + 
-                    (popRes.conflict_files || []).join('\n  • ') + hint,
-                  okText: '知道了',
-                  hideCancel: true,
-                  danger: true
-                });
-                await refresh();
               } else {
-                await showConfirm({
-                  title: '恢复失败',
-                  message: (popRes && popRes.error) || '恢复暂存的修改失败',
-                  okText: '知道了',
-                  hideCancel: true,
-                  danger: true
-                });
+                __gmToastApiError('恢复暂存的修改失败', popRes, (popRes && (popRes.error || popRes.msg || popRes.message)) ? (popRes.error || popRes.msg || popRes.message) : '恢复暂存的修改失败');
+                await refresh();
               }
             } else {
               toast('✓ 已切换分支（修改已暂存）', 'ok');
@@ -22827,6 +23002,39 @@ flex-shrink:0;cursor:pointer;
             if (!el) return;
             try { e.preventDefault(); e.stopPropagation(); } catch (e2) {}
             selectBranchFromMenu(el);
+          });
+          list.addEventListener('contextmenu', async (e) => {
+            const el = e.target && e.target.closest ? e.target.closest('.bm-item[data-branch]') : null;
+            if (!el) return;
+            try { e.preventDefault(); e.stopPropagation(); } catch (e2) {}
+            const branch = String(el.getAttribute('data-branch') || '').trim();
+            if (!branch || branch.startsWith('remotes/')) return;
+
+            const choice = await showCustomDialog({
+              title: '删除本地分支',
+              message: `要删除本地分支 "${branch}" 吗？\n\n说明：\n- 普通删除（-d）会拒绝删除未合并分支\n- 强制删除（-D）会直接删除（危险）`,
+              buttons: [
+                { text: '删除', value: 'delete', class: 'blue' },
+                { text: '强制删除', value: 'force', class: 'red' },
+                { text: '取消', value: 'cancel', class: '' },
+              ]
+            });
+            if (choice !== 'delete' && choice !== 'force') return;
+            toast('删除分支中...', 'info');
+            const res = await POST('/api/delete_branch', { branch, force: choice === 'force' });
+            if (res && res.ok) {
+              toast('✓ 已删除本地分支', 'ok');
+              await refresh();
+              try { refreshSyncStatus(true); } catch (e0) {}
+              return;
+            }
+            await showConfirm({
+              title: '删除失败',
+              message: (res && (res.error || res.msg || res.message)) ? (res.error || res.msg || res.message) : '删除分支失败',
+              okText: '知道了',
+              hideCancel: true,
+              danger: true,
+            });
           });
         }
       } catch (e) {}

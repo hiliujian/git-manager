@@ -124,12 +124,32 @@ def get_repo_status():
             has_staged = False
             staged_count = 0
 
+        has_stash = False
+        stash_count = 0
+        stash_top = ""
+        try:
+            list_out, _, list_code = run_git(["stash", "list"], timeout=30)
+            if list_code == 0:
+                raw = (list_out or "").strip()
+                if raw:
+                    lines = [x for x in raw.splitlines() if x.strip()]
+                    stash_count = len(lines)
+                    has_stash = stash_count > 0
+                    stash_top = lines[0].strip() if lines else ""
+        except Exception:
+            has_stash = False
+            stash_count = 0
+            stash_top = ""
+
         st0 = {
             "repo": REPO_PATH,
             "valid": bool(REPO_PATH and os.path.isdir(os.path.join(REPO_PATH, ".git"))),
             "origin_url": origin_url,
             "has_staged_changes": has_staged,
             "staged_count": staged_count,
+            "has_stash": has_stash,
+            "stash_count": stash_count,
+            "stash_top": stash_top,
         }
         return True, "", st0
     except Exception as e:
@@ -5461,7 +5481,14 @@ def get_capabilities_spec():
         {"method": "POST", "path": "/api/switch_branch", "body": {"branch": "<name>"}},
         {"method": "POST", "path": "/api/stash_and_switch", "body": {"branch": "<name>"}},
         {"method": "POST", "path": "/api/commit_and_switch", "body": {"branch": "<name>", "message": "<text>", "files": ["<rel>"]}},
-        {"method": "POST", "path": "/api/stash_pop", "body": {}},
+        {"method": "GET", "path": "/api/staged_files"},
+        {"method": "POST", "path": "/api/unstage_file", "body": {"path": "<rel>"}},
+        {"method": "POST", "path": "/api/unstage_all_staged", "body": {}},
+        {"method": "POST", "path": "/api/discard_staged_file", "body": {"path": "<rel>"}},
+        {"method": "POST", "path": "/api/discard_all_staged", "body": {}},
+        {"method": "GET", "path": "/api/stash_list"},
+        {"method": "POST", "path": "/api/stash_pop", "body": {"ref": "stash@{0}"}},
+        {"method": "POST", "path": "/api/stash_drop", "body": {"ref": "stash@{0}"}},
         {"method": "POST", "path": "/api/fetch_remotes", "body": {}},
         {"method": "POST", "path": "/api/pull_file", "body": {"path": "<rel>"}},
         {"method": "POST", "path": "/api/restore_file", "body": {"hash": "<sha>", "path": "<rel>"}},
@@ -6020,6 +6047,45 @@ def get_capabilities_spec():
             "example": {"type": "stage_file", "path": "README.md"},
         },
         {
+            "type": "staged_files",
+            "desc": "列出暂存区（index）中的文件列表（git diff --cached --name-status）。",
+            "required": [],
+            "properties": {},
+            "example": {"type": "staged_files"},
+        },
+        {
+            "type": "unstage_file",
+            "desc": "将单个文件从暂存区恢复到工作区（git restore --staged）。",
+            "required": ["path"],
+            "properties": {
+                "path": {"type": "string", "desc": "相对路径"},
+            },
+            "example": {"type": "unstage_file", "path": "README.md"},
+        },
+        {
+            "type": "unstage_all_staged",
+            "desc": "取消全部暂存（保留工作区改动）。",
+            "required": [],
+            "properties": {},
+            "example": {"type": "unstage_all_staged"},
+        },
+        {
+            "type": "discard_staged_file",
+            "desc": "丢弃单个文件在暂存区和工作区的改动，恢复到 HEAD（危险）。",
+            "required": ["path"],
+            "properties": {
+                "path": {"type": "string", "desc": "相对路径"},
+            },
+            "example": {"type": "discard_staged_file", "path": "README.md"},
+        },
+        {
+            "type": "discard_all_staged",
+            "desc": "丢弃全部暂存区内容，并同步丢弃相关工作区改动，恢复到 HEAD（危险）。",
+            "required": [],
+            "properties": {},
+            "example": {"type": "discard_all_staged"},
+        },
+        {
             "type": "commit",
             "desc": "Git 提交。",
             "required": ["message"],
@@ -6056,8 +6122,26 @@ def get_capabilities_spec():
             "type": "stash_pop",
             "desc": "应用 stash（stash pop）。",
             "required": [],
+            "properties": {
+                "ref": {"type": "string", "desc": "可选：指定 stash 引用，例如 stash@{0}（默认最新）"},
+            },
+            "example": {"type": "stash_pop", "ref": "stash@{0}"},
+        },
+        {
+            "type": "stash_list",
+            "desc": "列出 stash 列表（git stash list）。",
+            "required": [],
             "properties": {},
-            "example": {"type": "stash_pop"},
+            "example": {"type": "stash_list"},
+        },
+        {
+            "type": "stash_drop",
+            "desc": "丢弃指定 stash（git stash drop <ref>）。",
+            "required": ["ref"],
+            "properties": {
+                "ref": {"type": "string", "desc": "stash 引用，例如 stash@{0}"},
+            },
+            "example": {"type": "stash_drop", "ref": "stash@{0}"},
         },
         {
             "type": "fetch_remotes",
@@ -6946,6 +7030,29 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
             return False, err0, {}
         return True, "", {"files": files0}
 
+    if t == "stash_list":
+        out, err, code = run_git(["stash", "list"], timeout=30)
+        if code != 0:
+            return False, (err or out or "stash list failed"), {"output": (out or "").strip()}
+        raw = (out or "").strip()
+        stashes = [ln.strip() for ln in raw.splitlines() if ln.strip()]
+        top = stashes[0] if stashes else ""
+        return True, "", {"has_stash": bool(stashes), "stash_count": len(stashes), "stash_top": top, "stashes": stashes}
+
+    if t == "stash_drop":
+        ref = str(tool.get("ref") or "").strip()
+        if not ref:
+            return False, "缺少 ref", {}
+        out, err, code = run_git(["stash", "drop", ref], timeout=60)
+        if code != 0:
+            return False, (err or out or "stash drop failed"), {"output": (out or "").strip()}
+        try:
+            invalidate_changed_files_cache()
+            notify_files_updated()
+        except Exception as e:
+            logger.debug(f"Exception ignored: {e}")
+        return True, "", {"ref": ref, "output": (out or "").strip()}
+
     if t == "unstage_file":
         rp = str(tool.get("path") or "").strip()
         if not rp:
@@ -7371,7 +7478,11 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
         return True, "", {"output": out}
 
     if t == "stash_pop":
-        out, err, code = run_git(["stash", "pop"])
+        ref = str(tool.get("ref") or "").strip()
+        cmd = ["stash", "pop"]
+        if ref:
+            cmd.append(ref)
+        out, err, code = run_git(cmd)
         if code != 0:
             list_out, list_err, list_code = run_git(["stash", "list"], timeout=30)
             stash_kept = False
@@ -9047,6 +9158,9 @@ class Handler(BaseHTTPRequestHandler):
             origin_url = ""
             has_staged = False
             staged_count = 0
+            has_stash = False
+            stash_count = 0
+            stash_top = ""
             if REPO_PATH:
                 try:
                     out, _, code = run_git(["config", "--get", "remote.origin.url"])
@@ -9062,6 +9176,19 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception:
                     has_staged = False
                     staged_count = 0
+                try:
+                    list_out, _, list_code = run_git(["stash", "list"], timeout=30)
+                    if list_code == 0:
+                        raw = (list_out or "").strip()
+                        if raw:
+                            lines = [x for x in raw.splitlines() if x.strip()]
+                            stash_count = len(lines)
+                            has_stash = stash_count > 0
+                            stash_top = lines[0].strip() if lines else ""
+                except Exception:
+                    has_stash = False
+                    stash_count = 0
+                    stash_top = ""
             self.send_json({
                 "repo":  REPO_PATH,
                 "valid": bool(REPO_PATH and
@@ -9070,6 +9197,27 @@ class Handler(BaseHTTPRequestHandler):
                 "origin_url": origin_url,
                 "has_staged_changes": has_staged,
                 "staged_count": staged_count,
+                "has_stash": has_stash,
+                "stash_count": stash_count,
+                "stash_top": stash_top,
+            })
+
+        elif p == "/api/stash_list":
+            logger.debug("处理 /api/stash_list 请求")
+            if not self._require_repo():
+                return
+            list_out, list_err, list_code = run_git(["stash", "list"], timeout=30)
+            if list_code != 0:
+                self.send_json({"ok": False, "error": (list_err or "获取 stash 列表失败"), "output": (list_out or "").strip()}, 400)
+                return
+            raw = (list_out or "").strip()
+            lines = [x for x in raw.splitlines() if x.strip()] if raw else []
+            self.send_json({
+                "ok": True,
+                "has_stash": bool(lines),
+                "stash_count": len(lines),
+                "stash_top": lines[0].strip() if lines else "",
+                "stashes": lines,
             })
 
         elif p == "/api/sync_status":
@@ -11257,7 +11405,12 @@ class Handler(BaseHTTPRequestHandler):
                 if not self._require_repo():
                     return
 
-                pop_out, pop_err, pop_code = run_git(["stash", "pop"], timeout=60)
+                ref = str((data or {}).get("ref") or "").strip()
+                cmd = ["stash", "pop"]
+                if ref:
+                    cmd.append(ref)
+
+                pop_out, pop_err, pop_code = run_git(cmd, timeout=60)
 
                 conflict_files, _ = get_unmerged_files()
                 has_conflict = (pop_code != 0) or bool(conflict_files) or ("CONFLICT" in (pop_out or "")) or ("CONFLICT" in (pop_err or ""))
@@ -11298,6 +11451,68 @@ class Handler(BaseHTTPRequestHandler):
                     "message": "成功恢复暂存的修改",
                     "output": (pop_out or "").strip()
                 })
+
+            elif p == "/api/stash_drop":
+                logger.info("处理 /api/stash_drop 请求 (丢弃 stash 条目)")
+                if not self._require_repo():
+                    return
+
+                ref = str((data or {}).get("ref") or "").strip()
+                if not ref:
+                    self.send_json({"ok": False, "error": "未指定 ref"}, 400)
+                    return
+
+                out, err, code = run_git(["stash", "drop", ref], timeout=60)
+                if code != 0:
+                    self.send_json({"ok": False, "error": (err or out or "丢弃 stash 失败"), "output": (out or "").strip()}, 400)
+                    return
+
+                try:
+                    invalidate_changed_files_cache()
+                    notify_files_updated()
+                except Exception as e:
+                    logger.debug(f"Exception ignored: {e}")
+
+                self.send_json({
+                    "ok": True,
+                    "message": "已丢弃 stash",
+                    "output": (out or "").strip(),
+                })
+
+            elif p == "/api/delete_branch":
+                logger.info("处理 /api/delete_branch 请求 (删除本地分支)")
+                if not self._require_repo():
+                    return
+
+                branch = str((data or {}).get("branch") or "").strip()
+                force = bool((data or {}).get("force"))
+                if not branch:
+                    self.send_json({"ok": False, "error": "未指定分支"}, 400)
+                    return
+                if branch.startswith("remotes/"):
+                    self.send_json({"ok": False, "error": "不支持删除远端分支引用（remotes/*）"}, 400)
+                    return
+
+                cur_out, cur_err, cur_code = run_git(["branch", "--show-current"], timeout=30)
+                if cur_code != 0:
+                    self.send_json({"ok": False, "error": (cur_err or "获取当前分支失败"), "output": (cur_out or "").strip()}, 400)
+                    return
+                current_branch = (cur_out or "").strip()
+                if branch == current_branch:
+                    self.send_json({"ok": False, "error": "不能删除当前所在分支"}, 400)
+                    return
+
+                args = ["branch", "-D" if force else "-d", branch]
+                out, err, code = run_git(args, timeout=60)
+                if code != 0:
+                    self.send_json({"ok": False, "error": (err or out or "删除分支失败"), "output": (out or "").strip()}, 400)
+                    return
+                try:
+                    invalidate_changed_files_cache()
+                    notify_files_updated()
+                except Exception as e:
+                    logger.debug(f"Exception ignored: {e}")
+                self.send_json({"ok": True, "message": f"已删除分支 {branch}", "output": (out or "").strip()})
 
             elif p == "/api/fetch_remotes":
                 logger.info("处理 /api/fetch_remotes 请求 (刷新远端引用)")
