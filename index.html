@@ -2867,7 +2867,7 @@ flex-shrink:0;cursor:pointer;
       return `
 <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--border);">
   <div style="flex:1;min-width:0;">
-    <div style="font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${p} <span style="color:var(--text3)">${stTxt}</span></div>
+    <div title="${p}" style="font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${p} <span style="color:var(--text3)">${stTxt}</span></div>
   </div>
   <button class="btn" style="padding:2px 10px" data-action="unstageOneStagedFromPanel" data-idx="${idx}">恢复</button>
   <button class="btn red" style="padding:2px 10px" data-action="discardOneStagedFromPanel" data-idx="${idx}">丢弃</button>
