@@ -5236,6 +5236,64 @@ flex-shrink:0;cursor:pointer;
         await selectFile(idxInFiles, { forceReopen: true });
         return;
       }
+
+      // 工作区文件（不在变更列表）：可能已被删除/移动。打不开则自动从最近列表移除并继续尝试下一个。
+      let idxTry = nextIdx;
+      while (idxTry < (recentFiles || []).length) {
+        const it = recentFiles[idxTry];
+        if (!it) { idxTry++; continue; }
+
+        if (it.log) {
+          await openLogRecentFile(idxTry);
+          return;
+        }
+        if (it.external) {
+          openExternalRecentFile(idxTry);
+          return;
+        }
+
+        let idxInFiles2 = -1;
+        try {
+          const pp2 = String(it.path || '');
+          idxInFiles2 = (files || []).findIndex(ff => String((ff && ff.path) || '') === pp2);
+        } catch (e2) { idxInFiles2 = -1; }
+        if (idxInFiles2 >= 0) {
+          await selectFile(idxInFiles2, { forceReopen: true });
+          return;
+        }
+
+        const ok2 = await openRepoRecentFile(idxTry);
+        if (ok2) return;
+
+        try {
+          const badPath = String(it.path || '');
+          recentFiles = (Array.isArray(recentFiles) ? recentFiles : []).filter(x => String((x && x.path) || '') !== badPath);
+          updateRecentFilesDropdown();
+        } catch (e3) {}
+      }
+
+      if (wasActiveExternal) {
+        try { performCloseEditor(p); } catch (e2) {}
+        return;
+      }
+      if (wasActiveRepo) {
+        try {
+          curFile = null;
+          curHunks = [];
+          curFileContent = '';
+          clearDiff();
+          renderFileList();
+        } catch (e3) {}
+      }
+      if (wasActiveLog) {
+        try {
+          curLogFile = null;
+          curHunks = [];
+          clearDiff();
+          try { document.querySelectorAll('.lf').forEach((el) => el.classList.remove('active')); } catch (e4) {}
+        } catch (e5) {}
+      }
+      return;
     } catch (e) {}
   }
 
@@ -5265,14 +5323,17 @@ flex-shrink:0;cursor:pointer;
       const cached = (item && typeof item.content === 'string') ? String(item.content || '') : null;
       if (cached !== null) {
         openFileInEditor(p, cached, false, null);
-        return;
+        return true;
       }
 
       const fc = await GET('/api/file_content?path=' + encodeURIComponent(p));
-      if (!(fc && fc.ok)) return;
+      if (!(fc && fc.ok)) return false;
       const c = (fc && typeof fc.content === 'string') ? String(fc.content || '') : '';
       openFileInEditor(p, c, false, null);
-    } catch (e) {}
+      return true;
+    } catch (e) {
+      return false;
+    }
   }
 
   async function openLogRecentFile(idx) {
