@@ -862,7 +862,7 @@
       position:fixed;
       z-index:999998;
       display:none;
-      max-width:min(680px, 82vw);
+      max-width:min(92vw, 1200px);
       pointer-events:none; /* overridden to auto when copy-ready */
     }
     .orig-line-tooltip.visible{ display:block; }
@@ -874,7 +874,7 @@
       border:1px solid rgba(61,66,98,.85);
       border-radius:7px;
       box-shadow:0 10px 32px rgba(0,0,0,.5), 0 0 0 1px rgba(255,255,255,.04) inset;
-      overflow:hidden;
+      overflow:visible;
       font-family:'JetBrains Mono',monospace;
       font-size:11px;
       line-height:20px;
@@ -943,8 +943,6 @@
       tab-size:4;
       -moz-tab-size:4;
       color:var(--text2);
-      overflow:hidden;
-      text-overflow:ellipsis;
       flex:1;
       min-width:0;
       line-height:28px;
@@ -20426,6 +20424,8 @@ flex-shrink:0;cursor:pointer;
           await refreshFilesOnly(false, false);
         }
 
+        // After a successful save, fetch updated diff data and refresh stats/label/file-list
+        // WITHOUT re-rendering the diff DOM — this preserves the editor caret and focus state.
         try {
           const ctxParam = (diffMode === 'unified' || diffMode === 'split') ? `&ctx=${encodeURIComponent(changeViewCtx)}` : '';
           const st = (files[curFile] && files[curFile].status !== undefined) ? files[curFile].status : f.status;
@@ -20450,12 +20450,9 @@ flex-shrink:0;cursor:pointer;
             } catch (e) {}
             updateStats();
             renderFileList();
-
-            await refreshCurrentDiffNoFlicker(f.path, files[curFile] ? files[curFile].status : undefined);
+            // Do NOT call refreshCurrentDiffNoFlicker here — it re-renders the DOM and loses caret.
           }
-        } catch (e) {
-          await refreshCurrentDiffNoFlicker(f.path, files[curFile] ? files[curFile].status : undefined);
-        }
+        } catch (e) {}
         return true;
       } else {
         __gmToastApiError('保存失败', res, (res && (res.msg || res.error)) ? (res.msg || res.error) : '保存失败');
