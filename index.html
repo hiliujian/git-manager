@@ -856,6 +856,128 @@
       color:var(--text);
       box-shadow:0 14px 40px rgba(0,0,0,.18);
     }
+
+    /* Original line preview tooltip shown on hover/focus of unified change lines */
+    .orig-line-tooltip{
+      position:fixed;
+      z-index:999998;
+      display:none;
+      max-width:min(680px, 82vw);
+      pointer-events:none; /* overridden to auto when copy-ready */
+    }
+    .orig-line-tooltip.visible{ display:block; }
+    .orig-line-tooltip.copyable{ pointer-events:auto; cursor:pointer; }
+    .orig-line-tooltip-inner{
+      display:flex;
+      align-items:center;
+      background:rgba(14,16,22,.97);
+      border:1px solid rgba(61,66,98,.85);
+      border-radius:7px;
+      box-shadow:0 10px 32px rgba(0,0,0,.5), 0 0 0 1px rgba(255,255,255,.04) inset;
+      overflow:hidden;
+      font-family:'JetBrains Mono',monospace;
+      font-size:11px;
+      line-height:20px;
+      height:28px;
+      transition:border-color .12s;
+    }
+    .orig-line-tooltip.copyable:hover .orig-line-tooltip-inner{
+      border-color:rgba(110,180,247,.5);
+    }
+    [data-theme="light"] .orig-line-tooltip-inner{
+      background:rgba(255,255,255,.98);
+      border-color:rgba(206,212,218,.9);
+      box-shadow:0 10px 32px rgba(0,0,0,.14);
+    }
+    /* Single-line label badge: "修改前 · 行185" */
+    .orig-line-tooltip-label{
+      display:flex;
+      align-items:center;
+      gap:5px;
+      padding:0 8px 0 9px;
+      height:100%;
+      background:rgba(242,114,114,.09);
+      border-right:1px solid rgba(242,114,114,.2);
+      flex-shrink:0;
+      user-select:none;
+      white-space:nowrap;
+    }
+    [data-theme="light"] .orig-line-tooltip-label{
+      background:rgba(201,42,42,.06);
+      border-right-color:rgba(201,42,42,.18);
+    }
+    .orig-line-tooltip-label-tag{
+      font-size:9px;
+      font-weight:700;
+      letter-spacing:.5px;
+      text-transform:uppercase;
+      color:var(--danger);
+    }
+    .orig-line-tooltip-label-sep{
+      font-size:9px;
+      color:var(--text3);
+      opacity:.6;
+    }
+    .orig-line-tooltip-label-ln{
+      font-size:10px;
+      color:var(--text3);
+    }
+    /* Copy icon shown at right end */
+    .orig-line-tooltip-copy{
+      flex-shrink:0;
+      display:flex;
+      align-items:center;
+      padding:0 8px;
+      color:var(--text3);
+      font-size:10px;
+      gap:3px;
+      opacity:0;
+      transition:opacity .12s;
+      user-select:none;
+      white-space:nowrap;
+    }
+    .orig-line-tooltip.copyable:hover .orig-line-tooltip-copy{ opacity:.75; }
+    .orig-line-tooltip-body{
+      padding:0 6px 0 10px;
+      white-space:pre;
+      tab-size:4;
+      -moz-tab-size:4;
+      color:var(--text2);
+      overflow:hidden;
+      text-overflow:ellipsis;
+      flex:1;
+      min-width:0;
+      line-height:28px;
+    }
+    /* Leading indent dots to make invisible whitespace visible */
+    .orig-line-indent{
+      display:inline;
+      color:rgba(110,180,247,.28);
+      letter-spacing:0;
+      pointer-events:none;
+      user-select:none;
+    }
+    [data-theme="light"] .orig-line-indent{ color:rgba(25,113,194,.22); }
+    .orig-line-tooltip-empty{
+      padding:0 10px;
+      color:var(--text3);
+      font-style:italic;
+      line-height:28px;
+    }
+    .orig-line-tooltip-body.is-removed{
+      color:rgba(242,114,114,.85);
+      text-decoration:line-through;
+      text-decoration-color:rgba(242,114,114,.4);
+    }
+    [data-theme="light"] .orig-line-tooltip-body.is-removed{
+      color:rgba(201,42,42,.8);
+    }
+    /* Copied flash */
+    .orig-line-tooltip.flash-copy .orig-line-tooltip-inner{
+      border-color:rgba(93,214,168,.6);
+    }
+    .orig-line-tooltip.flash-copy .orig-line-tooltip-copy{ opacity:1; color:var(--accent2); }
+
     .recent-file-stats{
       display:flex;
       gap:8px;
@@ -904,7 +1026,7 @@
     }
     .autosave-switch input:checked + .autosave-slider:before{transform:translateX(16px) translateY(-50%);background: var(--accent);border-color:#25508a;box-shadow:0 0 0 2px rgba(110,180,247,.16), 0 2px 10px rgba(0,0,0,.35);}
     .autosave-switch input:focus-visible + .autosave-slider{outline:2px solid rgba(110,180,247,.22);outline-offset:2px;}
-    .diff-view{flex:1;overflow:auto;background:var(--bg2);padding:0 8px;position:relative;overflow-anchor:none;}
+    .diff-view{flex:1;overflow:auto;background:var(--bg2);padding:0 8px;position:relative;overflow-anchor:none;tab-size:4;-moz-tab-size:4;}
     .diff-view[contenteditable="true"]:focus{outline:none;}
     .diff-view[contenteditable="true"]{caret-color:transparent;}
     .diff-view[contenteditable="true"] .editable-line{caret-color:auto;}
@@ -4916,6 +5038,12 @@ flex-shrink:0;cursor:pointer;
             e.preventDefault();
             try { refreshSyncStatus(false); } catch (e2) {}
             try { pullUpdate(); } catch (e2) {}
+            return;
+          }
+
+          if (act === 'syncPush') {
+            e.preventDefault();
+            try { pushFromHistory(); } catch (e2) {}
             return;
           }
 
@@ -11235,6 +11363,321 @@ flex-shrink:0;cursor:pointer;
     if (!diffTooltipEl) return;
     diffTooltipEl.style.display = 'none';
   }
+
+  // ── Original Line Preview Tooltip ────────────────────────────────────────────
+  // Shows the before-change content when hovering or editing a unified change line.
+  (function(){
+    let tooltipEl = null;
+    let hideTimer = null;
+    let flashTimer = null;
+    let currentDl = null;
+    let pinned = false; // true while an editable-line inside the dl has focus
+
+    function ensureEl(){
+      if (tooltipEl) return tooltipEl;
+      tooltipEl = document.createElement('div');
+      tooltipEl.className = 'orig-line-tooltip';
+      tooltipEl.innerHTML = '<div class="orig-line-tooltip-inner"></div>';
+      document.body.appendChild(tooltipEl);
+
+      // Single capture-phase handler for all pointer events on the tooltip.
+      // Capture ensures we run before any document-level listeners that would
+      // switch currentDl or move the editor caret.
+      tooltipEl.addEventListener('mousedown', (e) => {
+        e.stopPropagation();
+        e.preventDefault(); // keep editor focus / caret in place
+      }, true);
+
+      ['mouseup', 'mouseover'].forEach(evName => {
+        tooltipEl.addEventListener(evName, (e) => { e.stopPropagation(); }, true);
+      });
+
+      // click: stopPropagation to prevent dl-switch, then run copy logic here directly.
+      tooltipEl.addEventListener('click', (e) => {
+        e.stopPropagation();
+        try {
+          const data = currentDl ? getOrigData(currentDl) : null;
+          if (!data || data.type === 'added') return;
+          navigator.clipboard.writeText(data.raw).then(() => {
+            clearTimeout(flashTimer);
+            tooltipEl.classList.add('flash-copy');
+            const copyEl = tooltipEl.querySelector('.orig-line-tooltip-copy');
+            if (copyEl) copyEl.textContent = '已复制';
+            flashTimer = setTimeout(() => {
+              tooltipEl.classList.remove('flash-copy');
+              if (copyEl) copyEl.textContent = '点击复制';
+            }, 1000);
+          }).catch(() => {});
+        } catch(err){}
+      }, true);
+
+      return tooltipEl;
+    }
+
+    function getOrigData(dl){
+      if (!dl) return null;
+      const type = (dl.classList.contains('added') ? 'added' :
+                    dl.classList.contains('removed') ? 'removed' :
+                    dl.classList.contains('modified') ? 'modified' : null);
+      if (!type) return null;
+      if (!dl.hasAttribute('data-orig-line')) return null;
+      const raw = dl.getAttribute('data-orig-line');
+      const ln = dl.querySelector('.ln');
+      const lnNum = ln ? ln.textContent.trim() : '';
+      return { type, raw, lnNum };
+    }
+
+    // Build body HTML: preserve tabs (for tab-size:4 rendering), highlight leading indent
+    function buildBodyHtml(raw, extraClass){
+      if (!raw && raw !== '') return `<span class="orig-line-tooltip-empty">（空行）</span>`;
+      // Split leading whitespace from the rest so we can tint it
+      const m = raw.match(/^([\t ]*)(.*)$/s);
+      const indent = m ? m[1] : '';
+      const rest = m ? m[2] : raw;
+      // Escape HTML in both parts (preserve \t as literal tab for tab-size rendering)
+      const escPart = (s) => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      const indentHtml = indent
+        ? `<span class="orig-line-indent">${escPart(indent)}</span>`
+        : '';
+      const cls = 'orig-line-tooltip-body' + (extraClass ? ' ' + extraClass : '');
+      return `<span class="${cls}">${indentHtml}${escPart(rest)}</span>`;
+    }
+
+    function positionTooltip(dl){
+      if (!tooltipEl || !dl) return;
+      const rect = dl.getBoundingClientRect();
+      const tipRect = tooltipEl.getBoundingClientRect();
+      const vw = window.innerWidth || 800;
+      const vh = window.innerHeight || 600;
+      const gap = 4;
+      // Prefer above; fall back to below
+      let top = rect.top - tipRect.height - gap;
+      if (top < 6) top = rect.bottom + gap;
+      top = Math.min(Math.max(4, top), vh - tipRect.height - 4);
+      // Align left with the diff line content area
+      let left = rect.left + 100;
+      if (left + tipRect.width > vw - 8) left = Math.max(6, vw - tipRect.width - 8);
+      left = Math.max(6, left);
+      tooltipEl.style.left = left + 'px';
+      tooltipEl.style.top = top + 'px';
+    }
+
+    function renderTooltip(data){
+      const el = ensureEl();
+      const inner = el.querySelector('.orig-line-tooltip-inner');
+      if (!inner) return;
+      let labelTag = '原始行';
+      if (data.type === 'added') labelTag = '新增行';
+      else if (data.type === 'removed') labelTag = '删除行';
+      else if (data.type === 'modified') labelTag = '修改前';
+      const lnPart = data.lnNum
+        ? `<span class="orig-line-tooltip-label-sep">·</span><span class="orig-line-tooltip-label-ln">行${data.lnNum}</span>`
+        : '';
+      let bodyHtml;
+      const canCopy = (data.type !== 'added');
+      if (data.type === 'added') {
+        bodyHtml = `<span class="orig-line-tooltip-empty">（新增行，无原始内容）</span>`;
+      } else {
+        const extraCls = data.type === 'removed' ? 'is-removed' : '';
+        bodyHtml = buildBodyHtml(data.raw, extraCls);
+      }
+      const copyHtml = canCopy ? `<span class="orig-line-tooltip-copy">点击复制</span>` : '';
+      inner.innerHTML =
+        `<div class="orig-line-tooltip-label">` +
+          `<span class="orig-line-tooltip-label-tag">${labelTag}</span>` +
+          lnPart +
+        `</div>` +
+        bodyHtml +
+        copyHtml;
+      // Enable pointer events only when copyable
+      if (canCopy) el.classList.add('copyable');
+      else el.classList.remove('copyable');
+    }
+
+    function showFor(dl, pinFocus){
+      const data = getOrigData(dl);
+      if (!data) return;
+      currentDl = dl;
+      if (pinFocus) pinned = true;
+      clearTimeout(hideTimer);
+      renderTooltip(data);
+      const el = ensureEl();
+      el.classList.add('visible');
+      requestAnimationFrame(() => { try { positionTooltip(dl); } catch(e){} });
+    }
+
+    function hide(force){
+      if (!force && pinned) return;
+      clearTimeout(hideTimer);
+      hideTimer = setTimeout(() => {
+        if (pinned && !force) return;
+        pinned = false;
+        currentDl = null;
+        const el = ensureEl();
+        el.classList.remove('visible');
+      }, force ? 0 : 80);
+    }
+
+    function isInUnifiedView(el){
+      const view = document.getElementById('diffView');
+      return view && view.contains(el) && !!el.closest('.unified-wrap');
+    }
+
+    // Mouseover — show tooltip when hovering a change .dl row in unified view
+    document.addEventListener('mouseover', (e) => {
+      try {
+        if (pinned) return;
+        const target = e.target;
+        if (!target || !target.closest) return;
+        const dl = target.closest('.dl.added, .dl.removed, .dl.modified');
+        if (!dl || !isInUnifiedView(dl)) return;
+        showFor(dl, false);
+      } catch(err){}
+    }, true);
+
+    // Mouseout — hide only when leaving both the .dl row AND the tooltip itself
+    document.addEventListener('mouseout', (e) => {
+      try {
+        if (pinned) return;
+        const target = e.target;
+        if (!target || !target.closest) return;
+        const dl = target.closest('.dl.added, .dl.removed, .dl.modified');
+        if (!dl) return;
+        const related = e.relatedTarget;
+        // Stay visible if cursor moved into the same dl or into the tooltip
+        if (related && dl.contains(related)) return;
+        if (related && tooltipEl && tooltipEl.contains(related)) return;
+        hide(false);
+      } catch(err){}
+    }, true);
+
+    // Tooltip mouseleave — hide when cursor leaves the tooltip (and not back to a dl row)
+    document.addEventListener('mouseleave', (e) => {
+      try {
+        if (pinned) return;
+        if (!tooltipEl || !tooltipEl.contains(e.target)) return;
+        const related = e.relatedTarget;
+        // If moving back to the source dl, keep visible
+        if (related && currentDl && currentDl.contains(related)) return;
+        hide(false);
+      } catch(err){}
+    }, true);
+
+    // Focusin — pin tooltip while editing a change line
+    document.addEventListener('focusin', (e) => {
+      try {
+        const target = e.target;
+        if (!target || !target.closest) return;
+        if (!target.classList.contains('editable-line') && !target.classList.contains('lc')) return;
+        const dl = target.closest('.dl.added, .dl.removed, .dl.modified');
+        if (!dl || !isInUnifiedView(dl)) return;
+        showFor(dl, true);
+      } catch(err){}
+    }, true);
+
+    // Focusout — un-pin and hide
+    document.addEventListener('focusout', (e) => {
+      try {
+        const target = e.target;
+        if (!target || !target.closest) return;
+        const dl = target.closest('.dl.added, .dl.removed, .dl.modified');
+        if (!dl || !isInUnifiedView(dl)) return;
+        pinned = false;
+        hide(false);
+      } catch(err){}
+    }, true);
+  })();
+
+  // ── Revert-block-hint staleness cleanup ──────────────────────────────────────
+  // Remove stale hint banners after any edit (input / cut / delete key).
+  // Works for both unified (.unified-wrap) and split (.sp) views.
+  (function(){
+    function pruneHints(scope){
+      try {
+        if (!scope) return;
+        scope.querySelectorAll('.dl.revert-block-hint').forEach(hint => {
+          try {
+            const siblings = Array.from(hint.parentElement ? hint.parentElement.children : []);
+            const hintIdx = siblings.indexOf(hint);
+            if (hintIdx < 0) return;
+            let hasVisibleChange = false;
+            for (let i = hintIdx + 1; i < siblings.length; i++) {
+              const s = siblings[i];
+              if (!s || !s.classList) break;
+              if (s.classList.contains('revert-block-hint')) break;
+              if (s.classList.contains('context') || s.classList.contains('empty')) break;
+              if (s.classList.contains('removed')) { hasVisibleChange = true; break; }
+              if (s.classList.contains('added') || s.classList.contains('modified')) {
+                const lc = s.querySelector('.lc');
+                const txt = lc ? String(lc.textContent || '').replace(/[\r\n]/g,'') : '';
+                if (txt.length > 0) { hasVisibleChange = true; break; }
+              }
+            }
+            if (!hasVisibleChange) { try { hint.remove(); } catch(e){} }
+          } catch(e){}
+        });
+      } catch(e){}
+    }
+
+    // Find the diff container scope for a node. Also handles the case where
+    // target is the diffView host itself (e.g. after browser-native cut in ce-host mode).
+    function getScope(node){
+      if (!node) return null;
+      try {
+        // Direct container match
+        const wrap = node.closest && node.closest('.unified-wrap, .sp');
+        if (wrap) return wrap;
+        // Target is the diffView host itself — scan its children
+        const view = document.getElementById('diffView');
+        if (view && (node === view || view.contains(node))) {
+          // Return the whole diffView so pruneHints can scan all hint rows
+          return view;
+        }
+      } catch(e){}
+      return null;
+    }
+
+    function pruneFromTarget(t){
+      try {
+        const host = document.getElementById('diffView');
+        if (!host) return;
+        if (!t || !host.contains(t)) {
+          // Fallback: if no identifiable target, scan whole diffView
+          pruneHints(host);
+          return;
+        }
+        if (t.tagName) {
+          const tag = String(t.tagName).toUpperCase();
+          if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+        }
+        pruneHints(getScope(t));
+      } catch(e){}
+    }
+
+    // input: normal typing, paste, and also fires after browser-native cut deletes content
+    document.addEventListener('input', (e) => {
+      try { pruneFromTarget(e && e.target); } catch(e){}
+    }, true);
+
+    // cut: Ctrl+X — content is still present when this fires, so defer one microtask
+    // to let the browser finish deleting the selection before we check.
+    document.addEventListener('cut', (e) => {
+      try {
+        const t = e && e.target;
+        // Use both setTimeout(0) and a direct input-event fallback for robustness
+        setTimeout(() => { try { pruneFromTarget(t); } catch(e){} }, 0);
+      } catch(e){}
+    }, true);
+
+    // keyup for Delete/Backspace: belt-and-suspenders in case input doesn't fire
+    document.addEventListener('keyup', (e) => {
+      try {
+        const k = e && e.key;
+        if (k !== 'Delete' && k !== 'Backspace') return;
+        pruneFromTarget(e && e.target);
+      } catch(e){}
+    }, true);
+  })();
 
   // WebSocket 连接
   let ws = null;
@@ -19102,25 +19545,37 @@ flex-shrink:0;cursor:pointer;
         </button>` : '';
 
         let content = '';
+        // origLineText: the original (before-change) text for this line, used in tooltip
+        let origLineText = null;
         if (line.type === 'context') {
           content = esc(__nn(R && R.text, __nn(L && L.text, __nn(line.text, ''))));
         } else if (line.type === 'added') {
           content = esc(__nn(R && R.text, __nn(line.text, '')));
+          // added lines have no original — show empty indicator
+          origLineText = '';
         } else if (line.type === 'removed') {
           content = esc(__nn(L && L.text, __nn(line.text, '')));
+          // removed line IS the original
+          origLineText = __nn(L && L.text, __nn(line.text, ''));
         } else if (line.type === 'modified') {
           const oldT = __nn((L && (L.oldText || L.text)), __nn(line.oldText, __nn(line.text, '')));
           const newT = __nn((R && (R.newText || R.text)), __nn(line.newText, __nn(line.text, '')));
           const html = buildInlineModifiedHtml(oldT, newT);
           content = html.newHtml;
+          origLineText = oldT;
         }
+
+        // Encode original line as data attribute for hover/focus tooltip
+        const origAttr = (origLineText !== null)
+          ? ` data-orig-line="${origLineText.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}"`
+          : '';
 
         const canEdit = (!readonly) && (line.type !== 'removed') && !(line && line.placeholder);
         const lcAttrs = canEdit ? ' class="lc editable-line" tabindex="0"' : ' class="lc" contenteditable="false"';
 
         const ln = (line.type === 'removed' || (line.type === 'context' && (!R || R.type === 'empty'))) ? __nn(L && L.num, __nn(line.num, '')) : __nn(R && R.num, __nn(line.num, ''));
 
-        return `<div class="dl ${line.type}"${lineIdAttr}${editIdAttr}>
+        return `<div class="dl ${line.type}"${lineIdAttr}${editIdAttr}${origAttr}>
         <span class="dl-actions" contenteditable="false">${revertBtn}</span>
         <span class="ls" contenteditable="false">${s}</span>
         <span class="ln" contenteditable="false">${ln || ''}</span>
