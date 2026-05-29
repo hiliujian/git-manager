@@ -4988,7 +4988,22 @@ flex-shrink:0;cursor:pointer;
             try {
               const host = document.getElementById('diffView');
               if (host && !window.__gmRevertBlockHintEnabled) {
-                host.querySelectorAll('.revert-block-hint').forEach(el => { try { el.remove(); } catch (e0) {} });
+                host.querySelectorAll('.revert-block-hint').forEach(el => {
+                  try {
+                    const sel = window.getSelection ? window.getSelection() : null;
+                    const fn = sel ? (sel.focusNode || sel.anchorNode) : null;
+                    const fe = fn ? ((fn.nodeType === Node.ELEMENT_NODE) ? fn : (fn.parentElement || null)) : null;
+                    const activeLine = fe && fe.closest ? fe.closest('.editable-line') : null;
+                    console.log('[gmdbg] revertHint.remove', {
+                      where: 'toggleFoldBtn',
+                      enabled: !!window.__gmRevertBlockHintEnabled,
+                      hasActiveLine: !!activeLine,
+                      activeLinePreview: activeLine ? String(activeLine.textContent || '').slice(0, 80) : null,
+                      stack: (new Error()).stack
+                    });
+                  } catch (e0) {}
+                  try { el.remove(); } catch (e0) {}
+                });
               }
             } catch (e0) {}
             try {
@@ -6569,6 +6584,83 @@ flex-shrink:0;cursor:pointer;
     if (window.__editableLineEditingInited) return;
     window.__editableLineEditingInited = true;
 
+    try {
+      window.updateLineNumbers = function () {
+          try {
+            const host = document.getElementById('diffView');
+            if (!host) return;
+            const scopes = (() => {
+              try {
+                const splitWrap = host.querySelector ? host.querySelector('.split-wrap') : null;
+                if (splitWrap) {
+                  const editable = host.querySelector ? host.querySelector('.sp.sp-editable') : null;
+                  return editable ? [editable] : [];
+                }
+              } catch (e) {}
+              try {
+                const unified = host.querySelector ? host.querySelector('.unified-wrap') : null;
+                if (unified) return [unified];
+              } catch (e) {}
+              return [host];
+            })();
+
+            const __getTargetLnEl = (row) => {
+              try {
+                if (!row || !row.querySelectorAll) return null;
+                // Prefer direct child ln to avoid accidentally picking nested .ln inside content.
+                const direct = row.querySelector ? row.querySelector(':scope > span.ln') : null;
+                if (direct) return direct;
+                const lns = row.querySelectorAll('.ln');
+                if (!lns || !lns.length) return null;
+                return lns[lns.length - 1] || null;
+              } catch (e) {
+                return null;
+              }
+            };
+
+            for (const scope of scopes) {
+              if (!scope || !scope.querySelectorAll) continue;
+
+              const rows = Array.from(scope.querySelectorAll('.dl'))
+                .filter(r => {
+                  try {
+                    if (!r || !r.classList) return false;
+                    // Exclude non-real rows that should not participate in line numbering.
+                    if (r.classList.contains('empty')) return false;
+                    if (r.classList.contains('revert-block-hint')) return false;
+                    if (r.classList.contains('gm-gap-hint')) return false;
+                    // Number all remaining rows (including context) to match actual file line numbers.
+                    const lnEl = __getTargetLnEl(r);
+                    return !!lnEl;
+                  } catch (e) {
+                    return false;
+                  }
+                });
+
+              if (!rows.length) continue;
+
+              let base = null;
+              try {
+                const ln0 = __getTargetLnEl(rows[0]);
+                const n0 = ln0 ? parseInt(String(ln0.textContent || '').trim(), 10) : NaN;
+                if (!isNaN(n0)) base = n0;
+              } catch (e) {}
+              if (base === null) base = 1;
+
+              let cur = base;
+              for (const r of rows) {
+                try {
+                  const ln = __getTargetLnEl(r);
+                  if (!ln) continue;
+                  ln.textContent = String(cur);
+                  cur += 1;
+                } catch (e) {}
+              }
+            }
+          } catch (e) {}
+        };
+    } catch (e0) {}
+
     // Global Ctrl/Cmd+D: duplicate current line in editors.
     // Must be captured early to override browser default bookmark behavior.
     if (!window.__gmCtrlDDupeInited) {
@@ -7258,7 +7350,22 @@ flex-shrink:0;cursor:pointer;
                 try {
                   const host = document.getElementById('diffView');
                   if (host && !window.__gmRevertBlockHintEnabled) {
-                    host.querySelectorAll('.revert-block-hint').forEach(n => { try { n.remove(); } catch (e0) {} });
+                    host.querySelectorAll('.revert-block-hint').forEach(n => {
+                      try {
+                        const sel = window.getSelection ? window.getSelection() : null;
+                        const fn = sel ? (sel.focusNode || sel.anchorNode) : null;
+                        const fe = fn ? ((fn.nodeType === Node.ELEMENT_NODE) ? fn : (fn.parentElement || null)) : null;
+                        const activeLine = fe && fe.closest ? fe.closest('.editable-line') : null;
+                        console.log('[gmdbg] revertHint.remove', {
+                          where: 'enhanceMenu.rerenderCurrent',
+                          enabled: !!window.__gmRevertBlockHintEnabled,
+                          hasActiveLine: !!activeLine,
+                          activeLinePreview: activeLine ? String(activeLine.textContent || '').slice(0, 80) : null,
+                          stack: (new Error()).stack
+                        });
+                      } catch (e0) {}
+                      try { n.remove(); } catch (e0) {}
+                    });
                   }
                 } catch (e0) {}
                 try {
@@ -7840,6 +7947,125 @@ flex-shrink:0;cursor:pointer;
     if (!window.__gmCeHostEditingInited) {
       window.__gmCeHostEditingInited = true;
 
+      try { console.log('[gmdbg] cehost.editing.inited'); } catch (e0) {}
+
+      // Debug: trace who prevents/blocks Backspace at line-start by patching event methods.
+      try {
+        if (!window.__gmEventTracePatched) {
+          window.__gmEventTracePatched = true;
+          const __gmInDiffView = (ev) => {
+            try {
+              const host = document.getElementById('diffView');
+              if (!host) return false;
+              const t = ev && ev.target;
+              const el = t ? ((t.nodeType === Node.ELEMENT_NODE) ? t : (t.parentElement || null)) : null;
+              if (el && host.contains(el)) return true;
+              const sel = window.getSelection ? window.getSelection() : null;
+              const node = sel && sel.rangeCount ? (sel.focusNode || sel.anchorNode || sel.getRangeAt(0).startContainer) : null;
+              const el2 = node ? ((node.nodeType === Node.ELEMENT_NODE) ? node : (node.parentElement || null)) : null;
+              return !!(el2 && host.contains(el2));
+            } catch (e2) {
+              return false;
+            }
+          };
+          const _pd = Event.prototype.preventDefault;
+          const _sp = Event.prototype.stopPropagation;
+          const _sip = Event.prototype.stopImmediatePropagation;
+          Event.prototype.preventDefault = function () {
+            try {
+              if (this && this.type === 'keydown' && this.key === 'Backspace' && __gmInDiffView(this)) {
+                console.log('[gmdbg] trace.preventDefault', { type: this.type, key: this.key, defaultPrevented: this.defaultPrevented, stack: (new Error()).stack });
+              }
+            } catch (e2) {}
+            return _pd.apply(this, arguments);
+          };
+          Event.prototype.stopPropagation = function () {
+            try {
+              if (this && this.type === 'keydown' && this.key === 'Backspace' && __gmInDiffView(this)) {
+                console.log('[gmdbg] trace.stopPropagation', { type: this.type, key: this.key, stack: (new Error()).stack });
+              }
+            } catch (e2) {}
+            return _sp.apply(this, arguments);
+          };
+          Event.prototype.stopImmediatePropagation = function () {
+            try {
+              if (this && this.type === 'keydown' && this.key === 'Backspace' && __gmInDiffView(this)) {
+                console.log('[gmdbg] trace.stopImmediatePropagation', { type: this.type, key: this.key, stack: (new Error()).stack });
+              }
+            } catch (e2) {}
+            return _sip.apply(this, arguments);
+          };
+        }
+      } catch (e0) {}
+
+      document.addEventListener('keydown', (e) => {
+        try {
+          const host = document.getElementById('diffView');
+          if (!host) return;
+          if (!e || e.key !== 'Backspace') return;
+          const t = e.target;
+          const el = t ? ((t.nodeType === Node.ELEMENT_NODE) ? t : (t.parentElement || null)) : null;
+          if (el && !host.contains(el)) {
+            const sel = window.getSelection ? window.getSelection() : null;
+            const node = sel && sel.rangeCount ? (sel.focusNode || sel.anchorNode || sel.getRangeAt(0).startContainer) : null;
+            const el2 = node ? ((node.nodeType === Node.ELEMENT_NODE) ? node : (node.parentElement || null)) : null;
+            if (!(el2 && host.contains(el2))) return;
+          }
+          const sel = window.getSelection ? window.getSelection() : null;
+          console.log('[gmdbg] raw.keydown.backspace', {
+            isCeHost: (() => { try { return !!__isCeHost(); } catch (e2) { return null; } })(),
+            defaultPrevented: !!e.defaultPrevented,
+            targetTag: t && t.tagName ? String(t.tagName) : null,
+            collapsed: sel ? !!sel.isCollapsed : null,
+          });
+        } catch (e0) {}
+      }, true);
+
+      document.addEventListener('beforeinput', (e) => {
+        try {
+          const host = document.getElementById('diffView');
+          if (!host) return;
+          const it = String(e && e.inputType || '');
+          if (!(it === 'deleteContentBackward' || it === 'deleteContentForward' || it === 'insertText' || it === 'insertCompositionText')) return;
+          const t = e && e.target;
+          const inHost = (() => {
+            try {
+              if (t && t.nodeType) {
+                const el = (t.nodeType === Node.ELEMENT_NODE) ? t : (t.parentElement || null);
+                if (el && host.contains(el)) return true;
+              }
+            } catch (e2) {}
+            try {
+              const sel = window.getSelection ? window.getSelection() : null;
+              const node = sel && sel.rangeCount ? (sel.focusNode || sel.anchorNode || sel.getRangeAt(0).startContainer) : null;
+              const el = node ? ((node.nodeType === Node.ELEMENT_NODE) ? node : (node.parentElement || null)) : null;
+              return !!(el && host.contains(el));
+            } catch (e3) {}
+            return false;
+          })();
+          if (!inHost) return;
+          let line = null;
+          try {
+            const el = t && t.nodeType ? ((t.nodeType === Node.ELEMENT_NODE) ? t : (t.parentElement || null)) : null;
+            line = el && el.closest ? el.closest('.editable-line') : null;
+          } catch (e2) {}
+          if (!line) {
+            try {
+              const sel = window.getSelection ? window.getSelection() : null;
+              const node = sel && sel.rangeCount ? (sel.focusNode || sel.anchorNode || sel.getRangeAt(0).startContainer) : null;
+              const el = node ? ((node.nodeType === Node.ELEMENT_NODE) ? node : (node.parentElement || null)) : null;
+              line = el && el.closest ? el.closest('.editable-line') : null;
+            } catch (e2) {}
+          }
+          console.log('[gmdbg] raw.beforeinput', {
+            it,
+            isCeHost: (() => { try { return !!__isCeHost(); } catch (e2) { return null; } })(),
+            hasLine: !!line,
+            targetTag: t && t.tagName ? String(t.tagName) : null,
+          });
+        } catch (e0) {}
+      }, true);
+
       // ce-host: Enter with multi-line selection must be handled at document level,
       // because when selection spans multiple rows, `keydown` target may be host/UI column,
       // and line-level handlers won't run.
@@ -7963,15 +8189,62 @@ flex-shrink:0;cursor:pointer;
           const lineEl = (line && host.contains(line)) ? line : (dl && dl.querySelector ? dl.querySelector('.editable-line') : null);
           if (!lineEl || !host.contains(lineEl)) return;
 
+          const __gmDelDbg = (tag, payload) => {
+            try {
+              console.log('[gmdbg]', tag, payload);
+            } catch (e2) {}
+            try { if (typeof __gmDbg === 'function') { __gmDbg(tag, payload); } } catch (e2) {}
+          };
+
+          try {
+            const scope0 = (() => {
+              try {
+                const sp = lineEl.closest ? lineEl.closest('.sp') : null;
+                if (sp && host.contains(sp)) return sp;
+              } catch (e2) {}
+              return host;
+            })();
+            const wrap0 = host.querySelector ? host.querySelector('.split-wrap') : null;
+            const panels0 = wrap0 ? Array.from(wrap0.querySelectorAll('.sp')) : [];
+            const other0 = panels0.find(p => p !== scope0) || null;
+            __gmDelDbg('ce.del.before', {
+              it,
+              inSplit: !!wrap0,
+              scopeDlCount: scope0 && scope0.querySelectorAll ? scope0.querySelectorAll('.dl').length : -1,
+              otherDlCount: other0 && other0.querySelectorAll ? other0.querySelectorAll('.dl').length : -1,
+              lineTxt: String((typeof __gmExtractPureTextFromLc === 'function' ? __gmExtractPureTextFromLc(lineEl) : lineEl.textContent) || '').slice(0, 120)
+            });
+          } catch (e2) {}
+
           if (it === 'deleteContentBackward') {
             // 精确判断光标是否在真正的行首(完全没有任何字符,包括空格)
             const isAtAbsoluteStart = (() => {
               try {
-                // 确保选区容器在 .editable-line 内部
-                // 如果浏览器把光标边界推到行号/符号等 UI 节点上，这里也要当作行首
-                if (!lineEl.contains(r.startContainer)) return true;
+                // In ce-host mode the browser may place the caret boundary on the .dl
+                // element itself (not inside .lc), especially at position 0.
+                // If startContainer is NOT inside lineEl we need to distinguish two cases:
+                //   a) Caret is genuinely before lineEl (treat as line-start)
+                //   b) Caret is somewhere else entirely (NOT line-start — don't merge)
+                if (!lineEl.contains(r.startContainer)) {
+                  // Only treat as line-start if the caret is on lineEl's parent .dl
+                  // at an offset that places it before lineEl, or on lineEl itself at 0.
+                  try {
+                    const dlEl = lineEl.closest ? lineEl.closest('.dl') : null;
+                    if (!dlEl) return false; // can't determine — do not merge
+                    if (r.startContainer === lineEl && r.startOffset === 0) return true;
+                    if (r.startContainer === dlEl) {
+                      // offset into .dl's children — check if lineEl is after the caret
+                      const children = Array.from(dlEl.childNodes);
+                      const lcIdx = children.indexOf(lineEl);
+                      return r.startOffset <= lcIdx;
+                    }
+                    return false; // caret is elsewhere — do not merge
+                  } catch (e2) {
+                    return false;
+                  }
+                }
                 
-                // 创建一个范围来计算从行内容开始到当前光标的文本
+                // Caret is inside lineEl: measure text before it
                 const testRange = document.createRange();
                 testRange.selectNodeContents(lineEl);
                 testRange.setEnd(r.startContainer, r.startOffset);
@@ -7980,27 +8253,60 @@ flex-shrink:0;cursor:pointer;
                   .replace(/\u200b/g, '')
                   .replace(/\u00a0/g, '');
                 
-                // 只有光标前完全没有任何字符(包括空格)时才是真正的行首
+                // Only truly at line-start when nothing precedes the caret
                 return cleaned.length === 0;
               } catch (e) {
                 return false;
               }
             })();
+
+            try {
+              __gmDelDbg('ce.bs.check', {
+                isAtAbsoluteStart,
+                caret: (() => { try { return Math.max(0, Number(getCaretOffset(lineEl)) || 0); } catch (e2) { return -1; } })(),
+                lineHasIm: !!(lineEl.querySelector && lineEl.querySelector('.im-ch')),
+              });
+            } catch (e2) {}
             
             if (isAtAbsoluteStart) {
-              const raw = (lineEl.textContent || '');
-              const normalized = raw
+              const raw = (typeof __gmExtractPureTextFromLc === 'function')
+                ? __gmExtractPureTextFromLc(lineEl)
+                : (lineEl.textContent || '');
+              const normalized = String(raw || '')
                 .replace(/\n/g, '')
                 .replace(/\u200b/g, '')
                 .replace(/\u00a0/g, '')
                 .trim();
               const isEffectivelyEmpty = (normalized === '');
+
+              try { __gmDelDbg('ce.bs.atLineStart', { isEffectivelyEmpty, normalizedPreview: String(normalized || '').slice(0, 120) }); } catch (e2) {}
               
               if (isEffectivelyEmpty) {
                 // 空行:删除当前行,光标移到上一行末尾
                 e.preventDefault();
                 try { e.stopImmediatePropagation(); } catch (e) {}
                 try { e.stopPropagation(); } catch (e) {}
+
+                try {
+                  const scope = (() => {
+                    try {
+                      const sp = lineEl.closest ? lineEl.closest('.sp') : null;
+                      if (sp && host.contains(sp)) return sp;
+                    } catch (e2) {}
+                    return host;
+                  })();
+                  const dlToRemove = lineEl.closest ? lineEl.closest('.dl') : null;
+                  const idxDl = (() => {
+                    try {
+                      if (!dlToRemove) return -1;
+                      const dls = Array.from(scope.querySelectorAll('.dl'));
+                      return dls.indexOf(dlToRemove);
+                    } catch (e4) {
+                      return -1;
+                    }
+                  })();
+                  __gmDelDbg('ce.bs.empty.remove', { idxDl, hasDl: !!dlToRemove });
+                } catch (e2) {}
 
                 try {
                   const host2 = document.getElementById('diffView');
@@ -8019,6 +8325,9 @@ flex-shrink:0;cursor:pointer;
                   const idx = lines.indexOf(lineEl);
                   const prev = (idx > 0) ? lines[idx - 1] : null;
                   __recordAndRemoveDl(lineEl);
+
+                  // NOTE: Do NOT modify the original (left) panel. Only mutate editable side.
+
                   window.__dirtyEdits = true;
                   try { if (typeof window.scheduleAutoSave === 'function') window.scheduleAutoSave(); } catch (e2) {}
                   
@@ -8040,6 +8349,27 @@ flex-shrink:0;cursor:pointer;
                 try { e.stopPropagation(); } catch (e) {}
 
                 try {
+                  const scope = (() => {
+                    try {
+                      const sp = lineEl.closest ? lineEl.closest('.sp') : null;
+                      if (sp && host.contains(sp)) return sp;
+                    } catch (e2) {}
+                    return host;
+                  })();
+                  const dlToRemove = lineEl.closest ? lineEl.closest('.dl') : null;
+                  const idxDl = (() => {
+                    try {
+                      if (!dlToRemove) return -1;
+                      const dls = Array.from(scope.querySelectorAll('.dl'));
+                      return dls.indexOf(dlToRemove);
+                    } catch (e4) {
+                      return -1;
+                    }
+                  })();
+                  __gmDelDbg('ce.bs.merge.start', { idxDl, hasDl: !!dlToRemove });
+                } catch (e2) {}
+
+                try {
                   const host2 = document.getElementById('diffView');
                   if (host2 && typeof __gmPushEditorSnapshot === 'function') __gmPushEditorSnapshot(host2);
                 } catch (e) {}
@@ -8056,40 +8386,115 @@ flex-shrink:0;cursor:pointer;
                   const idx = lines.indexOf(lineEl);
                   const prev = (idx > 0) ? lines[idx - 1] : null;
                   if (!prev) return; // 已经是第一行,无法合并
-                  
-                  const prevText = (prev.textContent || '');
-                  const curText = String(raw || '');
-                  const clean = (s) => String(s || '').replace(/[\r\n\u2028\u2029]/g, '');
-                  const prevTextClean = clean(prevText);
-                  const curTextClean = clean(curText);
-                  prev.textContent = prevTextClean + curTextClean;
-                  prev.dispatchEvent(new Event('input', { bubbles: true }));
-                  __recordAndRemoveDl(lineEl);
+
+                  // Capture .dl references BEFORE any DOM change
+                  const dlToRemove = lineEl.closest ? lineEl.closest('.dl') : null;
+                  const prevDl     = prev.closest   ? prev.closest('.dl')   : null;
+                  if (!dlToRemove || !prevDl || dlToRemove === prevDl) {
+                    // Unexpected structure – fall back to original helper
+                    __recordAndRemoveDl(lineEl);
+                    window.__dirtyEdits = true;
+                    try { if (typeof window.scheduleAutoSave === 'function') window.scheduleAutoSave(); } catch (e2) {}
+                    return;
+                  }
+
+                  const getClean = (el2) => {
+                    const t = (typeof __gmExtractPureTextFromLc === 'function')
+                      ? __gmExtractPureTextFromLc(el2)
+                      : (el2.textContent || '');
+                    return String(t || '').replace(/[\r\n\u2028\u2029]/g, '');
+                  };
+                  const prevTextClean = getClean(prev);
+                  const curTextClean  = getClean(lineEl);
+                  const mergedText    = prevTextClean + curTextClean;
+                  const caretPos      = prevTextClean.length;
+
+                  // Step 1: Write merged text into prev as a plain text node
+                  //   Using a dedicated Text node avoids CE engine misinterpreting
+                  //   the assignment as a multi-line paste that needs re-splitting.
+                  try {
+                    while (prev.firstChild) prev.removeChild(prev.firstChild);
+                    prev.appendChild(document.createTextNode(mergedText));
+                  } catch (e2) {
+                    prev.textContent = mergedText;
+                  }
+
+                  // Step 2: Remove the current .dl immediately (sync), and once more
+                  //   in a rAF in case the CE engine re-inserts it asynchronously.
+                  const idxDl = (() => {
+                    try {
+                      const dls = Array.from(scope.querySelectorAll('.dl'));
+                      return dls.indexOf(dlToRemove);
+                    } catch (e4) {
+                      return -1;
+                    }
+                  })();
+                  const doRemoveDl = () => {
+                    if (!dlToRemove.isConnected) return;
+                    try {
+                      const fpath = (curFile !== null && files && files[curFile]) ? files[curFile].path : null;
+                      if (fpath) {
+                        const idx2 = __parseLineIndexFromDl(dlToRemove);
+                        if (idx2 !== null && idx2 !== undefined && idx2 >= 0) {
+                          let set = window.__deletedLineIndicesByPath.get(fpath);
+                          if (!set) { set = new Set(); window.__deletedLineIndicesByPath.set(fpath, set); }
+                          set.add(idx2);
+                        }
+                      }
+                    } catch (e2) {}
+                    try { dlToRemove.remove(); } catch (e2) {
+                      try { if (dlToRemove.parentNode) dlToRemove.parentNode.removeChild(dlToRemove); } catch (e3) {}
+                    }
+                  };
+                  doRemoveDl();
+                  // Guard: if CE re-inserts the row before the next paint, remove it again
+                  requestAnimationFrame(() => { try { doRemoveDl(); } catch (e2) {} });
+
+                  // NOTE: Do NOT modify the original (left) panel. Only mutate editable side.
+
+                  // Step 3: Mark dirty and fire input AFTER DOM is clean
+                  try { prev.dataset.dirty = '1'; } catch (e2) {}
+                  try { prev.dispatchEvent(new Event('input', { bubbles: true })); } catch (e2) {}
                   window.__dirtyEdits = true;
                   try { if (typeof window.scheduleAutoSave === 'function') window.scheduleAutoSave(); } catch (e2) {}
-                  
-                  // 更新行号
+
                   if (typeof window.updateLineNumbers === 'function') {
                     window.updateLineNumbers();
                   }
-                  
+
                   prev.focus();
-                  setCaretOffset(prev, prevTextClean.length);
+                  setCaretOffset(prev, caretPos);
+
+                  try {
+                    const wrap = scope.closest ? scope.closest('.split-wrap') : null;
+                    const panels = wrap ? Array.from(wrap.querySelectorAll('.sp')) : [];
+                    const other = panels.find(p => p !== scope) || null;
+                    __gmDelDbg('ce.bs.merge.done', {
+                      idxDl,
+                      scopeDlCount: scope && scope.querySelectorAll ? scope.querySelectorAll('.dl').length : -1,
+                      otherDlCount: other && other.querySelectorAll ? other.querySelectorAll('.dl').length : -1,
+                    });
+                  } catch (e2) {}
                 } catch (e) {}
                 return;
               }
             }
             // 如果不在真正的行首,让浏览器执行默认的删除行为(删除一个字符)
+            try { e.stopImmediatePropagation(); } catch (e2) {}
+            try { e.stopPropagation(); } catch (e2) {}
+            return;
           }
           if (it === 'deleteContentForward') {
             // Delete 在行尾应衔接删除下一行（与标准编辑器一致），而不是直接被拦截。
             const isAtContentEnd = (() => {
               try {
-                const raw = String(lineEl.textContent || '').replace(/[\r\n\u2028\u2029]/g, '');
+                const rawText = (typeof __gmExtractPureTextFromLc === 'function')
+                  ? String(__gmExtractPureTextFromLc(lineEl) || '').replace(/[\r\n\u2028\u2029]/g, '')
+                  : String(lineEl.textContent || '').replace(/[\r\n\u2028\u2029]/g, '');
                 const caret = (() => {
                   try { return Math.max(0, Number(getCaretOffset(lineEl)) || 0); } catch (e2) { return 0; }
                 })();
-                return caret >= raw.length;
+                return caret >= rawText.length;
               } catch (e) {
                 return false;
               }
@@ -8121,8 +8526,12 @@ flex-shrink:0;cursor:pointer;
                 try { __gmDbg('deleteForward.merge.next', { idx, hasNext: !!next }); } catch (e2) {}
                 if (!next) return;
 
-                const leftRaw = String(lineEl.textContent || '').replace(/[\r\n\u2028\u2029]/g, '');
-                const rightRaw = String(next.textContent || '').replace(/[\r\n\u2028\u2029]/g, '');
+                const leftRaw = (typeof __gmExtractPureTextFromLc === 'function')
+                  ? String(__gmExtractPureTextFromLc(lineEl) || '').replace(/[\r\n\u2028\u2029]/g, '')
+                  : String(lineEl.textContent || '').replace(/[\r\n\u2028\u2029]/g, '');
+                const rightRaw = (typeof __gmExtractPureTextFromLc === 'function')
+                  ? String(__gmExtractPureTextFromLc(next) || '').replace(/[\r\n\u2028\u2029]/g, '')
+                  : String(next.textContent || '').replace(/[\r\n\u2028\u2029]/g, '');
                 const caret = leftRaw.length;
 
                 lineEl.textContent = leftRaw + rightRaw;
@@ -8171,6 +8580,11 @@ flex-shrink:0;cursor:pointer;
               }
               return;
             }
+
+            // 非行尾 Delete：让浏览器执行默认删除，但阻止后续 beforeinput 监听器接管
+            try { e.stopImmediatePropagation(); } catch (e2) {}
+            try { e.stopPropagation(); } catch (e2) {}
+            return;
           }
         } catch (e2) {}
       }, true);
@@ -8452,6 +8866,20 @@ flex-shrink:0;cursor:pointer;
                   try {
                     if (typeof __gmPushEditorSnapshot === 'function') __gmPushEditorSnapshot(host);
                   } catch (e2) {}
+
+                  const __gmClearDiffChangeUiInEditableScope = (scope0) => {
+                    try {
+                      if (!scope0 || !scope0.querySelectorAll) return;
+                      scope0.querySelectorAll('.dl.added, .dl.removed, .dl.modified').forEach(dl0 => {
+                        try { dl0.classList.remove('added', 'removed', 'modified'); } catch (e5) {}
+                      });
+                    } catch (e5) {}
+                    try {
+                      const dv = document.getElementById('diffView');
+                      const nav = dv && dv.querySelector ? dv.querySelector('.change-navigation') : null;
+                      if (nav) { try { nav.remove(); } catch (e5) {} }
+                    } catch (e5) {}
+                  };
                   const IND = '    ';
                   const before = raw0.slice(0, col0);
                   const del = __gmIndentBackspaceDelCount(before, IND);
@@ -8557,12 +8985,21 @@ flex-shrink:0;cursor:pointer;
                   try { e.stopImmediatePropagation(); } catch (e2) {}
                   try { e.stopPropagation(); } catch (e2) {}
 
+                  const __gmDelDbg = (tag, payload) => {
+                    try {
+                      console.log('[gmdbg]', tag, payload);
+                    } catch (e3) {}
+                    try { if (typeof __gmDbg === 'function') { __gmDbg(tag, payload); } } catch (e3) {}
+                  };
+
                   try {
                     if (typeof __gmPushEditorSnapshot === 'function') __gmPushEditorSnapshot(host);
                   } catch (e2) {}
 
-                  const raw = (lineEl.textContent || '');
-                  const normalized = raw
+                  const raw = (typeof __gmExtractPureTextFromLc === 'function')
+                    ? __gmExtractPureTextFromLc(lineEl)
+                    : (lineEl.textContent || '');
+                  const normalized = String(raw || '')
                     .replace(/\n/g, '')
                     .replace(/\u200b/g, '')
                     .replace(/\u00a0/g, '')
@@ -8570,44 +9007,150 @@ flex-shrink:0;cursor:pointer;
                   const isEffectivelyEmpty = (normalized === '');
 
                   try {
-                    const lines = Array.from(document.querySelectorAll('.editable-line'));
-                    const idx = lines.indexOf(lineEl);
-                    const prev = (idx > 0) ? lines[idx - 1] : null;
-                    if (!prev) return;
+                    const scope = (() => {
+                      try {
+                        const wrap = host.querySelector ? host.querySelector('.split-wrap') : null;
+                        if (wrap) {
+                          const editablePanel = host.querySelector ? host.querySelector('.sp.sp-editable') : null;
+                          return editablePanel || (wrap.querySelector('.sp:last-child') || host);
+                        }
+                      } catch (e4) {}
+                      return host;
+                    })();
 
-                    if (isEffectivelyEmpty) {
-                      __recordAndRemoveDl(lineEl);
-                      window.__dirtyEdits = true;
-                      try { if (typeof window.scheduleAutoSave === 'function') window.scheduleAutoSave(); } catch (e2) {}
-                      
-                      // 更新行号
-                      if (typeof window.updateLineNumbers === 'function') {
-                        window.updateLineNumbers();
+                    // Never allow this handler to mutate readonly/original panel in split view.
+                    try { if (scope && lineEl && scope.contains && !scope.contains(lineEl)) return; } catch (e4) {}
+
+                    const lines = Array.from(scope.querySelectorAll('.editable-line'));
+                    let idx = lines.indexOf(lineEl);
+
+                    const dlToRemove = lineEl.closest ? lineEl.closest('.dl') : null;
+                    const idxDl = (() => {
+                      try {
+                        if (!dlToRemove) return -1;
+                        const dls = Array.from(scope.querySelectorAll('.dl'));
+                        return dls.indexOf(dlToRemove);
+                      } catch (e4) {
+                        return -1;
                       }
-                      
-                      prev.focus();
-                      setCaretOffset(prev, (prev.textContent || '').length);
+                    })();
+
+                    // If editable-line list can't locate current line (idx === -1), fall back to dl index.
+                    if (idx < 0 && idxDl >= 0) {
+                      try {
+                        // In most cases, each dl hosts one editable-line.
+                        idx = idxDl;
+                      } catch (e4) {}
+                    }
+
+                    const prev = (idx > 0 && idx < lines.length) ? lines[idx - 1] : null;
+                    const next = (idx >= 0 && idx + 1 < lines.length) ? lines[idx + 1] : null;
+
+                    __gmDelDbg('ce.key.bs.pos', { idxLine: idx, hasPrev: !!prev, idxDl, hasDl: !!dlToRemove, isEffectivelyEmpty });
+
+                    const getClean = (el2) => {
+                      const t = (typeof __gmExtractPureTextFromLc === 'function')
+                        ? __gmExtractPureTextFromLc(el2)
+                        : (el2.textContent || '');
+                      return String(t || '').replace(/[\r\n\u2028\u2029]/g, '');
+                    };
+
+                    // Empty line at line-start: allow deletion even when there is no previous line.
+                    if (isEffectivelyEmpty) {
+                      __gmDelDbg('ce.key.bs.empty.start', { idxLine: idx, idxDl, hasPrev: !!prev, hasNext: !!next });
+                      const targetIdx = (prev ? (idx - 1) : (next ? idx : -1));
+                      const targetCaret = (prev ? -1 : 0);
+                      const dlBefore = dlToRemove;
+                      try { if (dlBefore && dlBefore.classList) dlBefore.classList.remove('added', 'removed', 'modified'); } catch (e4) {}
+                      __recordAndRemoveDl(lineEl);
+
+                      const restoreFocus = () => {
+                        try {
+                          if (targetIdx < 0) return;
+                          const linesNow = Array.from(scope.querySelectorAll('.editable-line'));
+                          const tline = (targetIdx >= 0 && targetIdx < linesNow.length) ? linesNow[targetIdx] : null;
+                          if (!tline) return;
+                          tline.focus();
+                          const off = (targetCaret < 0) ? (getClean(tline).length) : targetCaret;
+                          setCaretOffset(tline, off);
+                          __gmDelDbg('ce.key.bs.empty.restoreFocus', { targetIdx, off });
+                        } catch (e6) {}
+                      };
+
+                      // Restore focus after DOM settles.
+                      try { requestAnimationFrame(() => { try { restoreFocus(); } catch (e6) {} }); } catch (e6) {}
+
+                      // Guard: if CE re-inserts the row before the next paint, remove it again.
+                      try {
+                        requestAnimationFrame(() => {
+                          try {
+                            if (dlBefore && dlBefore.isConnected) {
+                              __gmDelDbg('ce.key.bs.empty.reremove', { idxDl });
+                              try { dlBefore.remove(); } catch (e5) { try { if (dlBefore.parentNode) dlBefore.parentNode.removeChild(dlBefore); } catch (e6) {} }
+                            }
+                          } catch (e5) {}
+                          try { restoreFocus(); } catch (e6) {}
+                          try { if (typeof window.updateLineNumbers === 'function') window.updateLineNumbers(); } catch (e6) {}
+                        });
+                      } catch (e5) {}
+
+                      window.__dirtyEdits = true;
+                      try { if (typeof window.scheduleAutoSave === 'function') window.scheduleAutoSave(); } catch (e4) {}
+                      if (typeof window.updateLineNumbers === 'function') window.updateLineNumbers();
+
+                      // Focus restoration is handled via requestAnimationFrame using latest DOM nodes.
                       return;
                     }
 
-                    const prevText = (prev.textContent || '');
-                    const curText = String(raw || '');
-                    const clean = (s) => String(s || '').replace(/[\r\n\u2028\u2029]/g, '');
-                    const prevTextClean = clean(prevText);
-                    const curTextClean = clean(curText);
-                    prev.textContent = prevTextClean + curTextClean;
-                    prev.dispatchEvent(new Event('input', { bubbles: true }));
-                    __recordAndRemoveDl(lineEl);
-                    window.__dirtyEdits = true;
-                    try { if (typeof window.scheduleAutoSave === 'function') window.scheduleAutoSave(); } catch (e2) {}
-                    
-                    // 更新行号
-                    if (typeof window.updateLineNumbers === 'function') {
-                      window.updateLineNumbers();
+                    if (!prev) {
+                      __gmDelDbg('ce.key.bs.noPrev', { idxLine: idx, idxDl });
+                      return;
                     }
-                    
+
+                    __gmDelDbg('ce.key.bs.start', { isEffectivelyEmpty, idxLine: idx, idxDl, hasDl: !!dlToRemove });
+
+                    // Merge into prev
+                    const prevTextClean = getClean(prev);
+                    const curTextClean = getClean(lineEl);
+                    const mergedText = prevTextClean + curTextClean;
+                    const caretPos = prevTextClean.length;
+
+                    try {
+                      while (prev.firstChild) prev.removeChild(prev.firstChild);
+                      prev.appendChild(document.createTextNode(mergedText));
+                    } catch (e4) {
+                      prev.textContent = mergedText;
+                    }
+
+                    // Remove current dl (sync + rAF)
+                    const doRemoveDl = () => {
+                      if (!dlToRemove || !dlToRemove.isConnected) return;
+                      try { if (dlToRemove && dlToRemove.classList) dlToRemove.classList.remove('added', 'removed', 'modified'); } catch (e4) {}
+                      try { dlToRemove.remove(); } catch (e4) { try { if (dlToRemove.parentNode) dlToRemove.parentNode.removeChild(dlToRemove); } catch (e5) {} }
+                    };
+                    doRemoveDl();
+                    requestAnimationFrame(() => { try { doRemoveDl(); } catch (e4) {} });
+
+                    // NOTE: Do NOT modify the original (left) panel. Only mutate editable side.
+
+                    try { prev.dataset.dirty = '1'; } catch (e4) {}
+                    try { prev.dispatchEvent(new Event('input', { bubbles: true })); } catch (e4) {}
+                    window.__dirtyEdits = true;
+                    try { if (typeof window.scheduleAutoSave === 'function') window.scheduleAutoSave(); } catch (e4) {}
+                    if (typeof window.updateLineNumbers === 'function') window.updateLineNumbers();
                     prev.focus();
-                    setCaretOffset(prev, prevTextClean.length);
+                    setCaretOffset(prev, caretPos);
+
+                    try {
+                      const wrap = scope.closest ? scope.closest('.split-wrap') : null;
+                      const panels = wrap ? Array.from(wrap.querySelectorAll('.sp')) : [];
+                      const other = panels.find(p => p !== scope) || null;
+                      __gmDelDbg('ce.key.bs.done', {
+                        idxDl,
+                        scopeDlCount: scope && scope.querySelectorAll ? scope.querySelectorAll('.dl').length : -1,
+                        otherDlCount: other && other.querySelectorAll ? other.querySelectorAll('.dl').length : -1,
+                      });
+                    } catch (e4) {}
                     return;
                   } catch (e2) {
                     return;
@@ -8960,6 +9503,7 @@ flex-shrink:0;cursor:pointer;
         }
 
         if (!line || !host.contains(line)) return;
+
         const __gmCaretBeforeNormalize = (() => {
           try { return Math.max(0, Number(getCaretOffset(line)) || 0); } catch (e2) { return 0; }
         })();
@@ -8973,6 +9517,62 @@ flex-shrink:0;cursor:pointer;
             setCaretOffsetNoFocus(line, off);
           } catch (e2) {}
         }
+
+        try {
+          const it = String(e && e.inputType || '');
+          if (it === 'deleteContentBackward') {
+            const rawNow = (typeof __gmExtractPureTextFromLc === 'function')
+              ? __gmExtractPureTextFromLc(line)
+              : (line.textContent || '');
+            const txtNow = String(rawNow || '')
+              .replace(/[\r\n\u2028\u2029]/g, '')
+              .replace(/\u200b/g, '')
+              .replace(/\u00a0/g, '')
+              .trim();
+            const caretNow = (() => { try { return Math.max(0, Number(getCaretOffset(line)) || 0); } catch (e3) { return 0; } })();
+            if (txtNow === '') {
+              const dlToRemove = line.closest ? line.closest('.dl') : null;
+              const scope = (() => {
+                try {
+                  const wrap = host.querySelector ? host.querySelector('.split-wrap') : null;
+                  if (wrap) {
+                    const editablePanel = host.querySelector ? host.querySelector('.sp.sp-editable') : null;
+                    return editablePanel || (wrap.querySelector('.sp:last-child') || host);
+                  }
+                } catch (e3) {}
+                return host;
+              })();
+              try { if (scope && line && scope.contains && !scope.contains(line)) return; } catch (e3) {}
+              const lines = Array.from(scope.querySelectorAll('.editable-line'));
+              const idx = lines.indexOf(line);
+              const prev = (idx > 0) ? lines[idx - 1] : null;
+              const next = (idx >= 0 && (idx + 1) < lines.length) ? lines[idx + 1] : null;
+              if (dlToRemove && (prev || next)) {
+                try { if (dlToRemove.classList) dlToRemove.classList.remove('added', 'removed', 'modified'); } catch (e3) {}
+                const doRemove = () => {
+                  try {
+                    if (dlToRemove && dlToRemove.isConnected) dlToRemove.remove();
+                  } catch (e3) { try { if (dlToRemove && dlToRemove.parentNode) dlToRemove.parentNode.removeChild(dlToRemove); } catch (e4) {} }
+                };
+                doRemove();
+                try { requestAnimationFrame(() => { try { doRemove(); } catch (e3) {} }); } catch (e3) {}
+                try {
+                  requestAnimationFrame(() => {
+                    if (prev) {
+                      try { prev.focus(); } catch (e3) {}
+                      try { setCaretOffset(prev, String(prev.textContent || '').length); } catch (e3) {}
+                    } else if (next) {
+                      try { next.focus(); } catch (e3) {}
+                      try { setCaretOffset(next, 0); } catch (e3) {}
+                    }
+                    try { if (typeof window.updateLineNumbers === 'function') window.updateLineNumbers(); } catch (e3) {}
+                  });
+                } catch (e3) {}
+              }
+            }
+          }
+        } catch (e3) {}
+
         try { line.dataset.dirty = '1'; } catch (e2) {}
         window.__dirtyEdits = true;
         try { if (typeof window.scheduleAutoSave === 'function') window.scheduleAutoSave(); } catch (e2) {}
@@ -9021,6 +9621,10 @@ flex-shrink:0;cursor:pointer;
         const isDelete = (it === 'deleteContentForward');
         if (!isInsertText && !isBackspace && !isDelete) return;
 
+        // delete/backspace 已由上方 beforeinput 监听器处理边界合并/删除行，
+        // 非边界情况应让浏览器默认行为执行；此处不要再接管，否则会与第一层监听器冲突。
+        if (isBackspace || isDelete) return;
+
         if (isInsertText) {
           try {
             const sel = window.getSelection ? window.getSelection() : null;
@@ -9055,7 +9659,16 @@ flex-shrink:0;cursor:pointer;
 
         try { __enableLineEditing(line); } catch (e2) {}
 
-        const oldText = String(line.textContent || '').replace(/[\r\n\u2028\u2029]/g, '');
+        const oldText = (() => {
+          try {
+            const raw = (typeof __gmExtractPureTextFromLc === 'function')
+              ? __gmExtractPureTextFromLc(line)
+              : (line.textContent || '');
+            return String(raw || '').replace(/[\r\n\u2028\u2029]/g, '');
+          } catch (e2) {
+            return String(line.textContent || '').replace(/[\r\n\u2028\u2029]/g, '');
+          }
+        })();
         const off = (() => {
           try {
             const sel = window.getSelection ? window.getSelection() : null;
@@ -9235,17 +9848,25 @@ flex-shrink:0;cursor:pointer;
         const dl = lineEl && lineEl.closest ? lineEl.closest('.dl') : null;
         const fpath = (curFile !== null && files && files[curFile]) ? files[curFile].path : null;
         if (!dl) return;
-        if (dl && fpath) {
-          const idx = __parseLineIndexFromDl(dl);
-          if (idx !== null && idx !== undefined && idx >= 0) {
-            let set = window.__deletedLineIndicesByPath.get(fpath);
-            if (!set) {
-              set = new Set();
-              window.__deletedLineIndicesByPath.set(fpath, set);
-            }
-            set.add(idx);
+        try {
+          if (!window.__deletedLineIndicesByPath || typeof window.__deletedLineIndicesByPath.get !== 'function') {
+            window.__deletedLineIndicesByPath = new Map();
           }
-        }
+        } catch (e) {}
+        try {
+          if (fpath) {
+            const idx = __parseLineIndexFromDl(dl);
+            if (idx !== null && idx !== undefined && idx >= 0) {
+              let set = null;
+              try { set = window.__deletedLineIndicesByPath.get(fpath); } catch (e) { set = null; }
+              if (!set) {
+                set = new Set();
+                try { window.__deletedLineIndicesByPath.set(fpath, set); } catch (e) {}
+              }
+              try { set.add(idx); } catch (e) {}
+            }
+          }
+        } catch (e) {}
         try {
           dl.remove();
         } catch (e) {
@@ -11588,13 +12209,32 @@ flex-shrink:0;cursor:pointer;
 
   // ── Revert-block-hint staleness cleanup ──────────────────────────────────────
   // Remove stale hint banners after any edit (input / cut / delete key).
-  // Works for both unified (.unified-wrap) and split (.sp) views.
+  // Works for unified (.unified-wrap) and the editable side of split (.sp) views.
   (function(){
+    // Returns true only if the hint is inside an editable container
+    // (not the read-only left panel of split view).
+    function hintIsInEditablePanel(hint){
+      try {
+        const sp = hint.closest && hint.closest('.sp');
+        if (sp) {
+          // Read-only panel: has contenteditable="false" attribute or sp-readonly class
+          if (sp.classList.contains('sp-readonly')) return false;
+          if (String(sp.getAttribute('contenteditable') || '') === 'false') return false;
+          // Also check: read-only panels have no .editable-line children
+          if (!sp.querySelector('.editable-line')) return false;
+        }
+        return true;
+      } catch(e){ return true; }
+    }
+
     function pruneHints(scope){
       try {
         if (!scope) return;
         scope.querySelectorAll('.dl.revert-block-hint').forEach(hint => {
           try {
+            // Never touch hints in read-only panels
+            if (!hintIsInEditablePanel(hint)) return;
+
             const siblings = Array.from(hint.parentElement ? hint.parentElement.children : []);
             const hintIdx = siblings.indexOf(hint);
             if (hintIdx < 0) return;
@@ -11603,12 +12243,11 @@ flex-shrink:0;cursor:pointer;
               const s = siblings[i];
               if (!s || !s.classList) break;
               if (s.classList.contains('revert-block-hint')) break;
-              if (s.classList.contains('context') || s.classList.contains('empty')) break;
-              if (s.classList.contains('removed')) { hasVisibleChange = true; break; }
+              if (s.classList.contains('context')) break;
+              // Only editable change lines count — removed lines are read-only originals.
               if (s.classList.contains('added') || s.classList.contains('modified')) {
-                const lc = s.querySelector('.lc');
-                const txt = lc ? String(lc.textContent || '').replace(/[\r\n]/g,'') : '';
-                if (txt.length > 0) { hasVisibleChange = true; break; }
+                const lc = s.querySelector('.lc.editable-line');
+                if (lc) { hasVisibleChange = true; break; }
               }
             }
             if (!hasVisibleChange) { try { hint.remove(); } catch(e){} }
@@ -11617,62 +12256,64 @@ flex-shrink:0;cursor:pointer;
       } catch(e){}
     }
 
-    // Find the diff container scope for a node. Also handles the case where
-    // target is the diffView host itself (e.g. after browser-native cut in ce-host mode).
+    // Resolve the editable scope for a DOM node.
     function getScope(node){
       if (!node) return null;
       try {
-        // Direct container match
-        const wrap = node.closest && node.closest('.unified-wrap, .sp');
-        if (wrap) return wrap;
-        // Target is the diffView host itself — scan its children
-        const view = document.getElementById('diffView');
-        if (view && (node === view || view.contains(node))) {
-          // Return the whole diffView so pruneHints can scan all hint rows
-          return view;
-        }
-      } catch(e){}
-      return null;
+        const sp = node.closest && node.closest('.sp');
+        if (sp) return sp; // pruneHints will skip non-editable ones internally
+        const unified = node.closest && node.closest('.unified-wrap');
+        if (unified) return unified;
+        return document.getElementById('diffView');
+      } catch(e){ return null; }
     }
 
-    function pruneFromTarget(t){
+    // For keyup in ce-host mode, e.target is diffView; use selection to find real scope.
+    function getScopeFromSelection(){
+      try {
+        const sel = window.getSelection ? window.getSelection() : null;
+        const node = sel && sel.rangeCount ? sel.focusNode || sel.anchorNode : null;
+        if (!node) return null;
+        const el = node.nodeType === Node.ELEMENT_NODE ? node : (node.parentElement || null);
+        return el ? getScope(el) : null;
+      } catch(e){ return null; }
+    }
+
+    function pruneFromTarget(t, fromKeyup){
       try {
         const host = document.getElementById('diffView');
         if (!host) return;
-        if (!t || !host.contains(t)) {
-          // Fallback: if no identifiable target, scan whole diffView
-          pruneHints(host);
-          return;
-        }
-        if (t.tagName) {
+        // For keyup (ce-host), prefer selection-based scope over e.target
+        const scope = fromKeyup
+          ? (getScopeFromSelection() || (t && host.contains(t) ? getScope(t) : null) || host)
+          : (t && host.contains(t) ? getScope(t) : host);
+        if (t && t.tagName) {
           const tag = String(t.tagName).toUpperCase();
           if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
         }
-        pruneHints(getScope(t));
+        pruneHints(scope);
       } catch(e){}
     }
 
-    // input: normal typing, paste, and also fires after browser-native cut deletes content
     document.addEventListener('input', (e) => {
-      try { pruneFromTarget(e && e.target); } catch(e){}
+      try { pruneFromTarget(e && e.target, false); } catch(e){}
     }, true);
 
-    // cut: Ctrl+X — content is still present when this fires, so defer one microtask
-    // to let the browser finish deleting the selection before we check.
     document.addEventListener('cut', (e) => {
       try {
         const t = e && e.target;
-        // Use both setTimeout(0) and a direct input-event fallback for robustness
-        setTimeout(() => { try { pruneFromTarget(t); } catch(e){} }, 0);
+        setTimeout(() => { try { pruneFromTarget(t, false); } catch(e){} }, 0);
       } catch(e){}
     }, true);
 
-    // keyup for Delete/Backspace: belt-and-suspenders in case input doesn't fire
     document.addEventListener('keyup', (e) => {
       try {
         const k = e && e.key;
         if (k !== 'Delete' && k !== 'Backspace') return;
-        pruneFromTarget(e && e.target);
+        const t = e && e.target;
+        // Defer to next frame: Backspace/Delete beforeinput handlers do DOM mutations
+        // (merging lines, removing .dl rows). Wait for those to settle before pruning.
+        requestAnimationFrame(() => { try { pruneFromTarget(t, true); } catch(e){} });
       } catch(e){}
     }, true);
   })();
