@@ -2836,9 +2836,9 @@ flex-shrink:0;cursor:pointer;
       <code style="color:var(--accent);font-size:11px">D:\projects\myapp</code> 或
       <code style="color:var(--accent);font-size:11px">/Users/me/myapp</code>
     </p>
-    <input class="open-input" id="repoInput" type="text"
+    <input class="open-input" id="repoInput" type="search"
            placeholder="输入仓库路径..."
-           data-action="repoInput">
+           data-action="repoInput" autocomplete="off" autocapitalize="off" spellcheck="false">
     <button class="open-submit" data-action="openRepo">打开仓库</button>
     <div class="open-err" id="openErr"></div>
     <div style="font-size:11px;color:var(--text3);text-align:center;line-height:1.8">
@@ -29362,6 +29362,60 @@ flex-shrink:0;cursor:pointer;
         altPressed = false;
       }
     });
+  })();
+</script>
+<style>
+  .repo-history-dropdown{position:fixed;z-index:9999;max-height:260px;overflow:auto;border:1px solid var(--border);background:var(--bg2);color:var(--text);border-radius:8px;box-shadow:0 6px 24px rgba(0,0,0,.22);padding:6px}
+  .repo-history-item{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:6px;cursor:pointer;font-size:12px;line-height:1.4}
+  .repo-history-item:hover,.repo-history-item.active{background:var(--bg3)}
+  .repo-history-path{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .repo-history-del{width:18px;height:18px;display:inline-flex;align-items:center;justify-content:center;border:none;border-radius:4px;background:transparent;color:var(--text2);cursor:pointer}
+  .repo-history-del:hover{background:var(--bg4);color:var(--text)}
+  .repo-history-empty{padding:10px 6px;color:var(--text3);font-size:12px}
+  .repo-history-clear{margin-top:6px;border-top:1px solid var(--border);padding-top:6px;display:flex;justify-content:flex-end}
+  .repo-history-clear-btn{font-size:12px;color:var(--text2);background:transparent;border:none;cursor:pointer;padding:6px 8px;border-radius:6px}
+  .repo-history-clear-btn:hover{background:var(--bg3);color:var(--text)}
+</style>
+<script>
+  (function(){
+    var input=document.getElementById('repoInput');
+    if(!input)return;
+    input.setAttribute('autocomplete','off');
+    var key='repoHistory:v1';
+    function load(){
+      try{var v=JSON.parse(localStorage.getItem(key)||'[]');if(Array.isArray(v))return v.slice(0,50);return[]}catch(e){return[]}
+    }
+    function save(list){try{localStorage.setItem(key,JSON.stringify(list||[]))}catch(e){}
+    }
+    function norm(p){return (p||'').trim()}
+    function eq(a,b){return a.toLowerCase()===b.toLowerCase()}
+    function addPath(p){p=norm(p);if(!p)return;var list=load();var kept=[];for(var i=0;i<list.length;i++){if(!eq(list[i],p))kept.push(list[i])}
+      kept.unshift(p);if(kept.length>10)kept=kept.slice(0,10);save(kept)
+    }
+    var dd=null,activeIndex=-1;
+    function ensureDD(){if(dd)return dd;dd=document.createElement('div');dd.className='repo-history-dropdown';dd.style.display='none';document.body.appendChild(dd);return dd}
+    function syncThemeVars(){ensureDD();var cs=getComputedStyle(input);['--bg','--bg2','--bg3','--bg4','--text','--text2','--text3','--border','--accent'].forEach(function(v){var val=cs.getPropertyValue(v).trim();if(val){dd.style.setProperty(v,val)}})}
+    function place(){var r=input.getBoundingClientRect();var gap=6;var top=r.bottom+gap;var left=r.left;var width=r.width;var m=8;ensureDD();dd.style.top=(top)+'px';dd.style.left=(Math.max(left,m))+'px';dd.style.width=(Math.max(220,Math.min(width,Math.max(260,width))))+'px'}
+    function render(filter){ensureDD();var list=load();if(filter){var f=filter.toLowerCase();list=list.filter(function(x){return x.toLowerCase().includes(f)})}
+      dd.innerHTML='';activeIndex=-1;
+      if(list.length===0){var empty=document.createElement('div');empty.className='repo-history-empty';empty.textContent='无历史记录';dd.appendChild(empty)}
+      for(var i=0;i<list.length;i++){(function(idx){var item=document.createElement('div');item.className='repo-history-item';var span=document.createElement('div');span.className='repo-history-path';span.textContent=list[idx];var del=document.createElement('button');del.className='repo-history-del';del.setAttribute('aria-label','删除');del.textContent='×';item.appendChild(span);item.appendChild(del);item.addEventListener('mousedown',function(e){e.preventDefault()});item.addEventListener('click',function(){input.value=list[idx];hide();input.dispatchEvent(new Event('input',{bubbles:true}))});del.addEventListener('click',function(e){e.stopPropagation();var cur=load().filter(function(x){return !eq(x,list[idx])});save(cur);render(filter)});dd.appendChild(item)})(i)}
+      var bar=document.createElement('div');bar.className='repo-history-clear';var btn=document.createElement('button');btn.className='repo-history-clear-btn';btn.textContent='清空历史';btn.addEventListener('click',function(e){e.stopPropagation();save([]);render(filter)});bar.appendChild(btn);dd.appendChild(bar)
+    }
+    function show(filter){render(filter||norm(input.value));syncThemeVars();place();dd.style.display='block'}
+    function hide(){if(dd)dd.style.display='none';activeIndex=-1}
+    function isShown(){return dd&&dd.style.display==='block'}
+    input.addEventListener('focus',function(){show()});
+    input.addEventListener('input',function(){show(input.value)});
+    input.addEventListener('blur',function(){setTimeout(hide,120)});
+    window.addEventListener('resize',function(){if(isShown())place()});
+    window.addEventListener('scroll',function(){if(isShown())place()},{passive:true});
+    document.addEventListener('click',function(e){if(!dd)return;var t=e.target;var inside=t===dd||dd.contains(t)||t===input; if(!inside)hide()});
+    function updateActive(newIndex){var items=dd.querySelectorAll('.repo-history-item');for(var i=0;i<items.length;i++){items[i].classList.toggle('active',i===newIndex)}activeIndex=newIndex}
+    input.addEventListener('keydown',function(e){if(!isShown())return;var items=dd.querySelectorAll('.repo-history-item');if(e.key==='ArrowDown'){e.preventDefault();if(items.length===0)return;var ni=(activeIndex+1)%items.length;updateActive(ni)}else if(e.key==='ArrowUp'){e.preventDefault();if(items.length===0)return;var ni=(activeIndex-1+items.length)%items.length;updateActive(ni)}else if(e.key==='Enter'){if(activeIndex>=0&&activeIndex<items.length){e.preventDefault();items[activeIndex].click()}}else if(e.key==='Escape'){hide()}});
+    var openBtn=document.querySelector('[data-action="openRepo"]');
+    if(openBtn){openBtn.addEventListener('click',function(){var v=norm(input.value);if(v)addPath(v)})}
+    input.addEventListener('keydown',function(e){if(e.key==='Enter'){var v=norm(input.value);if(v)addPath(v)}});
   })();
 </script>
 </body>

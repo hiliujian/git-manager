@@ -19,10 +19,14 @@
     "done": "完成"
   },
   "features": {
+    "ai_stream": true,
     "memory_enabled": true,
     "tool_memory_enabled": true,
     "tool_cache_enabled": true,
-    "context_refs_enabled": true
+    "context_refs_enabled": true,
+    "web_search_enabled": true,
+    "topic_isolation_enabled": true,
+    "browser_auto_screenshot": true
   },
   "system_context_extra": "",
   "capabilities": {
@@ -37,9 +41,86 @@
     "tool_log_items": 80,
     "tool_cache_items": 120
   },
+  "limits": {
+    "ai_max_input_tokens": 24000,
+    "ai_max_output_tokens": 2048,
+    "max_post_body_bytes": 10485760
+  },
   "agent": {
     "mode": "hivo_agent",
-    "system_prompt": "你是 Hivo AI（Git Manager 内置智能助手）。你必须严格遵守工具调用协议：\n\n1) 当需要读取/写入/搜索/修改文件或获取系统信息时，必须调用系统提供的 Agent Tools。\n2) 工具调用必须输出【单个 JSON 对象或 JSON 数组】（UTF-8 纯文本），例如：{\"type\":\"file_content\",\"path\":\"server.py\"}。\n3) 严禁输出任何伪造的工具标记或模板文本，例如 <|tool_calls_section_begin|>、<|tool_call_begin|>、functions.xxx:3 等；这些都是无效文本，会导致工具无法执行。\n4) 输出工具 JSON 时不得夹带解释性自然语言；工具 JSON 与自然语言解释必须分开：先工具 JSON，工具执行结果返回后再解释。\n\n可用工具与 required 字段以系统上下文中的 Agent Tools 列表为准。\n\n示例：\n- 需要查找文件：\n[{\"type\":\"find_files\",\"name\":\"insertion_sort.py\"}]\n- 需要读取文件内容：\n[{\"type\":\"file_content\",\"path\":\"insertion_sort.py\"}]\n- 需要保存文件：\n[{\"type\":\"save_file\",\"path\":\"a.py\",\"content\":\"print('hi')\"}]\n",
+    "system_prompt": "你是 Hivo AI（Git Manager 内置智能助手）。你必须严格遵守工具调用协议：\n\n1) 当需要读取/写入/搜索/修改文件或获取系统信息时，必须调用系统提供的 Agent Tools。\n2) 工具调用必须输出【单个 JSON 对象或 JSON 数组】（UTF-8 纯文本），例如：{\"type\":\"file_content\",\"path\":\"server.py\"}。\n3) 严禁输出任何伪造的工具标记或模板文本，例如 <|tool_calls_section_begin|>、<|tool_call_begin|>、functions.xxx:3 等；这些都是无效文本，会导致工具无法执行。\n4) 输出工具 JSON 时不得夹带解释性自然语言；工具 JSON 与自然语言解释必须分开：先工具 JSON，工具执行结果返回后再解释。\n\n可用工具与 required 字段以系统上下文中的 Agent Tools 列表为准。\n\n示例：\n- 需要查找文件：\n[{\"type\":\"find_files\",\"name\":\"insertion_sort.py\"}]\n- 需要读取文件内容：\n[{\"type\":\"file_content\",\"path\":\"insertion_sort.py\"}]\n- 需要保存文件：\n[{\"type\":\"save_file\",\"path\":\"a.py\",\"content\":\"print('hi')\"}]\n\n【附件优先】若用户上传了附件（图片/文档/媒体），请优先、直接基于附件内容回答：首轮禁止调用任何工具（如查找/读取仓库文件、web 搜索等）；仅当附件不足以完成任务、且确有需要时，再向用户说明并征得同意后再使用工具。",
     "tools": []
+  },
+  "profiles": [
+    {
+      "id": "19e6d6b69b2cc3bc51586a948",
+      "name": "astron-code-latest",
+      "base_url": "https://maas-coding-api.cn-huabei-1.xf-yun.com/v2",
+      "api_key": "272e832cb4530c280a1b8c71fb120396:YWY5ZjllYmEzNmE0MWNhNTU2M2U4OTg4",
+      "model": "astron-code-latest",
+      "supports_vision": true
+    },
+    {
+      "id": "19dafe80e098e03dd21eb79e",
+      "name": "qwen/qwen2.5-coder-32b-instruct",
+      "base_url": "https://integrate.api.nvidia.com/v1",
+      "api_key": "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",
+      "model": "qwen/qwen3-coder-480b-a35b-instruct",
+      "supports_vision": false
+    },
+    {
+      "id": "19dafba43ea4ee677b56d8cc8",
+      "name": "qwen/qwen3.5-397b-a17b",
+      "base_url": "https://integrate.api.nvidia.com/v1",
+      "api_key": "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",
+      "model": "qwen/qwen3.5-397b-a17b",
+      "supports_vision": false
+    },
+    {
+      "id": "19d9661ec9ff35423d948347",
+      "name": "meta/llama-3.3-70b-instruct",
+      "base_url": "https://integrate.api.nvidia.com/v1",
+      "api_key": "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",
+      "model": "meta/llama-3.3-70b-instruct",
+      "supports_vision": false
+    },
+    {
+      "id": "19d955ec3eef361012e809988",
+      "name": "moonshotai/kimi-k2.5",
+      "base_url": "https://integrate.api.nvidia.com/v1",
+      "api_key": "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",
+      "model": "moonshotai/kimi-k2.6",
+      "supports_vision": false
+    },
+    {
+      "id": "19d955e697ebf4aa8d954bbb8",
+      "name": "deepseek-ai/deepseek-v3.2",
+      "base_url": "https://integrate.api.nvidia.com/v1",
+      "api_key": "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",
+      "model": "deepseek-ai/deepseek-v4-flash",
+      "supports_vision": false
+    },
+    {
+      "id": "19d955e0736f865d0766d6ff",
+      "name": "openai/gpt-oss-120b",
+      "base_url": "https://integrate.api.nvidia.com/v1",
+      "api_key": "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",
+      "model": "openai/gpt-oss-120b",
+      "supports_vision": false
+    }
+  ],
+  "active_profile_id": "19e6d6b69b2cc3bc51586a948",
+  "web_search": {
+    "active_profile_id": "default",
+    "profiles": [
+      {
+        "id": "default",
+        "provider": "tavily",
+        "api_key": "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",
+        "base_url": "https://api.tavily.com/search",
+        "timeout": 20,
+        "top_k": 5
+      }
+    ]
   }
 }
