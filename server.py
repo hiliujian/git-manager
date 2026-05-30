@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+        #!/usr/bin/env python3
 """
 Git Manager Backend — 完整修复版 + 完善日志系统 + WebSocket实时通信
 python3 server.py  →  http://localhost:7842
@@ -25,8 +25,10 @@ try:
     WEBSOCKET_AVAILABLE = True
 except ImportError:
     WEBSOCKET_AVAILABLE = False
-    print("警告: websockets 库未安装，WebSocket功能将不可用")
-    print("安装方法: pip install websockets")
+    try:
+        logger.warning("websockets 库未安装，WebSocket 功能将不可用 (pip install websockets)")
+    except Exception:
+        pass
 
 try:
     from websockets.exceptions import ConnectionClosed  # type: ignore
@@ -38,8 +40,10 @@ try:
     CHARDET_AVAILABLE = True
 except ImportError:
     CHARDET_AVAILABLE = False
-    print("提示: chardet 库未安装，中文编码检测可能不够准确")
-    print("安装方法: pip install chardet")
+    try:
+        logger.warning("chardet 库未安装，中文编码检测可能不够准确 (pip install chardet)")
+    except Exception:
+        pass
 
 try:
     from playwright.sync_api import sync_playwright  # type: ignore
@@ -473,6 +477,8 @@ def _undo_load_state():
         p = _undo_state_path()
         if not p.exists():
             return
+
+        
         raw = p.read_text(encoding="utf-8")
         data = json.loads(raw or "{}")
         order = data.get("order")
@@ -2383,6 +2389,20 @@ def _hivo_ws_emit_final(run_id: str, session_id: str, content: str, ok: bool = T
         }
         if isinstance(extra, dict):
             payload.update(extra)
+        broadcast_to_clients(payload)
+    except Exception as e:
+        logger.debug(f"Exception ignored: {e}")
+
+
+def _hivo_ws_emit_delta(run_id: str, session_id: str, delta: str):
+    try:
+        payload = {
+            "type": "ai_agent_delta",
+            "run_id": str(run_id or ""),
+            "session_id": str(session_id or ""),
+            "delta": str(delta or ""),
+            "ts": time.time(),
+        }
         broadcast_to_clients(payload)
     except Exception as e:
         logger.debug(f"Exception ignored: {e}")
@@ -4718,6 +4738,27 @@ def _hivo_ai_clean_messages(messages: list, limit: int):
             ug = str(m.get("undo_gid") or "").strip()
             if ug:
                 item["undo_gid"] = ug
+            # persist sanitized _attMeta for reliable client render after reload (preserve url if present)
+            try:
+                meta_in = m.get("_attMeta")
+                if isinstance(meta_in, list) and meta_in:
+                    meta_out = []
+                    for a in meta_in:
+                        if not isinstance(a, dict):
+                            continue
+                        o = {
+                            "name": str(a.get("name") or "file"),
+                            "mime": str(a.get("mime") or ""),
+                            "size": int(a.get("size") or 0),
+                        }
+                        u = str(a.get("url") or "").strip()
+                        if u:
+                            o["url"] = u
+                        meta_out.append(o)
+                    if meta_out:
+                        item["_attMeta"] = meta_out
+            except Exception:
+                pass
         cleaned.append(item)
     lim = int(limit) if str(limit).strip() else 80
     if lim < 10:
@@ -4959,6 +5000,67 @@ def delete_ai_session(profile_id: str, session_id: str):
     sess = node.get("sessions")
     if not isinstance(sess, list):
         return False, "会话不存在"
+    # Collect attachments to delete for this session before removing it (best-effort)
+    try:
+        target_session = next((x for x in sess if isinstance(x, dict) and str(x.get("id") or "").strip() == sid), None)
+        att_paths = []
+        if isinstance(target_session, dict):
+            msgs = target_session.get("messages")
+            if isinstance(msgs, list):
+                for m in msgs:
+                    if not isinstance(m, dict):
+                        continue
+                    if str(m.get("role") or "").strip() != "user":
+                        continue
+                    meta = m.get("_attMeta")
+                    if not isinstance(meta, list):
+                        continue
+                    for a in meta:
+                        if not isinstance(a, dict):
+                            continue
+                        u = str(a.get("url") or "").strip()
+                        if not u:
+                            continue
+                        # Extract attachments relative path
+                        rel = ""
+                        if "/api/ai_attachment" in u and "path=" in u:
+                            try:
+                                from urllib.parse import urlparse, parse_qs
+                                pr = urlparse(u)
+                                qs = parse_qs(pr.query or "")
+                                p0 = qs.get("path")
+                                if isinstance(p0, list) and p0:
+                                    rel = str(p0[0] or "").strip()
+                            except Exception:
+                                rel = ""
+                        elif u.startswith("attachments/"):
+                            rel = u
+                        if not rel:
+                            continue
+                        # Normalize and ensure it's inside the attachments directory
+                        base_dir = os.path.join(str(_hivo_ai_data_dir()), "attachments")
+                        full = os.path.abspath(os.path.join(str(_hivo_ai_data_dir()), rel))
+                        base_abs = os.path.abspath(base_dir)
+                        if full.startswith(base_abs):
+                            att_paths.append(full)
+        # Delete files (dedup)
+        seen = set()
+        removed = 0
+        for pth in att_paths:
+            if not pth or pth in seen:
+                continue
+            seen.add(pth)
+            try:
+                if os.path.isfile(pth):
+                    os.remove(pth)
+                    removed += 1
+            except Exception:
+                pass
+        if removed:
+            logger.info(f"删除会话 {sid} 同步清理附件文件 {removed} 个")
+    except Exception:
+        # ignore cleanup errors
+        pass
     new_sess = [x for x in sess if isinstance(x, dict) and str(x.get("id") or "").strip() != sid]
     if len(new_sess) == len(sess):
         return False, "会话不存在"
@@ -5043,6 +5145,27 @@ def load_ai_chat_history(profile_id: str, limit: int = 40, session_id: str | Non
                 ug = str(m.get("undo_gid") or "").strip()
                 if ug:
                     item["undo_gid"] = ug
+                # include stored _attMeta so client can render without local cache
+                meta_in = m.get("_attMeta")
+                if isinstance(meta_in, list) and meta_in:
+                    try:
+                        meta_out = []
+                        for a in meta_in:
+                            if not isinstance(a, dict):
+                                continue
+                            o = {
+                                "name": str(a.get("name") or "file"),
+                                "mime": str(a.get("mime") or ""),
+                                "size": int(a.get("size") or 0),
+                            }
+                            u = str(a.get("url") or "").strip()
+                            if u:
+                                o["url"] = u
+                            meta_out.append(o)
+                        if meta_out:
+                            item["_attMeta"] = meta_out
+                    except Exception:
+                        pass
             out.append(item)
         return out
     return []
@@ -5111,7 +5234,18 @@ def load_hivo_ai_config():
         if "active_profile_id" not in data:
             data["active_profile_id"] = ""
         if "features" not in data or not isinstance(data.get("features"), dict):
-            data["features"] = {"web_search_enabled": False}
+            data["features"] = {"web_search_enabled": False, "ai_stream": True}
+        # Default: enable streaming when possible.
+        if "ai_stream" not in data.get("features"):
+            data["features"]["ai_stream"] = True
+
+        # Backward compatible top-level switch: {"stream": true/false}
+        # If present, map into features.ai_stream.
+        if "stream" in data and "ai_stream" in data.get("features"):
+            try:
+                data["features"]["ai_stream"] = bool(data.get("stream"))
+            except Exception:
+                pass
         if "web_search" not in data or not isinstance(data.get("web_search"), dict):
             data["web_search"] = {"active_profile_id": "", "profiles": []}
 
@@ -5126,7 +5260,7 @@ def load_hivo_ai_config():
         data["active_profile_id"] = ""
         return data
     except Exception:
-        return {"active_profile_id": "", "profiles": [], "features": {"web_search_enabled": False}, "web_search": {"active_profile_id": "", "profiles": []}}
+        return {"active_profile_id": "", "profiles": [], "features": {"web_search_enabled": False, "ai_stream": True}, "web_search": {"active_profile_id": "", "profiles": []}}
 
 
 def get_workspace_context(max_entries: int = 80):
@@ -5230,6 +5364,7 @@ def save_hivo_ai_config(cfg: dict):
             base_url = str(p0.get("base_url") or p0.get("endpoint") or "").strip()
             api_key = str(p0.get("api_key") or "")
             model = str(p0.get("model") or "").strip()
+            supports_vision = bool(p0.get("supports_vision", False))
             if not pid:
                 pid = uuid.uuid4().hex
             if not name:
@@ -5240,6 +5375,7 @@ def save_hivo_ai_config(cfg: dict):
                 "base_url": base_url,
                 "api_key": api_key,
                 "model": model,
+                "supports_vision": supports_vision,
             })
 
         active = str(cfg.get("active_profile_id") or "").strip()
@@ -5261,6 +5397,7 @@ def save_hivo_ai_config(cfg: dict):
             "base_url": base_url,
             "api_key": api_key,
             "model": model,
+            "supports_vision": bool(cfg.get("supports_vision", False)),
         }]
 
     # Persist web search config together with ai config (same file).
@@ -5270,6 +5407,8 @@ def save_hivo_ai_config(cfg: dict):
             base_cfg["features"] = {}
         if isinstance(features_in, dict) and "web_search_enabled" in features_in:
             base_cfg["features"]["web_search_enabled"] = bool(features_in.get("web_search_enabled"))
+        if isinstance(features_in, dict) and "ai_stream" in features_in:
+            base_cfg["features"]["ai_stream"] = bool(features_in.get("ai_stream"))
     except Exception as e:
         logger.debug(f"Exception ignored: {e}")
 
@@ -5326,6 +5465,10 @@ def _ai_build_chat_url(base_url: str):
     # If user provides full path, use it.
     if u.endswith("/chat/completions") or u.endswith("/v1/chat/completions"):
         return u
+    # If user provides an explicit version path (e.g. /v1, /v2), do not force /v1.
+    m = re.search(r"/v\d+$", u)
+    if m:
+        return u + "/chat/completions"
     if u.endswith("/v1"):
         return u + "/chat/completions"
     return u + "/v1/chat/completions"
@@ -6262,6 +6405,17 @@ def _ai_pick_profile(cfg: dict, profile_id: str | None):
 
 
 def _ai_estimate_text_tokens(text: str):
+    if isinstance(text, list):
+        try:
+            s2 = ""
+            for p in text:
+                if not isinstance(p, dict):
+                    continue
+                if str(p.get("type") or "") == "text":
+                    s2 += str(p.get("text") or "")
+            text = s2
+        except Exception:
+            text = ""
     s = str(text or "")
     if not s:
         return 0
@@ -6351,6 +6505,8 @@ def _ai_trim_messages_to_budget(messages: list, max_total_tokens: int, reserve_o
             changed = False
             for i in range(1, len(sys_msgs)):
                 m = out[i]
+                if not isinstance(m.get("content"), str):
+                    continue
                 cur_t = _ai_estimate_text_tokens(m.get("content"))
                 if cur_t <= 0:
                     continue
@@ -6372,6 +6528,8 @@ def _ai_trim_messages_to_budget(messages: list, max_total_tokens: int, reserve_o
             for i in range(len(sys_msgs), len(out)):
                 m = out[i]
                 if str(m.get("role") or "") != prefer_role:
+                    continue
+                if not isinstance(m.get("content"), str):
                     continue
                 ct = _ai_estimate_text_tokens(m.get("content"))
                 if ct > best_t:
@@ -6412,6 +6570,8 @@ def _ai_trim_messages_to_budget(messages: list, max_total_tokens: int, reserve_o
             for i in range(len(sys_msgs), len(out)):
                 if str(out[i].get("role") or "") == "user":
                     m = out[i]
+                    if not isinstance(m.get("content"), str):
+                        return False
                     cur_t = _ai_estimate_text_tokens(m.get("content"))
                     if cur_t <= 0:
                         return False
@@ -6448,7 +6608,7 @@ def _ai_trim_messages_to_budget(messages: list, max_total_tokens: int, reserve_o
         return messages if isinstance(messages, list) else []
 
 
-def ai_chat(messages: list, temperature: float | None = None, profile_id: str | None = None, timeout_s: int = 60):
+def ai_chat(messages: list, temperature: float | None = None, profile_id: str | None = None, timeout_s: int = 60, stream: bool = False, on_delta=None):
     with ai_config_lock:
         cfg = load_hivo_ai_config()
     prof = _ai_pick_profile(cfg, profile_id)
@@ -6499,6 +6659,9 @@ def ai_chat(messages: list, temperature: float | None = None, profile_id: str | 
     if max_output_tokens > 0:
         payload["max_tokens"] = max_output_tokens
 
+    if stream:
+        payload["stream"] = True
+
     headers = {
         "Content-Type": "application/json",
         "Connection": "close",
@@ -6521,8 +6684,50 @@ def ai_chat(messages: list, temperature: float | None = None, profile_id: str | 
         https_handler = urllib.request.HTTPSHandler(context=_AI_SSL_CONTEXT) if _AI_SSL_CONTEXT else urllib.request.HTTPSHandler()
         opener = urllib.request.build_opener(https_handler)
         with opener.open(req, timeout=tmo) as resp:
+            if stream:
+                # OpenAI-compatible streaming: SSE lines like "data: {json}\n\n" and terminator "data: [DONE]".
+                parts = []
+                while True:
+                    try:
+                        line_b = resp.readline()
+                    except Exception:
+                        break
+                    if not line_b:
+                        break
+                    line = line_b.decode("utf-8", errors="replace").strip()
+                    if not line:
+                        continue
+                    if not line.startswith("data:"):
+                        continue
+                    chunk = line[len("data:"):].strip()
+                    if chunk == "[DONE]":
+                        break
+                    try:
+                        j = json.loads(chunk)
+                    except Exception:
+                        continue
+                    try:
+                        delta = (((j.get("choices") or [{}])[0].get("delta") or {}).get("content"))
+                    except Exception:
+                        delta = None
+                    if delta:
+                        parts.append(str(delta))
+                        try:
+                            if callable(on_delta):
+                                on_delta(str(delta))
+                        except Exception as e:
+                            logger.debug(f"Exception ignored: {e}")
+                content = "".join(parts)
+                return True, "", {"content": content, "raw": {"stream": True}}
+
             raw = resp.read().decode("utf-8", errors="replace")
-            data = json.loads(raw or "{}")
+            try:
+                data = json.loads(raw or "{}")
+            except Exception as e:
+                snip = (raw or "").strip()
+                if len(snip) > 400:
+                    snip = snip[:400] + "…"
+                return False, f"上游响应不是有效 JSON: {e}; snippet={snip}", None
     except urllib.error.HTTPError as e:
         try:
             body = e.read().decode("utf-8", errors="replace")
@@ -7738,7 +7943,7 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
     return False, f"unsupported tool: {t}", {}
 
 
-def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str, history_messages: list | None = None, dyn_context: str = "", undo_gid: str = ""):
+def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str, history_messages: list | None = None, dyn_context: str = "", undo_gid: str = "", attachments: list | None = None):
     cfg = _hivo_load_cfg()
     agent_conf = _hivo_agent_conf(cfg)
     mem_conf = _hivo_mem_conf(cfg)
@@ -7820,7 +8025,12 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
                 role = str(m.get("role") or "").strip()
                 if role not in ("user", "assistant"):
                     continue
-                content = str(m.get("content") or "")
+                c0 = m.get("content")
+                if isinstance(c0, list):
+                    # keep multimodal parts as-is
+                    hist.append({"role": role, "content": c0})
+                    continue
+                content = str(c0 or "")
                 if not content:
                     continue
                 hist.append({"role": role, "content": content})
@@ -7834,7 +8044,11 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
                     continue
                 if bool(m.get("pending")) and role == "assistant":
                     continue
-                content = str(m.get("content") or "")
+                c0 = m.get("content")
+                if isinstance(c0, list):
+                    hist.append({"role": role, "content": c0})
+                    continue
+                content = str(c0 or "")
                 if not content:
                     continue
                 hist.append({"role": role, "content": content})
@@ -7850,8 +8064,116 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
     if keep_n > 0 and len(hist) > keep_n:
         hist = hist[-keep_n:]
 
+    def _profile_supports_vision(cfg0: dict, pid0: str):
+        try:
+            prof0 = _ai_pick_profile(cfg0, pid0)
+        except Exception:
+            prof0 = None
+        try:
+            if isinstance(prof0, dict) and ("supports_vision" in prof0):
+                return bool(prof0.get("supports_vision"))
+        except Exception:
+            pass
+        try:
+            model0 = str((prof0 or {}).get("model") or "").lower()
+            if "vision" in model0 or "-vl" in model0 or "vl-" in model0 or "qwen-vl" in model0:
+                return True
+        except Exception:
+            return False
+        return False
+
+    def _format_attachments_as_text(att0: list):
+        try:
+            items = []
+            for a in (att0 or []):
+                if not isinstance(a, dict):
+                    continue
+                nm = str(a.get("name") or "").strip() or "file"
+                mime = str(a.get("mime") or "").strip()
+                try:
+                    sz = int(a.get("size") or 0)
+                except Exception:
+                    sz = 0
+                items.append(f"- {nm} ({mime or 'unknown'}, {sz} bytes)")
+            if not items:
+                return ""
+            return "【附件】\n" + "\n".join(items)
+        except Exception:
+            return ""
+
+    def _format_text_attachments(att0: list):
+        try:
+            blocks = []
+            for a in (att0 or []):
+                if not isinstance(a, dict):
+                    continue
+                t = a.get("text")
+                if t is None:
+                    continue
+                nm = str(a.get("name") or "").strip() or "file"
+                mime = str(a.get("mime") or "").strip() or "text/plain"
+                s = str(t or "")
+                if not s.strip():
+                    continue
+                # avoid huge prompt injection
+                if len(s) > 8000:
+                    s = s[:8000] + "\n...（已截断）..."
+                blocks.append(f"【文件：{nm} / {mime}】\n{s}")
+            return "\n\n".join(blocks).strip()
+        except Exception:
+            return ""
+
+    # Normalize attachments once and detect if any meaningful content is present
+    atts = attachments if isinstance(attachments, list) else []
+    def _has_meaningful_attachments(arr:list):
+        try:
+            for a in (arr or []):
+                if not isinstance(a, dict):
+                    continue
+                u = str(a.get("url") or a.get("data_url") or "").strip()
+                t = a.get("text")
+                if u or (isinstance(t, str) and t.strip()):
+                    return True
+        except Exception:
+            pass
+        return False
+    attachments_present = _has_meaningful_attachments(atts)
+
     if user_text:
-        hist.append({"role": "user", "content": str(user_text)})
+        if atts:
+            # 统一采用现有“查看文件”工具链：不再注入 image_url，多模态改为通过工具按需读取。
+            # 1) 系统提示：声明附件并说明查看方式（含可用链接）
+            try:
+                lines = []
+                for a in atts:
+                    if not isinstance(a, dict):
+                        continue
+                    nm = str(a.get("name") or "file").strip() or "file"
+                    mime = str(a.get("mime") or "").strip()
+                    url_http = str(a.get("url") or a.get("data_url") or "").strip()
+                    if url_http:
+                        lines.append(f"- {nm} ({mime or 'unknown'}): {url_http}")
+                    else:
+                        lines.append(f"- {nm} ({mime or 'unknown'})")
+            except Exception:
+                lines = []
+            sys_hint = (
+                "【附件说明】本轮对话包含用户上传的附件。请基于附件内容回答问题。\n"
+                "如需查看具体内容，请使用系统提供的‘查看文件’工具读取上列链接对应的文件；\n"
+                "若模型或当前环境不支持工具调用，请明确告知受限之处，并仅基于可见信息给出分析。"
+            )
+            if lines:
+                sys_hint = (sys_hint + "\n附件清单:\n" + "\n".join(lines)).strip()
+            hist.append({"role": "system", "content": sys_hint})
+
+            # 2) 用户消息：保留用户文本，并内联文本型附件（便于无需工具即可参考）
+            txt_files = _format_text_attachments(atts)
+            txt = str(user_text)
+            if txt_files:
+                txt = (txt + "\n\n" + txt_files).strip()
+            hist.append({"role": "user", "content": txt})
+        else:
+            hist.append({"role": "user", "content": str(user_text)})
 
     sys_text = ""
     try:
@@ -7867,22 +8189,75 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
         sys_text = sys_text.strip() + "\n\n" + tool_ctx
     elif not sys_text.strip():
         sys_text = tool_ctx
+    # 补充：标准工具调用范式（减少调用歧义，统一结构）
+    tool_examples = (
+        "【工具使用范式（示例）】\n"
+        "- file_content（读取文件全文）：{\"type\":\"file_content\", \"path\":\"相对或绝对路径\"} 或 {\"type\":\"file_content\", \"url\":\"http(s)/api 链接\"}\n"
+        "- read_file_range（读取行范围）：{\"type\":\"read_file_range\", \"path\":\"路径\", \"start\":1, \"end\":200}\n"
+        "- list_dir_tree（目录树）：{\"type\":\"list_dir_tree\", \"path\":\"目录\", \"depth\":4, \"max_entries\":600}\n"
+        "- search_code（代码搜索）：{\"type\":\"search_code\", \"query\":\"关键词\", \"case_sensitive\":false, \"max_results\":50}\n"
+        "- find_files（按名找文件）：{\"type\":\"find_files\", \"name\":\"文件名或片段\"}\n"
+        "- list_files（最近文件变化缓存）：{\"type\":\"list_files\", \"max_age\": 0}\n"
+        "- diff_file（单文件 diff）：{\"type\":\"diff_file\", \"path\":\"文件路径\", \"ctx_lines\": 3}\n"
+        "- staged_files（暂存区列表）：{\"type\":\"staged_files\"}\n"
+        "- stash_list（查看 stash）：{\"type\":\"stash_list\"}；stash_drop：{\"type\":\"stash_drop\", \"ref\":\"stash@{0}\"}\n"
+        "- unstage_file（取消暂存单文件）：{\"type\":\"unstage_file\", \"path\":\"文件路径\"}\n"
+        "- discard_staged_file（丢弃暂存修改）：{\"type\":\"discard_staged_file\", \"path\":\"文件路径\"}\n"
+        "- unstage_all_staged（取消全部暂存）：{\"type\":\"unstage_all_staged\"}；discard_all_staged：{\"type\":\"discard_all_staged\"}\n"
+        "- raw_file（二进制/原样）：{\"type\":\"raw_file\", \"path\":\"文件路径\"}\n"
+        "- save_file（保存文件）：{\"type\":\"save_file\", \"path\":\"文件路径\", \"content\":\"新内容\"}\n"
+        "- delete_file（删除文件）：{\"type\":\"delete_file\", \"path\":\"文件路径\"}\n"
+        "- rename_file（重命名/移动）：{\"type\":\"rename_file\", \"old_path\":\"旧\", \"new_path\":\"新\"}\n"
+        "- status（仓库状态）：{\"type\":\"status\"}；open_repo：{\"type\":\"open_repo\", \"path\":\"仓库路径\"}；set_origin：{\"type\":\"set_origin\", \"url\":\"git 地址\"}\n"
+        "- workspace_context（工作区上下文）：{\"type\":\"workspace_context\"}；open_file：{\"type\":\"open_file\", \"path\":\"文件\", \"view\":\"editor\"}\n"
+        "- run_cmd（运行命令）：{\"type\":\"run_cmd\", \"cmd\":\"git status\", \"timeout\":30, \"cwd\":\"可选\"}\n"
+        "- web_search（站外搜索）：{\"type\":\"web_search\", \"query\":\"关键词\", \"top_k\":5, \"timeout\":20}；web_fetch：{\"type\":\"web_fetch\", \"url\":\"https://...\", \"timeout\":20}\n"
+        "- verify_python（语法校验）：{\"type\":\"verify_python\", \"files\":[\"server.py\"]}\n"
+        "- switch_branch（切换分支）：{\"type\":\"switch_branch\", \"branch\":\"feature/x\"}；commit_and_switch：{\"type\":\"commit_and_switch\", \"message\":\"WIP\", \"branch\":\"feature/x\"}\n"
+        "- undo（撤销上一组操作）：{\"type\":\"undo\"}\n"
+        "说明：务必输出严格 JSON（不要多余文本/注释）。路径不明确时先 find_files/search_code；读取大文件建议用 read_file_range 分段。若需读取用户上传的附件，请优先使用 file_content 的 url 参数。"
+    )
     sys0 = {"role": "system", "content": sys_text}
     msgs = [sys0]
+    msgs.append({"role": "system", "content": tool_examples})
     if long_summary:
         msgs.append({"role": "system", "content": long_summary})
     if tool_mem_block:
         msgs.append({"role": "system", "content": tool_mem_block})
     if dyn_context and str(dyn_context).strip():
         msgs.append({"role": "system", "content": str(dyn_context)})
+    # 若存在附件：补充一条系统指导，鼓励按需使用“查看文件”工具读取附件内容，避免幻觉。
+    if attachments_present:
+        try:
+            attach_sys = (
+                "【附件读取指引】当前会话包含附件。你可以在需要时调用系统的‘查看文件’工具来读取附件内容，再基于真实内容回答；"
+                "若工具不可用，请说明限制并基于已知信息回答，避免编造文件内容。"
+            )
+            msgs.append({"role": "system", "content": attach_sys})
+        except Exception:
+            pass
     msgs.extend(hist)
 
     _hivo_ws_emit(run_id, session_id, "sending", _hivo_status_message(cfg, "sending"))
 
+    try:
+        feat = cfg.get("features") if isinstance(cfg, dict) else None
+        feat = feat if isinstance(feat, dict) else {}
+        ai_stream_enabled = bool(feat.get("ai_stream", True))
+    except Exception:
+        ai_stream_enabled = True
+
     if str(agent_conf.get("mode") or "").strip() == "fallback_chat":
         _hivo_ws_emit(run_id, session_id, "thinking", _hivo_status_message(cfg, "thinking"))
         rem = max(5, int(agent_deadline - time.time()))
-        ok, msg, result = ai_chat(msgs, temperature=None, profile_id=profile_id, timeout_s=min(llm_timeout_s, rem))
+        ok, msg, result = ai_chat(
+            msgs,
+            temperature=None,
+            profile_id=profile_id,
+            timeout_s=min(llm_timeout_s, rem),
+            stream=ai_stream_enabled,
+            on_delta=(lambda d: _hivo_ws_emit_delta(run_id, session_id, d)) if ai_stream_enabled else None,
+        )
         if not ok:
             err = msg or "对话失败"
             _hivo_ws_emit(run_id, session_id, "error", err)
@@ -7892,6 +8267,11 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
                 _hivo_ws_emit_final(run_id, session_id, err, ok=False, extra={"rounds": 1})
             return False, err, run_id
         content = str((result or {}).get("content") or "")
+        if not content.strip():
+            err = "模型未返回任何内容，请重试或更换模型。"
+            _hivo_ws_emit(run_id, session_id, "error", err)
+            _hivo_ws_emit_final(run_id, session_id, err, ok=False, extra={"rounds": 1})
+            return False, err, run_id
         try:
             if user_text:
                 st_chat = st.get("chat") if isinstance(st.get("chat"), list) else []
@@ -7932,7 +8312,14 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
             _hivo_ws_emit_final(run_id, session_id, final, ok=False, extra={"rounds": round_i + 1, "can_continue": True, "continue_reason": "cancelled"})
             return False, final, run_id
         rem = max(5, int(agent_deadline - time.time()))
-        ok, msg, result = ai_chat(msgs, temperature=None, profile_id=profile_id, timeout_s=min(llm_timeout_s, rem))
+        ok, msg, result = ai_chat(
+            msgs,
+            temperature=None,
+            profile_id=profile_id,
+            timeout_s=min(llm_timeout_s, rem),
+            stream=ai_stream_enabled,
+            on_delta=(lambda d: _hivo_ws_emit_delta(run_id, session_id, d)) if ai_stream_enabled else None,
+        )
         if not ok:
             err = msg or "对话失败"
             _hivo_ws_emit(run_id, session_id, "error", err)
@@ -7943,7 +8330,13 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
             return False, err, run_id
 
         content = str((result or {}).get("content") or "")
+        if not content.strip():
+            err = "模型未返回任何内容，请重试或更换模型。"
+            _hivo_ws_emit(run_id, session_id, "error", err)
+            _hivo_ws_emit_final(run_id, session_id, err, ok=False, extra={"rounds": round_i + 1})
+            return False, err, run_id
         calls = _hivo_extract_tool_calls(content, max_calls=max_calls)
+        # 允许在首轮即按需调用“查看文件”等工具读取附件内容，避免因抑制导致无法查看附件。
         allow = agent_conf.get("tools")
         if isinstance(allow, list) and allow:
             allow_set = set(str(x).strip() for x in allow if str(x).strip())
@@ -9591,6 +9984,39 @@ class Handler(BaseHTTPRequestHandler):
                 info = list_ai_sessions(pid)
             self.send_json({"ok": True, "active_session_id": info.get("active_session_id"), "sessions": info.get("sessions")})
 
+        elif p == "/api/ai_attachment":
+            # Serve files saved by /api/ai_store_attachments
+            try:
+                rel = qget("path") or ""
+                rel = str(rel or "").replace("\\", "/").lstrip("/")
+                if not rel.startswith("attachments/"):
+                    self.send_json({"error": "非法路径"}, 400)
+                    return
+                base = _hivo_ai_data_dir()
+                full = os.path.join(str(base), rel)
+                full = os.path.abspath(full)
+                # Ensure inside data dir
+                if not full.startswith(os.path.abspath(str(base))):
+                    self.send_json({"error": "非法路径"}, 400)
+                    return
+                if (not os.path.exists(full)) or (not os.path.isfile(full)):
+                    self.send_json({"error": "文件不存在"}, 404)
+                    return
+                ctype, _ = mimetypes.guess_type(full)
+                ctype = ctype or "application/octet-stream"
+                try:
+                    with open(full, "rb") as f:
+                        data = f.read()
+                    self.send_response(200)
+                    self.send_header("Content-Type", ctype)
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                except Exception as e:
+                    self.send_json({"error": str(e)}, 500)
+            except Exception:
+                self.send_json({"error": "读取失败"}, 500)
+
         else:
             logger.warning(f"未知的 GET 请求路径: {p}")
             self.send_json({"error":"Not found"}, 404)
@@ -9611,11 +10037,16 @@ class Handler(BaseHTTPRequestHandler):
                 cfg0 = _hivo_load_cfg()
                 limits0 = cfg0.get("limits") if isinstance(cfg0, dict) else None
                 limits0 = limits0 if isinstance(limits0, dict) else {}
-                max_body = int(limits0.get("max_post_body_bytes") or 0)
+                # Special-case larger body for attachment uploads (base64 inflates ~4/3)
+                if p == "/api/ai_store_attachments":
+                    max_body = int(limits0.get("max_upload_request_bytes") or (32 * 1024 * 1024))
+                else:
+                    max_body = int(limits0.get("max_post_body_bytes") or 0)
             except Exception:
                 max_body = 0
             if max_body > 0 and length > max_body:
-                self.send_json({"ok": False, "error": f"请求体过大（>{max_body} bytes）"}, 413)
+                logger.warning(f"[{rid}] 请求体过大: {length} bytes > {max_body} bytes")
+                self.send_json({"ok": False, "error": f"附件或请求内容过大（>{max_body/1024/1024:.1f} MB），请减少附件数量或压缩图片"}, 413)
                 return
             body = self.rfile.read(length).decode('utf-8')
             data = json.loads(body) if body else {}
@@ -10520,6 +10951,75 @@ class Handler(BaseHTTPRequestHandler):
                 ok, msg, models = ai_list_models(base_url, api_key)
                 self.send_json({"ok": ok, "msg": msg, "models": models})
 
+            elif p == "/api/ai_store_attachments":
+                logger.info("处理 /api/ai_store_attachments 请求")
+                arr = data.get("items") if isinstance(data, dict) else None
+                if not isinstance(arr, list) or not arr:
+                    self.send_json({"ok": True, "items": []})
+                    return
+                # Storage root under backend data dir
+                base_dir = _hivo_ai_data_dir()
+                full_dir = os.path.join(str(base_dir), "attachments")
+                try:
+                    os.makedirs(full_dir, exist_ok=True)
+                except Exception as e:
+                    self.send_json({"ok": False, "error": f"创建目录失败: {e}"}, 500)
+                    return
+
+                saved = []
+                total_bytes = 0
+                # Pull upload limits from config if present
+                try:
+                    cfg0 = _hivo_load_cfg()
+                    limits0 = cfg0.get("limits") if isinstance(cfg0, dict) else {}
+                except Exception:
+                    limits0 = {}
+                max_each = int(limits0.get("max_attachment_bytes") or (20 * 1024 * 1024))
+                max_total = int(limits0.get("max_upload_total_bytes") or (100 * 1024 * 1024))
+
+                for it in arr:
+                    try:
+                        if not isinstance(it, dict):
+                            continue
+                        nm = str(it.get("name") or "file").strip()
+                        mime = str(it.get("mime") or "").strip().lower()
+                        du = str(it.get("data_url") or "").strip()
+                        if not du.startswith("data:"):
+                            continue
+                        # data URL format: data:mime;base64,xxxx
+                        if ";base64," not in du:
+                            continue
+                        head, b64 = du.split(",", 1)
+                        raw = base64.b64decode(b64)
+                        size0 = len(raw)
+                        if max_each > 0 and size0 > max_each:
+                            logger.warning(f"丢弃过大的附件: {nm} size={size0} > each_limit={max_each}")
+                            continue
+                        if max_total > 0 and (total_bytes + size0) > max_total:
+                            logger.warning(f"总大小超限，跳过附件: {nm} size={size0}, total={total_bytes}, limit={max_total}")
+                            continue
+                        total_bytes += size0
+                        # Build filename
+                        ext = mimetypes.guess_extension(mime) or ""
+                        if not ext:
+                            try:
+                                base_nm = nm.rsplit(".", 1)[-1].lower()
+                                ext = ("." + base_nm) if base_nm and (len(base_nm) <= 8) else ""
+                            except Exception:
+                                ext = ""
+                        fname = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8] + (ext or ".bin")
+                        full_path = os.path.join(full_dir, fname)
+                        with open(full_path, "wb") as f:
+                            f.write(raw)
+                        rel_path = f"attachments/{fname}".replace("\\", "/")
+                        url = f"/api/ai_attachment?path={urllib.parse.quote(rel_path)}"
+                        saved.append({"name": nm, "mime": mime, "size": size0, "url": url})
+                    except Exception as e:
+                        logger.debug(f"Exception ignored while saving attachment: {e}")
+                        continue
+
+                self.send_json({"ok": True, "items": saved})
+
             elif p == "/api/hivo_agent":
                 logger.info("处理 /api/hivo_agent 请求")
                 pid = data.get("profile_id") if isinstance(data, dict) else None
@@ -10530,6 +11030,7 @@ class Handler(BaseHTTPRequestHandler):
                 ctx_refs = data.get("context_refs") if isinstance(data, dict) else None
                 req_undo_gid = data.get("undo_gid") if isinstance(data, dict) else None
                 env_obs = data.get("env_observation") if isinstance(data, dict) else None
+                attachments = data.get("attachments") if isinstance(data, dict) else None
                 try:
                     env_obs_s = str(env_obs or "").strip()
                 except Exception:
@@ -10594,6 +11095,7 @@ class Handler(BaseHTTPRequestHandler):
                             history_messages=msgs0,
                             dyn_context=str(dyn_ctx or ""),
                             undo_gid=str(req_undo_gid or "").strip(),
+                            attachments=attachments if isinstance(attachments, list) else None,
                         )
                         try:
                             pid_s = str(pid or "").strip()
@@ -10609,7 +11111,18 @@ class Handler(BaseHTTPRequestHandler):
                                         continue
                                     if bool(m.get("pending")) and role == "assistant":
                                         continue
-                                    content0 = str(m.get("content") or "")
+                                    c0 = m.get("content")
+                                    content0 = ""
+                                    if isinstance(c0, list):
+                                        # store only text parts to keep history compact
+                                        for p in c0:
+                                            if not isinstance(p, dict):
+                                                continue
+                                            if str(p.get("type") or "") == "text":
+                                                content0 += str(p.get("text") or "")
+                                        content0 = content0.strip()
+                                    else:
+                                        content0 = str(c0 or "")
                                     if not content0:
                                         continue
                                     item0 = {"role": role, "content": content0}
@@ -10617,6 +11130,23 @@ class Handler(BaseHTTPRequestHandler):
                                         ug0 = str(m.get("undo_gid") or "").strip()
                                         if ug0:
                                             item0["undo_gid"] = ug0
+                                        try:
+                                            meta_in0 = m.get("_attMeta")
+                                            if isinstance(meta_in0, list) and meta_in0:
+                                                meta_out0 = []
+                                                for a in meta_in0:
+                                                    if not isinstance(a, dict):
+                                                        continue
+                                                    meta_out0.append({
+                                                        "name": str(a.get("name") or "file"),
+                                                        "mime": str(a.get("mime") or ""),
+                                                        "size": int(a.get("size") or 0),
+                                                        **({"url": str(a.get("url") or "")} if str(a.get("url") or "").strip() else {})
+                                                    })
+                                                if meta_out0:
+                                                    item0["_attMeta"] = meta_out0
+                                        except Exception:
+                                            pass
                                     visible.append(item0)
                                 if final2:
                                     visible.append({"role": "assistant", "content": str(final2)})

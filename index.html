@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
@@ -27,6 +27,367 @@
       --on-accent: #000000;
       --gm-ai-pulse-dur: 1.9s;
     }
+
+    @keyframes gmSpin{0%{transform:rotate(0)}100%{transform:rotate(360deg)}}
+    /* Per-file upload progress overlay */
+    .ai-attach-card{position:relative}
+    .ai-attach-progress{position:absolute;left:0;top:0;right:0;bottom:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.35);backdrop-filter:blur(2px);border-radius:8px}
+    .ai-attach-progress.show{display:flex}
+    .ai-attach-progress .ring{width:38px;height:38px;border-radius:999px;border:3px solid rgba(255,255,255,.35);border-top-color:#fff;animation:gmSpin 0.9s linear infinite;margin-right:10px}
+    .ai-attach-progress .pct{color:#fff;font-weight:800;font-size:12px}
+
+    /* removed old lightbox CSS */
+
+    
+
+  async function __gmAiEnsureAttachmentUrls(atts) {
+    try {
+      const arr = Array.isArray(atts) ? atts : [];
+      const lim = (() => {
+        try {
+          const c = (__gmAiConfig && typeof __gmAiConfig === 'object') ? __gmAiConfig : null;
+          const l = (c && c.limits && typeof c.limits === 'object') ? c.limits : null;
+          return l || null;
+        } catch (e) { return null; }
+      })();
+      const FRONT_MAX_EACH = Number(lim && lim.max_attachment_bytes) || (20 * 1024 * 1024); // 20MB
+      const FRONT_MAX_TOTAL = Number(lim && lim.max_upload_total_bytes) || (100 * 1024 * 1024); // 100MB
+      // Pre-check size limits
+      let totalBytes = 0;
+      const sizes = [];
+      for (const a of arr) {
+        if (!a || typeof a !== 'object') continue;
+        const dataUrl = String(a.data_url || '');
+        if (!dataUrl.startsWith('data:')) continue;
+        let size = Number(a.size || 0);
+        if (!size) {
+          try { const b64 = dataUrl.split(',')[1] || ''; size = Math.floor(b64.length * 0.75); } catch (e) { size = 0; }
+        }
+        sizes.push(size);
+        if (FRONT_MAX_EACH > 0 && size > FRONT_MAX_EACH) {
+          toast(`附件过大（>${(FRONT_MAX_EACH/1024/1024)|0}MB）：${String(a.name||'图片')}`,'warn');
+          return { ok: false, items: [] };
+        }
+        totalBytes += size;
+        if (FRONT_MAX_TOTAL > 0 && totalBytes > FRONT_MAX_TOTAL) {
+          toast(`本次附件总大小超过限制（>${(FRONT_MAX_TOTAL/1024/1024)|0}MB）`,'warn');
+          return { ok: false, items: [] };
+        }
+      }
+
+      const items = [];
+      arr.forEach((a)=>{
+        const mime = String(a && a.mime || '');
+        const dataUrl = String(a && a.data_url || '');
+        const url = String(a && a.url || '');
+        if (url) return; // 已有稳定URL则跳过
+        if (a && dataUrl.startsWith('data:')) items.push({ name: String(a.name||'file'), mime, data_url: dataUrl });
+      });
+      if (!items.length) return { ok: true, items: [] };
+
+      const show = (txt) => {
+        try { const box = document.getElementById('aiUploadProg'); const t = document.getElementById('aiUploadProgText'); if (box) box.style.display=''; if (t) t.textContent = txt; } catch (e) {}
+      };
+      const hide = () => { try { const box = document.getElementById('aiUploadProg'); if (box) box.style.display='none'; } catch (e) {} };
+
+      const results = new Array(items.length).fill(null);
+      show(`正在并行上传 ${items.length} 个附件…`);
+      await Promise.all(items.map((it, i) => (async () => {
+        const sz = Number(sizes[i] || 0);
+        try { __gmAiShowAttProgress(i, 0, sz); } catch (e0) {}
+        const res = await __gmUploadAttachmentWithProgress(it, (sent, total) => {
+          try { __gmAiShowAttProgress(i, sent, total || sz); } catch (e1) {}
+        });
+        if (res && res.ok && Array.isArray(res.items) && res.items[0]) results[i] = res.items[0];
+        try { __gmAiHideAttProgress(i); } catch (e2) {}
+      })()));
+      hide();
+      return { ok: true, items: results.filter(Boolean) };
+    } catch (e) {
+      try { const box = document.getElementById('aiUploadProg'); if (box) box.style.display='none'; } catch (e2) {}
+      return { ok: false, items: [] };
+    }
+  }
+
+  function __gmAiGetLimits() {
+    try {
+      const c = (__gmAiConfig && typeof __gmAiConfig === 'object') ? __gmAiConfig : null;
+      const l = (c && c.limits && typeof c.limits === 'object') ? c.limits : null;
+      return {
+        each: Number(l && l.max_attachment_bytes) || (20*1024*1024),
+        total: Number(l && l.max_upload_total_bytes) || (100*1024*1024),
+      };
+    } catch (e) { return { each: 20*1024*1024, total: 100*1024*1024 }; }
+  }
+
+  function __gmAiUpdateUploadLimitHint() {
+    try {
+      const el = document.getElementById('aiUploadHint');
+      if (!el) return;
+      const { each, total } = __gmAiGetLimits();
+      el.textContent = `上传限制：单个≤${formatMB(each)}，总计≤${formatMB(total)}`;
+      el.style.display = '';
+    } catch (e) {}
+  }
+
+  function formatMB(bytes){ try { return `${(bytes/1024/1024).toFixed(0)}MB`; } catch { return `${bytes}B`; } }
+  function formatBytes(bytes){
+    try {
+      const b = Number(bytes)||0;
+      if (b < 1024) return `${b}B`;
+      if (b < 1024*1024) return `${(b/1024).toFixed(1)}KB`;
+      return `${(b/1024/1024).toFixed(1)}MB`;
+    } catch { return `${bytes}`; }
+  }
+  function __gmAiMigrateAttCaches(fromSid, toSid) {
+    try {
+      const fs = String(fromSid || '').trim();
+      const ts = String(toSid || '').trim();
+      if (!fs || !ts || fs === ts) return;
+      __gmDbg('migrate att caches start', { from: fs, to: ts });
+      const k1f = '__gm_ai_att_cache_' + fs;
+      const k1t = '__gm_ai_att_cache_' + ts;
+      const k2f = '__gm_ai_att_by_content_' + fs;
+      const k2t = '__gm_ai_att_by_content_' + ts;
+      const k3f = '__gm_ai_att_recent_' + fs;
+      const k3t = '__gm_ai_att_recent_' + ts;
+
+      const mapMerge = (kf, kt) => {
+        try {
+          const a = (() => { try { return JSON.parse(localStorage.getItem(kf) || '{}') || {}; } catch { return {}; } })();
+          const b = (() => { try { return JSON.parse(localStorage.getItem(kt) || '{}') || {}; } catch { return {}; } })();
+          const m = { ...b, ...a };
+          localStorage.setItem(kt, JSON.stringify(m));
+          localStorage.removeItem(kf);
+          __gmDbg('migrated map', { from: kf, to: kt, size: Object.keys(m||{}).length });
+        } catch {}
+      };
+      const arrMerge = (kf, kt) => {
+        try {
+          const a = (() => { try { return JSON.parse(localStorage.getItem(kf) || '[]') || []; } catch { return []; } })();
+          const b = (() => { try { return JSON.parse(localStorage.getItem(kt) || '[]') || []; } catch { return []; } })();
+          const m = [...b, ...a];
+          while (m.length > 50) m.shift();
+          localStorage.setItem(kt, JSON.stringify(m));
+          localStorage.removeItem(kf);
+          __gmDbg('migrated arr', { from: kf, to: kt, size: (m||[]).length });
+        } catch {}
+      };
+
+      mapMerge(k1f, k1t);
+      mapMerge(k2f, k2t);
+      arrMerge(k3f, k3t);
+      __gmDbg('migrate att caches done', { from: fs, to: ts });
+    } catch {}
+  }
+
+  function __gmAiAttCacheKey(sessionId) {
+    const s0 = (sessionId != null ? String(sessionId) : '').trim();
+    const s1 = (typeof __gmAiActiveSessionId !== 'undefined' ? String(__gmAiActiveSessionId || '') : '').trim();
+    const s2 = (typeof __gmAiLastSendSessionId !== 'undefined' ? String(__gmAiLastSendSessionId || '') : '').trim();
+    const sid = s0 || s1 || s2 || '__fallback__';
+    return '__gm_ai_att_cache_' + sid;
+  }
+  function __gmAiPutAttCache(sessionId, undoGid, attachments) {
+    try {
+      const key = __gmAiAttCacheKey(sessionId);
+      if (!key) return;
+      const atts = Array.isArray(attachments) ? attachments : [];
+      const map = (() => {
+        try { return JSON.parse(localStorage.getItem(key) || '{}') || {}; } catch (e) { return {}; }
+      })();
+      if (atts.length) map[String(undoGid || '')] = atts;
+      localStorage.setItem(key, JSON.stringify(map));
+    } catch (e) {}
+  }
+  function __gmAiAttByContentKey(sessionId) {
+    const s0 = (sessionId != null ? String(sessionId) : '').trim();
+    const s1 = (typeof __gmAiActiveSessionId !== 'undefined' ? String(__gmAiActiveSessionId || '') : '').trim();
+    const s2 = (typeof __gmAiLastSendSessionId !== 'undefined' ? String(__gmAiLastSendSessionId || '') : '').trim();
+    const sid = s0 || s1 || s2 || '__fallback__';
+    return '__gm_ai_att_by_content_' + sid;
+  }
+  function __gmAiAttFullByContentKey(sessionId) {
+    const s0 = (sessionId != null ? String(sessionId) : '').trim();
+    const s1 = (typeof __gmAiActiveSessionId !== 'undefined' ? String(__gmAiActiveSessionId || '') : '').trim();
+    const s2 = (typeof __gmAiLastSendSessionId !== 'undefined' ? String(__gmAiLastSendSessionId || '') : '').trim();
+    const sid = s0 || s1 || s2 || '__fallback__';
+    return '__gm_ai_att_full_by_content_' + sid;
+  }
+  function __gmAiContentKeyNorm(s) {
+    try {
+      const t = String(s == null ? '' : s);
+      return t.replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/[\u00a0\t ]+/g, ' ').replace(/[\n\s]+$/g, '').replace(/^[\n\s]+/g, '');
+    } catch (e) { return String(s == null ? '' : s); }
+  }
+  function __gmAiPutAttCacheByContent(sessionId, role, content, metaArr) {
+    try {
+      const key = __gmAiAttByContentKey(sessionId);
+      if (!key) return;
+      const map = (() => { try { return JSON.parse(localStorage.getItem(key) || '{}') || {}; } catch (e) { return {}; }})();
+      const r = String(role || '');
+      const c = __gmAiContentKeyNorm(content || '');
+      const k = r + '|' + c;
+      map[k] = Array.isArray(metaArr) ? metaArr : [];
+      localStorage.setItem(key, JSON.stringify(map));
+    } catch (e) {}
+  }
+  function __gmAiPutFullAttByContent(sessionId, role, content, fullArr) {
+    try {
+      const key = __gmAiAttFullByContentKey(sessionId);
+      if (!key) return;
+      const map = (() => { try { return JSON.parse(localStorage.getItem(key) || '{}') || {}; } catch (e) { return {}; }})();
+      const r = String(role || '');
+      const c = __gmAiContentKeyNorm(content || '');
+      const k = r + '|' + c;
+      map[k] = Array.isArray(fullArr) ? fullArr : [];
+      localStorage.setItem(key, JSON.stringify(map));
+    } catch (e) {}
+  }
+  function __gmAiRecentMetaKey(sessionId) {
+    const s0 = (sessionId != null ? String(sessionId) : '').trim();
+    const s1 = (typeof __gmAiActiveSessionId !== 'undefined' ? String(__gmAiActiveSessionId || '') : '').trim();
+    const s2 = (typeof __gmAiLastSendSessionId !== 'undefined' ? String(__gmAiLastSendSessionId || '') : '').trim();
+    const sid = s0 || s1 || s2 || '__fallback__';
+    return '__gm_ai_att_recent_' + sid;
+  }
+  function __gmAiPushRecentMeta(sessionId, metaArr) {
+    try {
+      const key = __gmAiRecentMetaKey(sessionId);
+      if (!key) return;
+      const arr = (() => { try { return JSON.parse(localStorage.getItem(key) || '[]') || []; } catch (e) { return []; }})();
+      if (Array.isArray(metaArr) && metaArr.length) arr.push(metaArr);
+      // 只保留最近 50 条
+      while (arr.length > 50) arr.shift();
+      localStorage.setItem(key, JSON.stringify(arr));
+    } catch (e) {}
+  }
+  function __gmAiShiftRecentMeta(sessionId) {
+    try {
+      const key = __gmAiRecentMetaKey(sessionId);
+      if (!key) return null;
+      const arr = (() => { try { return JSON.parse(localStorage.getItem(key) || '[]') || []; } catch (e) { return []; }})();
+      if (!arr.length) return null;
+      const first = arr.shift();
+      localStorage.setItem(key, JSON.stringify(arr));
+      return Array.isArray(first) ? first : null;
+    } catch (e) { return null; }
+  }
+  function __gmAiHydrateAttachmentsFromCache() {
+    try {
+      const key = __gmAiAttCacheKey(__gmAiActiveSessionId);
+      if (!key) return;
+      const map = (() => { try { return JSON.parse(localStorage.getItem(key) || '{}') || {}; } catch (e) { return {}; }})();
+      const key2 = __gmAiAttByContentKey(__gmAiActiveSessionId);
+      const map2 = (() => { try { return JSON.parse(localStorage.getItem(key2) || '{}') || {}; } catch (e) { return {}; }})();
+      const key3 = __gmAiAttFullByContentKey(__gmAiActiveSessionId);
+      const map3 = (() => { try { return JSON.parse(localStorage.getItem(key3) || '{}') || {}; } catch (e) { return {}; }})();
+      if (!Array.isArray(__gmAiChatMessages)) return;
+      try { __gmDbg('hydrate begin', { sid: __gmAiActiveSessionId, msgs: __gmAiChatMessages.length, cacheUndo: Object.keys(map||{}).length, cacheContent: Object.keys(map2||{}).length }); } catch (eDbg0) {}
+      for (const m of __gmAiChatMessages) {
+        try {
+          if (!m || String(m.role || '') !== 'user') continue;
+          const ug = String(m.undo_gid || '').trim();
+          const cached = ug ? map[ug] : undefined;
+          if (Array.isArray(cached) && cached.length) {
+            // restore attachments fully
+            if (!Array.isArray(m.attachments) || !m.attachments.length) m.attachments = cached;
+            // fill _attMeta including url if present
+            if (!Array.isArray(m._attMeta) || !m._attMeta.length) {
+              m._attMeta = cached.map(a => {
+                const o = { name: String(a && a.name || 'file'), mime: String(a && a.mime || ''), size: Number(a && a.size || 0) };
+                const u = String(a && a.url || ''); if (u) o.url = u; return o;
+              });
+            } else {
+              // merge url from cached into existing _attMeta by index
+              m._attMeta = m._attMeta.map((x,i)=>{
+                const base = (Array.isArray(cached) && cached[i]) || {};
+                const o = { name: String(x && x.name || 'file'), mime: String(x && x.mime || ''), size: Number(x && x.size || 0) };
+                const u = String((x && x.url) || (base && base.url) || ''); if (u) o.url = u; return o;
+              });
+            }
+            try { __gmDbg('hydrate via undo_gid', { ug, att: (m.attachments||[]).length, meta: (m._attMeta||[]).length, name0: (m._attMeta&&m._attMeta[0]&&m._attMeta[0].name)||'' }); } catch (eDbg1) {}
+          }
+          // fallback by (role, content) when undo_gid not found or meta missing
+          if (!Array.isArray(m._attMeta) || !m._attMeta.length) {
+            const k = 'user|' + __gmAiContentKeyNorm(m.content || '');
+            const meta = map2[k];
+            const full = map3[k];
+            if (Array.isArray(meta) && meta.length) {
+              // include url if present when building _attMeta
+              m._attMeta = meta.map(a => {
+                const o = { name: String(a && a.name || 'file'), mime: String(a && a.mime || ''), size: Number(a && a.size || 0) };
+                const u = String(a && a.url || ''); if (u) o.url = u; return o;
+              });
+              // if attachments empty and meta has url, synthesize attachments from meta for rendering
+              if ((!Array.isArray(m.attachments) || !m.attachments.length) && m._attMeta.some(x=>x && x.url)) {
+                m.attachments = m._attMeta.map(x=>({ name: String(x && x.name || 'file'), mime: String(x && x.mime || ''), size: Number(x && x.size || 0), url: String(x && x.url || '') }));
+              }
+              try { __gmDbg('hydrate via content-key', { key: k.slice(0, 60), meta: (m._attMeta||[]).length, name0: (m._attMeta&&m._attMeta[0]&&m._attMeta[0].name)||'' }); } catch (eDbg2) {}
+            }
+            // if attachments still empty, but we have full attachments saved by content (includes inline text), restore them
+            if ((!Array.isArray(m.attachments) || !m.attachments.length) && Array.isArray(full) && full.length) {
+              m.attachments = full;
+              if (!Array.isArray(m._attMeta) || !m._attMeta.length) {
+                m._attMeta = full.map(a=>{
+                  const o = { name: String(a && a.name || 'file'), mime: String(a && a.mime || ''), size: Number(a && a.size || 0) };
+                  const u = String(a && a.url || ''); if (u) o.url = u; return o;
+                });
+              }
+              try { __gmDbg('hydrate via full-content', { key: k.slice(0, 60), att: (m.attachments||[]).length }); } catch (eDbg2f) {}
+            }
+            else {
+              try { __gmDbg('hydrate content-key miss', { key: k.slice(0, 120), hasKey: Object.prototype.hasOwnProperty.call(map2||{}, k) }); } catch (eDbg2m) {}
+            }
+          }
+          // final fallback: ordered recent meta queue (best-effort)
+          if (!Array.isArray(m._attMeta) || !m._attMeta.length) {
+            const metaQ = __gmAiShiftRecentMeta(__gmAiActiveSessionId);
+            if (Array.isArray(metaQ) && metaQ.length) {
+              m._attMeta = metaQ.map(a => {
+                const o = { name: String(a && a.name || 'file'), mime: String(a && a.mime || ''), size: Number(a && a.size || 0) };
+                const u = String(a && a.url || ''); if (u) o.url = u; return o;
+              });
+              if ((!Array.isArray(m.attachments) || !m.attachments.length) && m._attMeta.some(x=>x && x.url)) {
+                m.attachments = m._attMeta.map(x=>({ name: String(x && x.name || 'file'), mime: String(x && x.mime || ''), size: Number(x && x.size || 0), url: String(x && x.url || '') }));
+              }
+              try { __gmDbg('hydrate via recent-queue', { meta: (m._attMeta||[]).length, name0: (m._attMeta&&m._attMeta[0]&&m._attMeta[0].name)||'' }); } catch (eDbg3) {}
+            }
+          }
+          // If attachments still empty but _attMeta currently contains url, synthesize attachments from _attMeta
+          try {
+            if ((!Array.isArray(m.attachments) || !m.attachments.length) && Array.isArray(m._attMeta) && m._attMeta.length && m._attMeta.some(x=>x && x.url)) {
+              m.attachments = m._attMeta.map(x=>({ name: String(x && x.name || 'file'), mime: String(x && x.mime || ''), size: Number(x && x.size || 0), url: String(x && x.url || '') }));
+            }
+          } catch (eSynt) {}
+          // If still empty, try full-by-content cache regardless of _attMeta presence
+          try {
+            if (!Array.isArray(m.attachments) || !m.attachments.length) {
+              const kf = 'user|' + __gmAiContentKeyNorm(m.content || '');
+              const full2 = map3[kf];
+              if (Array.isArray(full2) && full2.length) {
+                m.attachments = full2;
+                if (!Array.isArray(m._attMeta) || !m._attMeta.length) {
+                  m._attMeta = full2.map(a=>{
+                    const o = { name: String(a && a.name || 'file'), mime: String(a && a.mime || ''), size: Number(a && a.size || 0) };
+                    const u = String(a && a.url || ''); if (u) o.url = u; return o;
+                  });
+                }
+                try { __gmDbg('hydrate via full-content (late)', { key: kf.slice(0, 60), att: (m.attachments||[]).length }); } catch (eDbg2fl) {}
+              }
+            }
+          } catch (eFullLate) {}
+          if ((!Array.isArray(m.attachments) || !m.attachments.length) && (!Array.isArray(m._attMeta) || !m._attMeta.length)) {
+            try {
+              const ck = 'user|' + __gmAiContentKeyNorm(m.content || '');
+              __gmDbg('hydrate miss', { ug, contentLen: String(m.content||'').length, key: ck.slice(0,120), cacheUndoKeys: Object.keys(map||{}).length, cacheContentKeys: Object.keys(map2||{}).length });
+            } catch (eDbgMiss) {}
+          }
+        } catch (e1) {}
+      }
+      try { __gmDbg('hydrate end'); } catch (eDbg4) {}
+    } catch (e) {}
+  }
 
     /* Light Theme */
     [data-theme="light"] {
@@ -1622,6 +1983,19 @@ flex-shrink:0;cursor:pointer;
       transition:all 0.15s ease;}
     .ai-composer:focus-within{border-color:var(--accent);
       box-shadow:0 0 0 1px var(--accent);}
+    .ai-composer-wrap.is-dragover .ai-composer{border-color:var(--accent);
+      box-shadow:0 0 0 1px rgba(110,180,247,0.85), 0 16px 38px rgba(0,0,0,0.35);
+      background:linear-gradient(180deg, rgba(110,180,247,0.10), rgba(110,180,247,0.04));}
+    .ai-drag-overlay{display:none;position:absolute;left:0;right:0;top:0;bottom:0;z-index:10;
+      border-radius:10px;border:1px dashed rgba(110,180,247,0.85);
+      background:rgba(110,180,247,0.10);
+      backdrop-filter: blur(2px);
+      pointer-events:none;}
+    .ai-composer-wrap.is-dragover .ai-drag-overlay{display:flex;align-items:center;justify-content:center;}
+    .ai-drag-overlay .txt{font-size:12px;font-weight:800;color:var(--text);
+      padding:6px 10px;border-radius:999px;background:rgba(19,20,26,0.65);
+      border:1px solid rgba(110,180,247,0.35);}
+    [data-theme="light"] .ai-drag-overlay .txt{background:rgba(255,255,255,0.8);}
     [data-theme="light"] .ai-composer{background:var(--bg3);}
     [data-theme="light"] .ai-composer:focus-within{border-color:var(--accent);}
     .ai-input{flex:1;min-height:36px;max-height:300px;resize:none;border:none;outline:none;background:transparent;
@@ -1664,6 +2038,26 @@ flex-shrink:0;cursor:pointer;
       transition:all 0.15s ease;font-size:13px;line-height:1;font-family:inherit;}
     .ai-undo-btn:hover{background:var(--bg4);border-color:var(--border);color:var(--accent);}
     .ai-undo-btn svg{width:14px;height:14px;display:block;}
+
+    .ai-attach-preview{display:none;padding:8px;margin-top:6px;border:1px solid var(--border);
+      border-radius:10px;background:var(--bg2);}
+    .ai-attach-preview.show{display:block;}
+    .ai-attach-grid{display:flex;flex-wrap:wrap;gap:8px;}
+    .ai-attach-card{display:flex;align-items:center;gap:10px;min-width:220px;max-width:360px;
+      padding:8px 10px;border-radius:12px;background:var(--bg3);border:1px solid var(--border);
+      position:relative;}
+    .ai-attach-thumb{width:34px;height:34px;border-radius:8px;overflow:hidden;flex-shrink:0;
+      background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);
+      display:flex;align-items:center;justify-content:center;color:var(--text2);}
+    [data-theme="light"] .ai-attach-thumb{background:rgba(0,0,0,0.03);border:1px solid rgba(0,0,0,0.08);}
+    .ai-attach-thumb img{width:100%;height:100%;object-fit:cover;display:block;}
+    .ai-attach-meta{min-width:0;flex:1;display:flex;flex-direction:column;gap:2px;}
+    .ai-attach-name{font-size:12px;font-weight:800;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .ai-attach-sub{font-size:11px;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .ai-attach-x{position:absolute;right:6px;top:6px;width:18px;height:18px;border-radius:6px;
+      border:1px solid transparent;background:transparent;color:var(--text2);cursor:pointer;
+      display:flex;align-items:center;justify-content:center;line-height:1;}
+    .ai-attach-x:hover{background:rgba(127,127,127,0.10);border-color:var(--border);color:var(--danger);}
 
     :root{--ai-menu-minw:260px;--ai-menu-maxw:340px;}
 
@@ -1812,6 +2206,7 @@ flex-shrink:0;cursor:pointer;
     [data-theme="light"] .ai-md img{border-color:rgba(0,0,0,0.10);}
     .ai-md video,.ai-md audio{max-width:100%;width:100%;margin:6px 0;}
     .ai-md .ai-media{margin:6px 0;}
+    .ai-md img{cursor:pointer;}
 
     .ai-media-overlay{z-index:650;background:rgba(0,0,0,0.78);}
     .ai-media-overlay .ai-media-frame{width:min(92vw, 1080px);height:92vh;display:flex;align-items:center;justify-content:center;position:relative;}
@@ -1827,6 +2222,9 @@ flex-shrink:0;cursor:pointer;
     .ai-media-overlay .ai-media-nav:hover{background:rgba(0,0,0,0.60);}
     .ai-media-overlay .ai-media-nav.prev{left:12px;}
     .ai-media-overlay .ai-media-nav.next{right:12px;}
+    .ai-media-text{max-width:100%;max-height:100%;width:min(92vw, 1000px);height:auto;display:flex;align-items:flex-start;justify-content:flex-start;border-radius:12px;border:1px solid rgba(255,255,255,0.16);background:rgba(0,0,0,0.25);color:#fff;padding:16px;overflow:auto;}
+    [data-theme="light"] .ai-media-text{border-color:rgba(0,0,0,0.18);background:rgba(255,255,255,0.85);color:#111;}
+    .ai-media-text pre{white-space:pre-wrap;word-break:break-word;margin:0;font-size:13px;line-height:1.5;font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;}
     .ai-media-overlay .ai-media-tools{position:absolute;left:50%;transform:translateX(-50%);
       top:12px;display:flex;gap:8px;align-items:center;padding:6px 8px;border-radius:999px;
       border:1px solid rgba(255,255,255,0.16);background:rgba(0,0,0,0.35);
@@ -2548,6 +2946,7 @@ flex-shrink:0;cursor:pointer;
       </div>
     </div>
   </div>
+
   <div class="resizer" id="r2"></div>
 
   <!-- Right: commit + log -->
@@ -2629,6 +3028,12 @@ flex-shrink:0;cursor:pointer;
           <!-- 底部输入栏 -->
           <div class="ai-inputbar">
             <div class="ai-composer-wrap">
+              <div id="aiAttachList" class="ai-attach-preview"></div>
+              <div id="aiUploadHint" style="display:none;margin:6px 0 0 0;font-size:12px;color:var(--text2);"></div>
+              <div id="aiUploadProg" style="display:none;margin:6px 0 0 0;padding:6px 10px;border:1px solid var(--border);border-radius:10px;background:var(--bg2);font-size:12px;color:var(--text2);">
+                <span style="display:inline-block;width:12px;height:12px;border-radius:50%;border:2px solid var(--border);border-top-color:var(--text2);margin-right:8px;vertical-align:-2px;animation: gmSpin 0.9s linear infinite;"></span>
+                <span id="aiUploadProgText">正在上传附件…</span>
+              </div>
               <div class="ai-composer">
                 <span class="ai-composer-counter" id="aiSendCounter" title="UndoSteps/Turns">0/0</span>
                 <textarea id="aiChatInput" class="ai-input" placeholder="Ask Hivo anything..."></textarea>
@@ -2640,8 +3045,11 @@ flex-shrink:0;cursor:pointer;
                   </svg>
                 </button>
               </div>
+              <div class="ai-drag-overlay" id="aiDragOverlay"><div class="txt">释放以上传文件</div></div>
               <div class="ai-under">
                 <button class="ai-add-ctx-btn" title="Add Context" data-action="aiAddContext"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg></button>
+                <button class="ai-add-ctx-btn" id="aiAttachBtn" title="Add Attachment" data-action="aiPickAttachments"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-8.49 8.49a5 5 0 0 1-7.07 0 5 5 0 0 1 0-7.07l8.49-8.49a3.5 3.5 0 0 1 4.95 4.95l-8.49 8.49a2 2 0 0 1-2.83-2.83l8.13-8.13"/></svg></button>
+                <input id="aiAttachInput" type="file" multiple style="display:none" />
                 <button class="ai-undo-btn" title="撤回上一轮" data-action="aiUndoLastTurn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14l-4-4 4-4"/><path d="M5 10h10a4 4 0 0 1 0 8h-1"/></svg></button>
                 <div class="ai-model-selector" data-action="openAiModelMenu" title="选择模型">
                   <svg class="ai-model-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -2865,6 +3273,7 @@ flex-shrink:0;cursor:pointer;
     </div>
     <div class="ai-media-nav prev" id="aiMediaPreviewPrev" title="上一张">‹</div>
     <img id="aiMediaPreviewImg" src="" alt="" />
+    <div id="aiMediaPreviewText" class="ai-media-text" style="display:none;"><pre id="aiMediaPreviewPre"></pre></div>
     <div class="ai-media-nav next" id="aiMediaPreviewNext" title="下一张">›</div>
   </div>
 </div>
@@ -2950,13 +3359,169 @@ flex-shrink:0;cursor:pointer;
     try {
       if (!(DEBUG_MODE || window.__gmDebugEnabled)) return;
       const args = Array.from(arguments);
-      try { console.log.apply(console, ['[gm]', ...args]); } catch (e2) {}
     } catch (e) {}
   }
   try { window.__gmDbg = __gmDbg; } catch (e) {}
   
   const BASE = 'http://localhost:7842';
   let WS_URL = 'ws://localhost:7843';
+
+  // Ensure upload helpers exist (moved here from mislocated block)
+  (function(){
+    try {
+      if (typeof window.__gmAiShowAttProgress !== 'function') {
+        window.__gmAiShowAttProgress = function(idx, sent, total){
+          try{
+            const sel = `.ai-attach-progress[data-idx="${idx}"]`;
+            const el = document.querySelector(sel);
+            if (!el) return;
+            el.classList.add('show');
+            const p = el.querySelector('.pct');
+            const t = (total && total>0) ? Math.min(100, Math.floor((Number(sent)||0) * 100 / Number(total))) : 0;
+            if (p) p.textContent = `${t}%`;
+          }catch(e){}
+        };
+      }
+      if (typeof window.__gmAiHideAttProgress !== 'function') {
+        window.__gmAiHideAttProgress = function(idx){
+          try{
+            const sel = `.ai-attach-progress[data-idx="${idx}"]`;
+            const el = document.querySelector(sel);
+            if (!el) return;
+            el.classList.remove('show');
+          }catch(e){}
+        };
+      }
+      if (typeof window.__gmUploadAttachmentWithProgress !== 'function') {
+        window.__gmUploadAttachmentWithProgress = function(item, onProgress){
+          return new Promise((resolve)=>{
+            try{
+              const xhr = new XMLHttpRequest();
+              xhr.open('POST', '/api/ai_store_attachments', true);
+              xhr.setRequestHeader('Content-Type','application/json');
+              xhr.responseType = 'json';
+              try { if (window.__gmAiDebug) { console.log('[UPLOAD] start', { name: String(item&&item.name||''), mime: String(item&&item.mime||''), hasData: !!(item&&item.data_url) }); } } catch(_){ }
+              if (xhr.upload && typeof xhr.upload.addEventListener === 'function'){
+                xhr.upload.addEventListener('progress', (e)=>{
+                  try{ if (typeof onProgress==='function') onProgress(e.loaded||0, e.total||0); }catch(_){ }
+                });
+              }
+              xhr.onreadystatechange = function(){
+                if (xhr.readyState === 4){
+                  try{
+                    const ok = (xhr.status >= 200 && xhr.status < 300);
+                    const body = xhr.response || null;
+                    try { if (window.__gmAiDebug) { console.log('[UPLOAD] done', { status: xhr.status, ok, body }); } } catch(_){ }
+                    if (!ok) {
+                      try { toast('上传附件失败，服务器返回错误状态：' + xhr.status, 'warn'); } catch(_){ }
+                      resolve(null);
+                      return;
+                    }
+                    resolve(body);
+                  }catch(e){ resolve(null); }
+                }
+              };
+              const body = JSON.stringify({ items: [item] });
+              try { if (window.__gmAiDebug) { console.log('[UPLOAD] send body length', { bytes: body.length }); } } catch(_){ }
+              xhr.send(body);
+            }catch(e){ resolve(null); }
+          });
+        };
+      }
+      if (typeof window.__gmAiUpdateSendDisabledForUpload !== 'function') {
+        window.__gmAiUpdateSendDisabledForUpload = function(){
+          try{
+            const btn = document.querySelector('.ai-send-btn');
+            if (!btn) return;
+            const n = Number(window.__gmAiUploadingCount||0);
+            if (n > 0){
+              btn.disabled = true;
+              btn.style.opacity = '.6';
+              btn.title = '正在上传附件，请稍候…';
+              btn.style.pointerEvents = 'none';
+            } else {
+              btn.disabled = false;
+              btn.style.opacity = '';
+              btn.title = '发送';
+              btn.style.pointerEvents = '';
+            }
+          }catch(e){}
+        };
+      }
+      if (typeof window.__gmAiEnsureAttachmentUrls !== 'function') {
+        window.__gmAiEnsureAttachmentUrls = async function(atts){
+          try {
+            const arr = Array.isArray(atts) ? atts : [];
+            const lim = (() => {
+              try {
+                const c = (window.__gmAiConfig && typeof window.__gmAiConfig === 'object') ? window.__gmAiConfig : null;
+                const l = (c && c.limits && typeof c.limits === 'object') ? c.limits : null;
+                return l || null;
+              } catch (e) { return null; }
+            })();
+            const FRONT_MAX_EACH = Number(lim && lim.max_attachment_bytes) || (20 * 1024 * 1024);
+            const FRONT_MAX_TOTAL = Number(lim && lim.max_upload_total_bytes) || (100 * 1024 * 1024);
+            let totalBytes = 0;
+            const sizes = [];
+            for (const a of arr) {
+              if (!a || typeof a !== 'object') continue;
+              const mime = String(a.mime || '');
+              const isImg = mime.startsWith('image/');
+              const dataUrl = String(a.data_url || '');
+              if (!isImg || !dataUrl.startsWith('data:')) continue;
+              let size = Number(a.size || 0);
+              if (!size) {
+                try { const b64 = dataUrl.split(',')[1] || ''; size = Math.floor(b64.length * 0.75); } catch (e) { size = 0; }
+              }
+              sizes.push(size);
+              if (FRONT_MAX_EACH > 0 && size > FRONT_MAX_EACH) {
+                toast(`附件过大（>${(FRONT_MAX_EACH/1024/1024)|0}MB）：${String(a.name||'图片')}`,'warn');
+                return { ok: false, items: [] };
+              }
+              totalBytes += size;
+              if (FRONT_MAX_TOTAL > 0 && totalBytes > FRONT_MAX_TOTAL) {
+                toast(`本次附件总大小超过限制（>${(FRONT_MAX_TOTAL/1024/1024)|0}MB）`,'warn');
+                return { ok: false, items: [] };
+              }
+            }
+            const items = [];
+            arr.forEach((a)=>{
+              const mime = String(a && a.mime || '');
+              const dataUrl = String(a && a.data_url || '');
+              const url = String(a && a.url || '');
+              if (url) return;
+              if (a && mime.startsWith('image/') && dataUrl.startsWith('data:')) items.push({ name: String(a.name||'image'), mime, data_url: dataUrl });
+            });
+            if (!items.length) return { ok: true, items: [] };
+            const show = (txt) => {
+              try { const box = document.getElementById('aiUploadProg'); const t = document.getElementById('aiUploadProgText'); if (box) box.style.display=''; if (t) t.textContent = txt; } catch (e) {}
+            };
+            const hide = () => { try { const box = document.getElementById('aiUploadProg'); if (box) box.style.display='none'; } catch (e) {} };
+            const results = [];
+            let uploaded = 0;
+            for (let i=0;i<items.length;i++){
+              const sz = Number(sizes[i] || 0);
+              const pct = totalBytes ? Math.min(100, Math.floor((uploaded / totalBytes) * 100)) : 0;
+              show(`正在上传附件 ${i+1}/${items.length}… ${formatBytes(uploaded)}/${formatBytes(totalBytes)} (${pct}%)`);
+              try { window.__gmAiShowAttProgress(i, 0, sz); } catch (e) {}
+              const res = await window.__gmUploadAttachmentWithProgress(items[i], (sent, total) => {
+                try { window.__gmAiShowAttProgress(i, sent, total || sz); } catch (e) {}
+              });
+              if (res && res.ok && Array.isArray(res.items) && res.items[0]) results[i] = res.items[0]; else results[i] = null;
+              try { window.__gmAiHideAttProgress(i); } catch (e) {}
+              uploaded += sz;
+            }
+            hide();
+            return { ok: true, items: results.filter(Boolean) };
+          } catch (e) {
+            try { const box = document.getElementById('aiUploadProg'); if (box) box.style.display='none'; } catch (e2) {}
+            return { ok: false, items: [] };
+          }
+        };
+      }
+      if (typeof window.__gmAiUploadingCount !== 'number') window.__gmAiUploadingCount = 0;
+    } catch (e) {}
+  })();
 
   // ── Staged Panel ─────────────────────────────────────────────────────────────
   let __gmStagedPanelFiles = [];
@@ -3382,6 +3947,11 @@ flex-shrink:0;cursor:pointer;
       window.__gmAiMediaPreviewList = [];
       window.__gmAiMediaPreviewIdx = 0;
     } catch (e) {}
+
+    // Clear pending attachments when repository changes to avoid cross-repo leakage
+    try { __gmAiPendingAttachments = []; __gmAiRenderAttachList(); } catch (e) {}
+    try { __gmAiUploadingCount = 0; __gmAiUpdateSendDisabledForUpload && __gmAiUpdateSendDisabledForUpload(); } catch (e) {}
+    try { window.__gmAiSessionDrafts = {}; } catch (e) {}
 
     try { __gmAiRenderHistoryChips(); } catch (e) {}
     try { __gmAiRenderChat(); } catch (e) {}
@@ -4391,7 +4961,13 @@ flex-shrink:0;cursor:pointer;
   async function __gmAiSendAgentNow() {
     const ta = document.getElementById('aiChatInput');
     const text = ta ? String(ta.value || '').trim() : '';
-    if (!text) return;
+    const hasAtt = Array.isArray(__gmAiPendingAttachments) && __gmAiPendingAttachments.length > 0;
+    if (typeof __gmAiUploadingCount === 'number' && __gmAiUploadingCount > 0) {
+      toast('正在上传附件，请稍候完成后再发送…', 'warn');
+      return;
+    }
+    if (!text && !hasAtt) return;
+    const sendText = text || (hasAtt ? '请分析附件。' : '');
     const pid = String(__gmAiSelectedProfileId || __gmAiConfig.active_profile_id || '');
     if (!pid) {
       toast('请先选择/配置一个 Profile（Base URL / API Key / Model）后再对话', 'err');
@@ -4419,7 +4995,46 @@ flex-shrink:0;cursor:pointer;
     const turnUndoGid = sid0 ? ('ai-' + sid0 + '-' + rid0) : ('ai-' + rid0);
     __gmAiActiveTurnUndoGroupId = turnUndoGid;
 
-    __gmAiChatMessages.push({ role: 'user', content: text, undo_gid: turnUndoGid });
+    let attachmentsBackup = [];
+    try {
+      let u = sendText;
+      const atts0 = Array.isArray(__gmAiPendingAttachments) ? __gmAiPendingAttachments : [];
+      const attsToSave = atts0.length ? [...atts0] : [];
+      attachmentsBackup = attsToSave.length ? [...attsToSave] : [];
+      // 发送前将本次消息的附件缓存到本地（用于会话切换后客户端侧还原预览）
+      try { __gmAiPutAttCache(__gmAiActiveSessionId, turnUndoGid, attsToSave); } catch (eAttC) {}
+      try { __gmAiPendingAttachments = []; __gmAiRenderAttachList(); } catch (eAtImm) {}
+      try { __gmAiSaveSessionDraft(__gmAiActiveSessionId); } catch (eSvSend0) {}
+      try { __gmAiLastSendSessionId = String(__gmAiActiveSessionId || ''); } catch (eSidRec) {}
+      // Upload images to obtain durable URLs for preview across reloads
+      try {
+        const up = await __gmAiEnsureAttachmentUrls(attachmentsBackup);
+        if (up && Array.isArray(up.items)) {
+          up.items.forEach((it, i) => {
+            try {
+              if (attachmentsBackup[i] && it && it.url) {
+                attachmentsBackup[i].url = String(it.url);
+                if (attsToSave[i] && !attsToSave[i].url) attsToSave[i].url = String(it.url);
+              }
+            } catch (e) {}
+          });
+        }
+        // Update caches with URLs now that we have them
+        try { __gmAiPutAttCache(__gmAiActiveSessionId, turnUndoGid, attachmentsBackup); } catch (eAttCUp) {}
+      } catch (eUp) {}
+      const _attMeta = attsToSave.map((a, i) => {
+        const base = attachmentsBackup[i] || a || {};
+        const o = { name: String(base && base.name || 'file'), mime: String(base && base.mime || ''), size: Number(base && base.size || 0) };
+        if (base && base.url) o.url = String(base.url);
+        return o;
+      });
+      try { __gmAiPutAttCacheByContent(__gmAiActiveSessionId, 'user', u, _attMeta); } catch (eAttC2) {}
+      try { __gmAiPutFullAttByContent(__gmAiActiveSessionId, 'user', u, attachmentsBackup.length ? attachmentsBackup : attsToSave); } catch (eFullC) {}
+      try { __gmAiPushRecentMeta(__gmAiActiveSessionId, _attMeta); } catch (eAttC3) {}
+      __gmAiChatMessages.push({ role: 'user', content: u, attachments: attsToSave, _attMeta, undo_gid: turnUndoGid });
+    } catch (eU0) {
+      __gmAiChatMessages.push({ role: 'user', content: sendText, undo_gid: turnUndoGid });
+    }
     // one bubble: pending assistant content will be updated via websocket
     const pending = { role: 'assistant', content: '发送中...', pending: true, stage: 'sending' };
     __gmAiChatMessages.push(pending);
@@ -4430,27 +5045,39 @@ flex-shrink:0;cursor:pointer;
     try { __gmAiSetSendButtonState(true); } catch (eB0) {}
     try { await __gmAiSaveHistoryNow(); } catch (e0) {}
 
-    const ctxPkg = await __gmBuildAiSystemContext(text);
+    const ctxPkg = await __gmBuildAiSystemContext(sendText);
     const dynCtx = (ctxPkg && typeof ctxPkg.dyn_context === 'string') ? String(ctxPkg.dyn_context || '') : '';
     const ctxRefs = (ctxPkg && Array.isArray(ctxPkg.context_refs)) ? ctxPkg.context_refs : [];
 
     const messagesForSend = __gmAiBuildMessagesForSend(__gmAiChatMessages);
+    
+    // warn if sending images but current model likely not vision-capable
+    try {
+      const hasImg = Array.isArray(attachmentsBackup) && attachmentsBackup.some(a => a && typeof a === 'object' && String(a.mime||'').startsWith('image/') && String(a.data_url||'').startsWith('data:'));
+      if (hasImg && !__gmProfileSupportsVisionFromConfig()) {
+        toast('当前模型可能不支持图像理解，已尝试以文本方式补充说明。建议切换带有 Vision 能力的模型。', 'warn');
+      }
+    } catch (eVisWarn) {}
+
     const res = await api('/api/hivo_agent', {
       method: 'POST',
       body: JSON.stringify({
         profile_id: pid,
         session_id: __gmAiActiveSessionId,
-        user_text: text,
+        user_text: sendText,
         messages: messagesForSend,
         dyn_context: dynCtx,
         context_refs: ctxRefs,
         undo_gid: turnUndoGid,
+        attachments: attachmentsBackup,
         env_observation: '',
       }),
     });
 
     if (!res || !res.run_id) {
       const msg = (res && (res.msg || res.error)) ? String(res.msg || res.error) : '对话失败';
+      // 失败时恢复附件列表
+      try { __gmAiPendingAttachments = attachmentsBackup; __gmAiRenderAttachList(); } catch (eAt1) {}
       pending.pending = false;
       pending.stage = 'error';
       pending.content = msg;
@@ -4463,8 +5090,9 @@ flex-shrink:0;cursor:pointer;
       return;
     }
     if (res.ok === false) {
-      // If backend reports an active run (409), bind to that run_id so websocket can keep updating.
       const msg = (res && (res.msg || res.error)) ? String(res.msg || res.error) : '对话失败';
+      // 失败时恢复附件列表
+      try { __gmAiPendingAttachments = attachmentsBackup; __gmAiRenderAttachList(); } catch (eAt2) {}
       pending.run_id = String(res.run_id || '');
       if (pending.run_id) {
         window.__gmAiActiveRunId = pending.run_id;
@@ -4829,12 +5457,98 @@ flex-shrink:0;cursor:pointer;
       if (document.__gmStaticUiDelegationBound) return;
       document.__gmStaticUiDelegationBound = true;
 
+      // Capturing listener to ensure preview clicks are caught even if some inner node stops propagation
+      document.addEventListener('click', (e) => {
+        try {
+          const el = e.target && e.target.closest ? e.target.closest('[data-action]') : null;
+          const act = el ? String(el.getAttribute('data-action') || '') : '';
+          if (act === 'aiChatOpenPreview') {
+            try { if (window.__gmAiDebug) { (window.__gmDbg?__gmDbg:console.log)('delegation click (capture)', { act, tag: el.tagName, id: el.id, cls: el.className }); } } catch (_) {}
+            e.preventDefault();
+            try{
+              const mi = parseInt(String(el.getAttribute('data-msg-idx')||''),10);
+              const ai = parseInt(String(el.getAttribute('data-att-idx')||''),10);
+              if (!Number.isFinite(mi) || !Number.isFinite(ai)) return;
+              const msg = (__gmAiChatMessages && __gmAiChatMessages[mi]) || null;
+              if (!msg) return;
+              const base = (Array.isArray(msg.attachments) && msg.attachments.length ? msg.attachments : (Array.isArray(msg._attMeta) ? msg._attMeta : []));
+              let a = base[ai]; if (!a) return;
+              try { if (window.__gmAiDebug) { (window.__gmDbg?__gmDbg:console.log)('click preview start (capture)', { msgIdx: mi, attIdx: ai, hasAtt: !!a, url: a && a.url, data_url: a && a.data_url, hasText: !!(a && typeof a.text==='string' && a.text), hasUndo: !!(msg && msg.undo_gid) }); } } catch(_){ }
+              const hasUrl = !!(a && (a.url || a.data_url) || (a && typeof a.text === 'string' && a.text));
+              if (!hasUrl) {
+                try {
+                  const ug = String(msg.undo_gid || '').trim();
+                  if (ug) {
+                    const key = __gmAiAttCacheKey(__gmAiActiveSessionId);
+                    if (key) {
+                      const map = (()=>{ try { return JSON.parse(localStorage.getItem(key) || '{}') || {}; } catch(e){ return {}; } })();
+                      const cached = Array.isArray(map[ug]) ? map[ug] : [];
+                      if (cached[ai] && (cached[ai].url || cached[ai].data_url || (typeof cached[ai].text === 'string' && cached[ai].text))) {
+                        a = cached[ai];
+                      }
+                    }
+                  }
+                  // prefer in-message _attMeta url if present
+                  if ((!a.url && !a.data_url && !(typeof a.text === 'string' && a.text)) && Array.isArray(msg._attMeta) && msg._attMeta[ai] && msg._attMeta[ai].url) {
+                    a = msg._attMeta[ai];
+                  }
+                  // fallback use attachments array
+                  if ((!a.url && !a.data_url && !(typeof a.text === 'string' && a.text)) && Array.isArray(msg.attachments) && msg.attachments[ai]) {
+                    a = msg.attachments[ai];
+                  }
+                  // attempt from full-by-content cache
+                  if ((!a.url && !a.data_url && !(typeof a.text === 'string' && a.text))) {
+                    try {
+                      const keyF = __gmAiAttFullByContentKey(__gmAiActiveSessionId);
+                      if (keyF) {
+                        const mapF = (()=>{ try { return JSON.parse(localStorage.getItem(keyF) || '{}') || {}; } catch(e){ return {}; } })();
+                        const ckF = 'user|' + __gmAiContentKeyNorm(msg.content || '');
+                        const fullArr = Array.isArray(mapF[ckF]) ? mapF[ckF] : [];
+                        if (fullArr[ai] && (fullArr[ai].url || fullArr[ai].data_url || (typeof fullArr[ai].text === 'string' && fullArr[ai].text))) a = fullArr[ai];
+                      }
+                    } catch (_eF) {}
+                  }
+                  // final attempt: content-key cache
+                  if ((!a.url && !a.data_url && !(typeof a.text === 'string' && a.text))) {
+                    try {
+                      const key2 = __gmAiAttByContentKey(__gmAiActiveSessionId);
+                      if (key2) {
+                        const map2 = (()=>{ try { return JSON.parse(localStorage.getItem(key2) || '{}') || {}; } catch(e){ return {}; } })();
+                        const ck = 'user|' + __gmAiContentKeyNorm(msg.content || '');
+                        const arr2 = Array.isArray(map2[ck]) ? map2[ck] : [];
+                        if (arr2[ai] && arr2[ai].url) a = arr2[ai];
+                      }
+                    } catch (_eCk) {}
+                  }
+                } catch(_){ }
+              }
+              try { if (window.__gmAiDebug) { (window.__gmDbg?__gmDbg:console.log)('click preview resolved (capture)', { msgIdx: mi, attIdx: ai, url: a && a.url, data_url: a && a.data_url, hasText: !!(a && typeof a.text==='string' && a.text) }); } } catch(_){ }
+              __gmAiOpenUnifiedPreviewForMessage(mi, ai);
+            }catch(_){ }
+          }
+        } catch (_eCap) {}
+      }, true);
+
+      // Click AI markdown images to open unified preview (global image list)
+      if (!window.__gmAiMdClickBound){
+        window.__gmAiMdClickBound = true;
+        document.addEventListener('click', (e) => {
+          try{
+            const img = e.target && e.target.closest ? e.target.closest('.ai-md img') : null;
+            const src = String(img.getAttribute('src')||'');
+            try { e.preventDefault(); e.stopPropagation(); } catch(_){ }
+            __gmAiOpenUnifiedPreviewForMdImage(src);
+          }catch(_){ }
+        }, true);
+      }
+
       document.addEventListener('click', (e) => {
         try {
           const el = e.target && e.target.closest ? e.target.closest('[data-action]') : null;
           if (!el) return;
           const act = String(el.getAttribute('data-action') || '');
           if (!act) return;
+          try { if (window.__gmAiDebug) { __gmDbg('delegation click', { act, tag: el.tagName, id: el.id, cls: el.className }); } } catch (eDbgD) {}
 
           if (act === 'showStagedPanel') { e.preventDefault(); showStagedPanel(); return; }
           if (act === 'pullUpdate') { e.preventDefault(); pullUpdate(); return; }
@@ -4856,6 +5570,94 @@ flex-shrink:0;cursor:pointer;
           if (act === 'aiContinue') { e.preventDefault(); aiContinue(); return; }
           if (act === 'sendAiChat') { e.preventDefault(); sendAiChat(); return; }
           if (act === 'aiAddContext') { e.preventDefault(); aiAddContext(); return; }
+          if (act === 'aiPickAttachments') { e.preventDefault(); aiPickAttachments(); return; }
+          if (act === 'aiRemoveAttachment') { e.preventDefault(); aiRemoveAttachment(e, el); return; }
+          if (act === 'aiOpenAttachment') { e.preventDefault(); aiOpenAttachment(e, el); return; }
+          
+          if (act === 'aiChatOpenPreview') {
+            e.preventDefault();
+            try{
+              const mi = parseInt(String(el.getAttribute('data-msg-idx')||''),10);
+              const ai = parseInt(String(el.getAttribute('data-att-idx')||''),10);
+              const msg = (__gmAiChatMessages && __gmAiChatMessages[mi]) || null;
+              const base = (Array.isArray(msg.attachments) && msg.attachments.length ? msg.attachments : (Array.isArray(msg._attMeta) ? msg._attMeta : []));
+              let a = base[ai];
+              try { if (__gmAiDebug) { __gmDbg('click preview start', { msgIdx: mi, attIdx: ai, hasAtt: !!a, url: a && a.url, data_url: a && a.data_url, hasText: !!(a && typeof a.text==='string' && a.text), hasUndo: !!(msg && msg.undo_gid) }); } } catch(eDbgC0) {}
+              // Fallback: when only _attMeta exists without url/data_url/text, try resolve from local cache by undo_gid
+              const hasUrl = !!(a && (a.url || a.data_url) || (a && typeof a.text === 'string' && a.text));
+              if (!hasUrl) {
+                try {
+                  const ug = String(msg.undo_gid || '').trim();
+                  if (ug) {
+                    const key = __gmAiAttCacheKey(__gmAiActiveSessionId);
+                    if (key) {
+                      const map = (()=>{ try { return JSON.parse(localStorage.getItem(key) || '{}') || {}; } catch(e){ return {}; } })();
+                      const cached = Array.isArray(map[ug]) ? map[ug] : [];
+                      if (cached[ai] && (cached[ai].url || cached[ai].data_url || (typeof cached[ai].text === 'string' && cached[ai].text))) {
+                        a = cached[ai];
+                      }
+                    }
+                  }
+                  // prefer in-message _attMeta url if present
+                  if ((!a.url && !a.data_url && !(typeof a.text === 'string' && a.text)) && Array.isArray(msg._attMeta) && msg._attMeta[ai] && msg._attMeta[ai].url) {
+                    a = msg._attMeta[ai];
+                  }
+                  // Secondary fallback: if attachments array now exists, prefer it
+                  if ((!a.url && !a.data_url && !(typeof a.text === 'string' && a.text)) && Array.isArray(msg.attachments) && msg.attachments[ai]) {
+                    a = msg.attachments[ai];
+                  }
+                  // attempt from full-by-content cache
+                  if ((!a.url && !a.data_url && !(typeof a.text === 'string' && a.text))) {
+                    try {
+                      const keyF = __gmAiAttFullByContentKey(__gmAiActiveSessionId);
+                      if (keyF) {
+                        const mapF = (()=>{ try { return JSON.parse(localStorage.getItem(keyF) || '{}') || {}; } catch(e){ return {}; } })();
+                        const ckF = 'user|' + __gmAiContentKeyNorm(msg.content || '');
+                        const fullArr = Array.isArray(mapF[ckF]) ? mapF[ckF] : [];
+                        if (fullArr[ai] && (fullArr[ai].url || fullArr[ai].data_url || (typeof fullArr[ai].text === 'string' && fullArr[ai].text))) a = fullArr[ai];
+                      }
+                    } catch (_eF) {}
+                  }
+                  // final attempt: content-key cache
+                  if ((!a.url && !a.data_url && !(typeof a.text === 'string' && a.text))) {
+                    try {
+                      const key2 = __gmAiAttByContentKey(__gmAiActiveSessionId);
+                      if (key2) {
+                        const map2 = (()=>{ try { return JSON.parse(localStorage.getItem(key2) || '{}') || {}; } catch(e){ return {}; } })();
+                        const ck = 'user|' + __gmAiContentKeyNorm(msg.content || '');
+                        const arr2 = Array.isArray(map2[ck]) ? map2[ck] : [];
+                        if (arr2[ai] && arr2[ai].url) a = arr2[ai];
+                      }
+                    } catch (_eCk) {}
+                  }
+                } catch(eRes) {}
+              }
+              try { if (__gmAiDebug) { __gmDbg('click preview resolved', { msgIdx: mi, attIdx: ai, url: a && a.url, data_url: a && a.data_url, hasText: !!(a && typeof a.text==='string' && a.text) }); } } catch(eDbgC1) {}
+              __gmAiOpenUnifiedPreviewForMessage(mi, ai);
+            }catch(e){}
+            return;
+          }
+          if (act === 'aiMoreAtt') {
+            e.preventDefault();
+            try {
+              const idx = parseInt(String(el.getAttribute('data-idx') || ''), 10);
+              if (!Number.isFinite(idx)) return;
+              const msg = (__gmAiChatMessages && __gmAiChatMessages[idx]) || null;
+              if (!msg) return;
+              const atts = Array.isArray(msg.attachments) ? msg.attachments : [];
+              const metas = Array.isArray(msg._attMeta) ? msg._attMeta : [];
+              const base = atts.length ? atts : metas;
+              if (!base.length) return;
+              const total = base.length;
+              const prev = Number(msg._attShown);
+              const cur = Number.isFinite(prev) && prev > 0 ? prev : (total > 5 ? 5 : total);
+              const next = Math.min(total, cur + 6);
+              msg._attShown = next;
+              try { if (__gmAiDebug) { __gmDbg('more click', { idx, total, prev: cur, next }); } } catch (eDbgMC) {}
+              __gmAiRenderChat();
+            } catch (eMore) {}
+            return;
+          }
           if (act === 'aiUndoLastTurn') { e.preventDefault(); aiUndoLastTurn(); return; }
           if (act === 'openAiModelMenu') { e.preventDefault(); try { e.stopPropagation(); } catch (e3) {} openAiModelMenu(e, el); return; }
           if (act === 'showAiConfigPanel') { e.preventDefault(); showAiConfigPanel(); return; }
@@ -4994,7 +5796,7 @@ flex-shrink:0;cursor:pointer;
                     const fn = sel ? (sel.focusNode || sel.anchorNode) : null;
                     const fe = fn ? ((fn.nodeType === Node.ELEMENT_NODE) ? fn : (fn.parentElement || null)) : null;
                     const activeLine = fe && fe.closest ? fe.closest('.editable-line') : null;
-                    console.log('[gmdbg] revertHint.remove', {
+                    if (window.__gmAiDebug) console.log('[gmdbg] revertHint.remove', {
                       where: 'toggleFoldBtn',
                       enabled: !!window.__gmRevertBlockHintEnabled,
                       hasActiveLine: !!activeLine,
@@ -5101,8 +5903,70 @@ flex-shrink:0;cursor:pointer;
       const aiChatInput = document.getElementById('aiChatInput');
       if (aiChatInput && !aiChatInput.__gmBound) {
         aiChatInput.__gmBound = true;
+        let __gmAiDragEnterCount = 0;
+        const __setDrag = (on) => {
+          try {
+            const wrap = aiChatInput.closest ? aiChatInput.closest('.ai-composer-wrap') : null;
+            if (!wrap || !wrap.classList) return;
+            if (on) wrap.classList.add('is-dragover');
+            else wrap.classList.remove('is-dragover');
+          } catch (e0) {}
+        };
         aiChatInput.addEventListener('keydown', (e) => {
           try { aiChatInputKeydown(e); } catch (e2) {}
+        });
+        // drag & drop attachments
+        aiChatInput.addEventListener('dragenter', (e) => {
+          try { e.preventDefault(); } catch (e2) {}
+          __gmAiDragEnterCount++;
+          __setDrag(true);
+        });
+        aiChatInput.addEventListener('dragover', (e) => {
+          try { e.preventDefault(); } catch (e2) {}
+        });
+        aiChatInput.addEventListener('drop', (e) => {
+          try {
+            e.preventDefault();
+            __gmAiDragEnterCount = 0;
+            __setDrag(false);
+            const fs = (e && e.dataTransfer) ? e.dataTransfer.files : null;
+            if (fs && fs.length) __gmAiAddFiles(fs);
+          } catch (e2) {}
+        });
+        aiChatInput.addEventListener('dragleave', (e) => {
+          try { e.preventDefault(); } catch (e2) {}
+          __gmAiDragEnterCount = Math.max(0, (__gmAiDragEnterCount || 0) - 1);
+          if (__gmAiDragEnterCount <= 0) __setDrag(false);
+        });
+        // paste images
+        aiChatInput.addEventListener('paste', (e) => {
+          try {
+            const items = e && e.clipboardData ? e.clipboardData.items : null;
+            if (!items || !items.length) return;
+            const files = [];
+            for (const it of items) {
+              try {
+                if (it && it.kind === 'file') {
+                  const f = it.getAsFile ? it.getAsFile() : null;
+                  if (f) files.push(f);
+                }
+              } catch (e3) {}
+            }
+            if (files.length) __gmAiAddFiles(files);
+          } catch (e2) {}
+        });
+      }
+
+      const aiAttachInput = document.getElementById('aiAttachInput');
+      if (aiAttachInput && !aiAttachInput.__gmBound) {
+        aiAttachInput.__gmBound = true;
+        aiAttachInput.addEventListener('change', (e) => {
+          try {
+            const list = (e && e.target) ? e.target.files : null;
+            const arr = list ? Array.from(list) : [];
+            if (arr.length) __gmAiAddFiles(arr);
+          } catch (e2) {}
+          try { aiAttachInput.value = ''; } catch (e2) {}
         });
       }
 
@@ -7356,7 +8220,7 @@ flex-shrink:0;cursor:pointer;
                         const fn = sel ? (sel.focusNode || sel.anchorNode) : null;
                         const fe = fn ? ((fn.nodeType === Node.ELEMENT_NODE) ? fn : (fn.parentElement || null)) : null;
                         const activeLine = fe && fe.closest ? fe.closest('.editable-line') : null;
-                        console.log('[gmdbg] revertHint.remove', {
+                        if (window.__gmAiDebug) console.log('[gmdbg] revertHint.remove', {
                           where: 'enhanceMenu.rerenderCurrent',
                           enabled: !!window.__gmRevertBlockHintEnabled,
                           hasActiveLine: !!activeLine,
@@ -7947,7 +8811,7 @@ flex-shrink:0;cursor:pointer;
     if (!window.__gmCeHostEditingInited) {
       window.__gmCeHostEditingInited = true;
 
-      try { console.log('[gmdbg] cehost.editing.inited'); } catch (e0) {}
+      try { if (window.__gmAiDebug) console.log('[gmdbg] cehost.editing.inited'); } catch (e0) {}
 
       // Debug: trace who prevents/blocks Backspace at line-start by patching event methods.
       try {
@@ -7974,7 +8838,7 @@ flex-shrink:0;cursor:pointer;
           Event.prototype.preventDefault = function () {
             try {
               if (this && this.type === 'keydown' && this.key === 'Backspace' && __gmInDiffView(this)) {
-                console.log('[gmdbg] trace.preventDefault', { type: this.type, key: this.key, defaultPrevented: this.defaultPrevented, stack: (new Error()).stack });
+                if (window.__gmAiDebug) console.log('[gmdbg] trace.preventDefault', { type: this.type, key: this.key, defaultPrevented: this.defaultPrevented, stack: (new Error()).stack });
               }
             } catch (e2) {}
             return _pd.apply(this, arguments);
@@ -7982,7 +8846,7 @@ flex-shrink:0;cursor:pointer;
           Event.prototype.stopPropagation = function () {
             try {
               if (this && this.type === 'keydown' && this.key === 'Backspace' && __gmInDiffView(this)) {
-                console.log('[gmdbg] trace.stopPropagation', { type: this.type, key: this.key, stack: (new Error()).stack });
+                if (window.__gmAiDebug) console.log('[gmdbg] trace.stopPropagation', { type: this.type, key: this.key, stack: (new Error()).stack });
               }
             } catch (e2) {}
             return _sp.apply(this, arguments);
@@ -7990,7 +8854,7 @@ flex-shrink:0;cursor:pointer;
           Event.prototype.stopImmediatePropagation = function () {
             try {
               if (this && this.type === 'keydown' && this.key === 'Backspace' && __gmInDiffView(this)) {
-                console.log('[gmdbg] trace.stopImmediatePropagation', { type: this.type, key: this.key, stack: (new Error()).stack });
+                if (window.__gmAiDebug) console.log('[gmdbg] trace.stopImmediatePropagation', { type: this.type, key: this.key, stack: (new Error()).stack });
               }
             } catch (e2) {}
             return _sip.apply(this, arguments);
@@ -8012,7 +8876,7 @@ flex-shrink:0;cursor:pointer;
             if (!(el2 && host.contains(el2))) return;
           }
           const sel = window.getSelection ? window.getSelection() : null;
-          console.log('[gmdbg] raw.keydown.backspace', {
+          if (window.__gmAiDebug) console.log('[gmdbg] raw.keydown.backspace', {
             isCeHost: (() => { try { return !!__isCeHost(); } catch (e2) { return null; } })(),
             defaultPrevented: !!e.defaultPrevented,
             targetTag: t && t.tagName ? String(t.tagName) : null,
@@ -8057,7 +8921,7 @@ flex-shrink:0;cursor:pointer;
               line = el && el.closest ? el.closest('.editable-line') : null;
             } catch (e2) {}
           }
-          console.log('[gmdbg] raw.beforeinput', {
+          if (window.__gmAiDebug) console.log('[gmdbg] raw.beforeinput', {
             it,
             isCeHost: (() => { try { return !!__isCeHost(); } catch (e2) { return null; } })(),
             hasLine: !!line,
@@ -8191,7 +9055,7 @@ flex-shrink:0;cursor:pointer;
 
           const __gmDelDbg = (tag, payload) => {
             try {
-              console.log('[gmdbg]', tag, payload);
+              if (window.__gmAiDebug) console.log('[gmdbg]', tag, payload);
             } catch (e2) {}
             try { if (typeof __gmDbg === 'function') { __gmDbg(tag, payload); } } catch (e2) {}
           };
@@ -8987,7 +9851,7 @@ flex-shrink:0;cursor:pointer;
 
                   const __gmDelDbg = (tag, payload) => {
                     try {
-                      console.log('[gmdbg]', tag, payload);
+                      if (window.__gmAiDebug) console.log('[gmdbg]', tag, payload);
                     } catch (e3) {}
                     try { if (typeof __gmDbg === 'function') { __gmDbg(tag, payload); } } catch (e3) {}
                   };
@@ -12577,7 +13441,10 @@ flex-shrink:0;cursor:pointer;
               const stage = String(data.stage || '');
               m.stage = stage;
               const msg = String(data.message || '');
-              if (msg) m.content = __gmAiNormalizePendingStatusText(msg);
+              // If streaming already started for this message, do NOT overwrite its content with status text.
+              if (!m.stream_started) {
+                if (msg) m.content = __gmAiNormalizePendingStatusText(msg);
+              }
               __gmAiRenderChat();
               try { __gmAiRefreshSendCounter(); } catch (eC2) {}
               applied = true;
@@ -12592,6 +13459,37 @@ flex-shrink:0;cursor:pointer;
             } catch (eC0) {}
           }
         } catch (eS) {}
+        break;
+
+      case 'ai_agent_delta':
+        try {
+          const runId = String(data.run_id || '');
+          if (!runId) break;
+          try {
+            const activeRid = String(window.__gmAiActiveRunId || '').trim();
+            if (activeRid && activeRid !== runId) {
+              break;
+            }
+          } catch (eARd0) {}
+          const delta = String(data.delta || '');
+          if (!delta) break;
+          for (let i = __gmAiChatMessages.length - 1; i >= 0; i--) {
+            const m = __gmAiChatMessages[i];
+            if (m && m.role === 'assistant' && m.pending && String(m.run_id || '') === runId) {
+              // First delta should replace any pending status text (e.g. "思考中...(round x/y)").
+              if (!m.stream_started) {
+                m.stream_started = true;
+                m.content = delta;
+              } else {
+                m.content = String(m.content || '') + delta;
+              }
+              m.stage = 'streaming';
+              __gmAiRenderChat();
+              try { __gmAiRefreshSendCounter(); } catch (eC2) {}
+              break;
+            }
+          }
+        } catch (eD) {}
         break;
 
       case 'ai_agent_final':
@@ -13017,15 +13915,26 @@ flex-shrink:0;cursor:pointer;
   let __gmAiConfigLoadedOnce = false;
   let __gmAiPanel = 'chat';
   let __gmAiChatMessages = [];
+  let __gmAiLastSendSessionId = '';
   let __gmAiConfig = { active_profile_id: '', profiles: [] };
   let __gmAiSelectedProfileId = '';
   let __gmAiEditingProfileId = '';
   let __gmAiActiveTurnUndoGroupId = '';
   let __gmAiRunStatusCache = new Map();
+  let __gmAiPendingAttachments = [];
   let __gmAiCapabilitiesText = '';
   let __gmAiCapabilitiesSpec = null;
   let __gmAiSessions = [];
   let __gmAiActiveSessionId = '';
+  let __gmAiDebug = false;
+  try { __gmAiDebug = (String(localStorage.getItem('gm_ai_debug') || '') === '1'); } catch (eDbgInit) {}
+  function __gmDbg(...args) {
+    try {
+      let on = !!__gmAiDebug;
+      try { on = on || (String(localStorage.getItem('gm_ai_debug') || '') === '1'); } catch (eLS) {}
+      if (on && console && console.log) console.log('[GM-AI]', ...args);
+    } catch (e) {}
+  }
   let __gmAiEphemeralSessionPrefix = '__local__';
   let __gmAiModels = [];
   let __gmAiModelsMeta = { base_url: '', api_key: '' };
@@ -13036,6 +13945,31 @@ flex-shrink:0;cursor:pointer;
   let __gmAiContinueState = { on: false, reason: '' };
   let __gmAiNextSendIsContinue = false;
   let __gmAiDraftPersistTimer = 0;
+  // In-memory per-session drafts (not persisted): { [sessionId]: { text: string, atts: array } }
+  window.__gmAiSessionDrafts = window.__gmAiSessionDrafts && typeof window.__gmAiSessionDrafts === 'object' ? window.__gmAiSessionDrafts : {};
+
+  function __gmAiSaveSessionDraft(sessionId) {
+    try {
+      const sid = String(sessionId || __gmAiActiveSessionId || '').trim();
+      if (!sid) return;
+      const ta = document.getElementById('aiChatInput');
+      const text = ta ? String(ta.value || '') : '';
+      const atts = Array.isArray(__gmAiPendingAttachments) ? __gmAiPendingAttachments.slice() : [];
+      if (!window.__gmAiSessionDrafts || typeof window.__gmAiSessionDrafts !== 'object') window.__gmAiSessionDrafts = {};
+      window.__gmAiSessionDrafts[sid] = { text, atts };
+    } catch (e) {}
+  }
+
+  function __gmAiLoadSessionDraft(sessionId) {
+    try {
+      const sid = String(sessionId || __gmAiActiveSessionId || '').trim();
+      const d = (window.__gmAiSessionDrafts && typeof window.__gmAiSessionDrafts === 'object') ? window.__gmAiSessionDrafts[sid] : null;
+      const ta = document.getElementById('aiChatInput');
+      if (ta) ta.value = (d && typeof d.text === 'string') ? d.text : '';
+      try { __gmAiPendingAttachments = (d && Array.isArray(d.atts)) ? d.atts.slice() : []; } catch (e2) {}
+      try { __gmAiRenderAttachList(); } catch (e3) {}
+    } catch (e) {}
+  }
 
   function __gmAiDraftStorageKey(profileId, sessionId) {
     try {
@@ -13396,6 +14330,8 @@ flex-shrink:0;cursor:pointer;
 
   function __gmAiRenderChat() {
     try {
+      try { if (window.__gmAiDebug) console.log('[TRACE] renderChat: enter'); } catch (eR0) {}
+      try { __gmAiHydrateAttachmentsFromCache(); } catch (eHyd0) {}
       const list = document.getElementById('aiChatInner') || document.getElementById('aiChatList');
       if (!list) return;
       if (!Array.isArray(__gmAiChatMessages) || __gmAiChatMessages.length === 0) {
@@ -13418,6 +14354,7 @@ flex-shrink:0;cursor:pointer;
         }
       }
 
+      try { if (window.__gmAiDebug) console.log('[TRACE] renderChat: messages', Array.isArray(__gmAiChatMessages) ? __gmAiChatMessages.length : 0); } catch (eR1) {}
       const prevCache = Array.isArray(list.__gmAiMsgCache) ? list.__gmAiMsgCache : [];
       const nextCache = [];
       const children = Array.from(list.children || []);
@@ -13435,12 +14372,22 @@ flex-shrink:0;cursor:pointer;
         const m = __gmAiChatMessages[idx];
         const role = String(m && m.role ? m.role : '');
         const content = String(m && m.content ? m.content : '');
+        const attachments = Array.isArray(m && m.attachments) ? m.attachments : [];
+        const metaArr0 = Array.isArray(m && m._attMeta) ? m._attMeta : [];
+        const metaLen0 = metaArr0.length;
         const isHidden = Boolean(m && m.hidden);
         const isUser = role === 'user';
         const isPending = Boolean(m && m.pending);
         const userLoading = Boolean(isUser && lastIsPendingAssistant && idx === lastUserIdx);
-        const sig = `${role}|${isPending ? 1 : 0}|${userLoading ? 1 : 0}|${isHidden ? 1 : 0}|${content}`;
+        const attShownSig = isUser ? (Number(m && m._attShown) || 0) : 0;
+        const baseForSig = attachments.length ? attachments : metaArr0;
+        const attNamesSig = baseForSig && baseForSig.length
+          ? baseForSig.map(a => String(a && a.name || '')).join('|').slice(0, 200)
+          : '';
+        const effAttLen = attachments.length ? attachments.length : metaLen0;
+        const sig = `${role}|${isPending ? 1 : 0}|${userLoading ? 1 : 0}|${isHidden ? 1 : 0}|${content}|${effAttLen}|${attShownSig}|${attNamesSig}`;
         nextCache.push(sig);
+        try { if (__gmAiDebug && isUser) { __gmDbg('render sig', { idx, effAttLen, metaLen0, attLen: attachments.length, attNamesSig, shown: attShownSig, hidden: isHidden }); } } catch (eDbgRS) {}
 
         const prevSig = prevCache[idx];
         const node = ensureNode(idx);
@@ -13456,7 +14403,54 @@ flex-shrink:0;cursor:pointer;
           }
         } else {
           node.className = 'ai-msg ' + (isUser ? 'user' : 'assistant');
-          node.innerHTML = `<div class="ai-meta">${esc(isUser ? '你' : 'AI')}</div><div class="ai-bubble${userLoading ? ' user-loading' : ''}${isPending ? ' pending' : ''}"><div class="ai-msg-actions"><button title="删除" data-action="aiDeleteMsg" data-idx="${idx}">×</button></div><div class="ai-md">${isPending ? esc(content) : aiRenderMarkdown(content)}</div></div>`;
+          
+          let attachmentsHtml = '';
+          if (isUser) {
+            const meta = Array.isArray(m && m._attMeta) ? m._attMeta : [];
+            const base = attachments.length ? attachments : meta;
+            if (base && base.length) {
+              const total = base.length;
+              let shown = 0;
+              try {
+                const msg = (__gmAiChatMessages && __gmAiChatMessages[idx]) || null;
+                const prev = Number(msg && msg._attShown);
+                shown = Number.isFinite(prev) && prev > 0 ? prev : (total > 5 ? 5 : total);
+                if (msg) msg._attShown = shown;
+              } catch (eShown) { shown = total > 5 ? 5 : total; }
+
+              const end = Math.min(shown, total);
+              try { if (__gmAiDebug) { __gmDbg('render user atts', { idx, total, shown: end, hasAttachments: attachments.length, hasMeta: meta.length }); } } catch (eDbgRA0) {}
+              const tiles1 = base.slice(0, end).map((a, aiIdx) => {
+                const k = __gmAiAttachmentKind(a);
+                const imgSrc = (k === 'image') ? (a && (a.data_url || a.url) || '') : '';
+                const hasImg = Boolean(imgSrc);
+                const clickable = `data-action=\"aiChatOpenPreview\" data-msg-idx=\"${idx}\" data-att-idx=\"${aiIdx}\" onclick=\"__gmAiOnPreviewClick(event,this)\" role=\"button\" tabindex=\"0\" style=\"cursor:pointer;pointer-events:auto;position:relative;z-index:2;\"`;
+                try { if (__gmAiDebug) { __gmDbg('render att tile', { msgIdx: idx, attIdx: aiIdx, kind: k, hasImg, imgSrc: imgSrc ? (imgSrc.slice(0,60)+'...') : '', from: attachments.length ? 'attachments' : '_attMeta' }); } } catch(eDbgRA1) {}
+                const inner = hasImg
+                  ? `<img src=\"${esc(imgSrc)}\" alt=\"\" style=\"width:100%;height:100%;object-fit:cover;display:block;border-radius:4px;\" />`
+                  : `<div style=\"width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:var(--text2);\">${__gmAiAttachmentIcon(k)}</div>`;
+                const nm = String(a && a.name || '').trim();
+                const cap = nm || (hasImg ? '' : '资源已失效');
+                const capHtml = cap ? `<div style=\"margin-top:2px;font-size:11px;color:var(--text2);width:40px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;\">${esc(cap)}</div>` : '';
+                return `<span ${clickable} style=\"display:inline-block;width:auto;vertical-align:top;margin-right:6px;margin-bottom:6px;\">`
+                  + `<span style=\"display:inline-block;width:40px;height:40px;border-radius:4px;overflow:hidden;background:rgba(0,0,0,0.05);vertical-align:top;\">${inner}</span>`
+                  + `${capHtml}`
+                  + `</span>`;
+              }).join('');
+
+              const hasMore = end < total;
+              const rem = Math.max(0, total - end);
+              const moreTile = hasMore
+                ? `<span data-action=\"aiMoreAtt\" data-idx=\"${idx}\" title=\"展开更多\" style=\"display:inline-block;width:40px;height:40px;border-radius:4px;overflow:hidden;margin-right:4px;margin-bottom:6px;background:rgba(0,0,0,0.05);vertical-align:top;cursor:pointer;\"><span style=\"width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:var(--text2);font-weight:800;\">＋${rem}</span></span>`
+                : '';
+
+              const tiles = tiles1 + moreTile;
+              attachmentsHtml = tiles ? `<div style=\"margin-bottom:8px;display:flex;flex-wrap:wrap;\">${tiles}</div>` : '';
+              try { if (__gmAiDebug) { __gmDbg('render att', { idx, total, end, hasMore, rem }); } } catch (eDbgRA) {}
+            }
+          }
+          
+          node.innerHTML = `<div class="ai-meta">${esc(isUser ? '你' : 'AI')}</div><div class="ai-bubble${userLoading ? ' user-loading' : ''}${isPending ? ' pending' : ''}"><div class="ai-msg-actions"><button title="删除" data-action="aiDeleteMsg" data-idx="${idx}">×</button></div>${attachmentsHtml}<div class="ai-md">${isPending ? esc(content) : aiRenderMarkdown(content)}</div></div>`;
           try { __gmAiEnhanceCodeBlocks(node); } catch (eEnh) {}
         }
       }
@@ -13477,21 +14471,56 @@ flex-shrink:0;cursor:pointer;
       const msgsToSave = (() => {
         try {
           const base = Array.isArray(__gmAiChatMessages) ? __gmAiChatMessages : [];
-          return base.filter(m => !(m && m.hidden));
+          const visible = base.filter(m => !(m && m.hidden));
+          // Slim payload: drop attachments/data_url, persist only minimal fields + _attMeta (may include url if available)
+          return visible.map(m => {
+            try {
+              const role = String(m && m.role || '');
+              const item = { role, content: String(m && m.content || '') };
+              const ug = String(m && (m.undo_gid || m.undoGid) || '').trim();
+              if (ug) item.undo_gid = ug;
+              if (role === 'user') {
+                const meta0 = Array.isArray(m && m._attMeta) ? m._attMeta : [];
+                // If attachments have url (from prior uploads), merge url into meta entries by name/mime/size order
+                const atts = Array.isArray(m && m.attachments) ? m.attachments : [];
+                const metaOut = meta0.map((a, i) => {
+                  const b = (atts[i] && typeof atts[i] === 'object') ? atts[i] : {};
+                  const url = String(b && b.url || a && a.url || '');
+                  const o = { name: String(a && a.name || 'file'), mime: String(a && a.mime || ''), size: Number(a && a.size || 0) };
+                  if (url) o.url = url;
+                  return o;
+                });
+                if (metaOut.length) item._attMeta = metaOut;
+              }
+              return item;
+            } catch (e1) {
+              return { role: String(m && m.role || ''), content: String(m && m.content || '') };
+            }
+          });
         } catch (e) {
-          return __gmAiChatMessages;
+          return [];
         }
       })();
-      const h = await POST('/api/ai_chat_history', { profile_id: pid, session_id: __gmAiActiveSessionId, messages: msgsToSave });
+      const h = await POST('/api/ai_chat_history', { profile_id: pid, session_id: __gmAiActiveSessionId, messages: msgsToSave }, { headers: { 'Content-Type': 'application/json' } });
       if (h && h.ok) {
         if (Array.isArray(h.sessions)) __gmAiSessions = h.sessions;
         if (h.active_session_id) __gmAiActiveSessionId = String(h.active_session_id || '');
         __gmAiRenderHistoryChips();
         return;
       }
-      toast('保存会话失败：' + String((h && (h.msg || h.error)) || '保存失败'), 'err');
+      const em = String((h && (h.msg || h.error)) || '保存失败');
+      if (em.includes('附件或请求内容过大')) {
+        toast('保存会话失败：附件或请求内容过大（>10MB）。已自动精简历史负载，请重试。', 'err');
+      } else {
+        toast('保存会话失败：' + em, 'err');
+      }
     } catch (e) {
-      toast('保存会话失败', 'err');
+      const s = String(e && e.message || '');
+      if (s.includes('413') || s.includes('request entity too large')) {
+        toast('保存会话失败：附件或请求内容过大（>10MB）。', 'err');
+      } else {
+        toast('保存会话失败（连接异常）', 'err');
+      }
     }
   }
 
@@ -13875,6 +14904,70 @@ flex-shrink:0;cursor:pointer;
     } catch (e) {
       return [];
     }
+  }
+
+  function __gmAiOnPreviewClick(e, el){
+    try{
+      try{ if (e) { e.preventDefault(); e.stopPropagation(); } }catch(_){ }
+      const mi = parseInt(String(el && el.getAttribute ? el.getAttribute('data-msg-idx') : ''), 10);
+      const ai = parseInt(String(el && el.getAttribute ? el.getAttribute('data-att-idx') : ''), 10);
+      if (!Number.isFinite(mi) || !Number.isFinite(ai)) return false;
+      const msg = (__gmAiChatMessages && __gmAiChatMessages[mi]) || null;
+      if (!msg) return false;
+      const base0 = (Array.isArray(msg.attachments) && msg.attachments.length ? msg.attachments : (Array.isArray(msg._attMeta) ? msg._attMeta : []));
+      let a = base0[ai]; if (!a) return false;
+      try { if (window.__gmAiDebug) { (window.__gmDbg?__gmDbg:console.log)('click preview start (inline)', { msgIdx: mi, attIdx: ai, url: a && a.url, data_url: a && a.data_url, hasText: !!(a && typeof a.text==='string' && a.text), hasUndo: !!(msg && msg.undo_gid) }); } } catch(_){ }
+      const hasUrl = !!(a && (a.url || a.data_url) || (a && typeof a.text === 'string' && a.text));
+      if (!hasUrl) {
+        try {
+          const ug = String(msg.undo_gid || '').trim();
+          if (ug) {
+            const key = __gmAiAttCacheKey(__gmAiActiveSessionId);
+            if (key) {
+              const map = (()=>{ try { return JSON.parse(localStorage.getItem(key) || '{}') || {}; } catch(e){ return {}; } })();
+              const cached = Array.isArray(map[ug]) ? map[ug] : [];
+              if (cached[ai] && (cached[ai].url || cached[ai].data_url || (typeof cached[ai].text === 'string' && cached[ai].text))) {
+                a = cached[ai];
+              }
+            }
+          }
+          // prefer in-message _attMeta url if present
+          if ((!a.url && !a.data_url && !(typeof a.text === 'string' && a.text)) && Array.isArray(msg._attMeta) && msg._attMeta[ai] && msg._attMeta[ai].url) {
+            a = msg._attMeta[ai];
+          }
+          if ((!a.url && !a.data_url && !(typeof a.text === 'string' && a.text)) && Array.isArray(msg.attachments) && msg.attachments[ai]) {
+            a = msg.attachments[ai];
+          }
+          // attempt from full-by-content cache
+          if ((!a.url && !a.data_url && !(typeof a.text === 'string' && a.text))) {
+            try {
+              const keyF = __gmAiAttFullByContentKey(__gmAiActiveSessionId);
+              if (keyF) {
+                const mapF = (()=>{ try { return JSON.parse(localStorage.getItem(keyF) || '{}') || {}; } catch(e){ return {}; } })();
+                const ckF = 'user|' + __gmAiContentKeyNorm(msg.content || '');
+                const fullArr = Array.isArray(mapF[ckF]) ? mapF[ckF] : [];
+                if (fullArr[ai] && (fullArr[ai].url || fullArr[ai].data_url || (typeof fullArr[ai].text === 'string' && fullArr[ai].text))) a = fullArr[ai];
+              }
+            } catch (_eF) {}
+          }
+          // final attempt: content-key meta cache
+          if ((!a.url && !a.data_url && !(typeof a.text === 'string' && a.text))) {
+            try {
+              const key2 = __gmAiAttByContentKey(__gmAiActiveSessionId);
+              if (key2) {
+                const map2 = (()=>{ try { return JSON.parse(localStorage.getItem(key2) || '{}') || {}; } catch(e){ return {}; } })();
+                const ck = 'user|' + __gmAiContentKeyNorm(msg.content || '');
+                const arr2 = Array.isArray(map2[ck]) ? map2[ck] : [];
+                if (arr2[ai] && arr2[ai].url) a = arr2[ai];
+              }
+            } catch (_eCk) {}
+          }
+        } catch(_){ }
+      }
+      try { if (window.__gmAiDebug) { (window.__gmDbg?__gmDbg:console.log)('click preview resolved (inline)', { msgIdx: mi, attIdx: ai, url: a && a.url, data_url: a && a.data_url, hasText: !!(a && typeof a.text==='string' && a.text) }); } } catch(_){ }
+      __gmAiOpenUnifiedPreviewForMessage(mi, ai);
+      return false;
+    }catch(_){ return false; }
   }
 
   function __gmAiParseStructuredSummary(text) {
@@ -14943,7 +16036,7 @@ flex-shrink:0;cursor:pointer;
     } catch (e) {}
   }
 
-  function showAiConfigPanel() {
+  async function showAiConfigPanel() {
     try {
       __gmAiPanel = 'config';
       const c = document.getElementById('aiChatView');
@@ -14955,6 +16048,18 @@ flex-shrink:0;cursor:pointer;
       const btn = document.getElementById('aiPlusBtn');
       if (btn) btn.textContent = '×';
       __gmAiRenderProfileList();
+
+      // Backfill limits from hivo_ai_config if not present
+      try {
+        const hasLimits = (__gmAiConfig && __gmAiConfig.limits && typeof __gmAiConfig.limits === 'object');
+        if (!hasLimits) {
+          const r2 = await GET('/api/hivo_ai_config');
+          const c2 = r2 && r2.config ? r2.config : null;
+          if (c2 && c2.limits && typeof c2.limits === 'object') {
+            __gmAiConfig.limits = c2.limits;
+          }
+        }
+      } catch (eLimp) {}
       try { __gmAiBindModelConfigEvents(); } catch (eB0) {}
       try { __gmAiUpdateCfgSeg(); } catch (eS1) {}
       try { __gmAiSearchProviderSuggestHide(); } catch (e00) {}
@@ -15073,6 +16178,224 @@ flex-shrink:0;cursor:pointer;
     } catch (e2) {}
   }
 
+  function __gmAiAttachmentIcon(kind) {
+    if (kind === 'image') return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>';
+    if (kind === 'audio') return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>';
+    if (kind === 'video') return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="15" height="13" rx="2" ry="2"/><polygon points="16 7 22 11 22 16 16 20 16 7"/></svg>';
+    if (kind === 'text') return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/></svg>';
+    return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>';
+  }
+
+  function __gmAiAttachmentKind(a) {
+    try {
+      const mime = String((a && a.mime) || '');
+      if (mime.startsWith('image/')) return 'image';
+      if (mime.startsWith('audio/')) return 'audio';
+      if (mime.startsWith('video/')) return 'video';
+      if (mime.startsWith('text/') || mime === 'application/json') return 'text';
+    } catch (e) {}
+    return 'file';
+  }
+
+  function __gmAiRenderAttachList() {
+    try {
+      const box = document.getElementById('aiAttachList');
+      if (!box) return;
+      const atts = Array.isArray(__gmAiPendingAttachments) ? __gmAiPendingAttachments : [];
+      if (!atts.length) {
+        if (box.classList) box.classList.remove('show');
+        box.innerHTML = '';
+        return;
+      }
+      if (box.classList) box.classList.add('show');
+
+      const cards = atts.map((a, i) => {
+        const nm = String((a && a.name) || 'file');
+        const mime = String((a && a.mime) || '');
+        const size = (a && typeof a.size === 'number') ? a.size : (Number(a && a.size) || 0);
+        const k = __gmAiAttachmentKind(a);
+        const sub = esc((mime || 'unknown') + (size ? ` · ${size} bytes` : ''));
+        const imgSrc = (k === 'image' && a && (a.data_url || a.url)) ? esc(a.data_url || a.url) : '';
+        const thumb = imgSrc ? `<img src="${imgSrc}" alt="" />` : __gmAiAttachmentIcon(k);
+        return `<div class="ai-attach-card" data-action="aiOpenAttachment" data-idx="${i}" style="cursor:pointer;">
+          <div class="ai-attach-thumb" data-action="aiOpenAttachment" data-idx="${i}">${thumb}</div>
+          <div class="ai-attach-meta" data-action="aiOpenAttachment" data-idx="${i}">
+            <div class="ai-attach-name" data-action="aiOpenAttachment" data-idx="${i}">${esc(nm)}</div>
+            <div class="ai-attach-sub">${sub}</div>
+          </div>
+          <div class="ai-attach-progress" data-idx="${i}"><div class="ring"></div><div class="pct">0%</div></div>
+          <button class="ai-attach-x" data-action="aiRemoveAttachment" data-idx="${i}" title="移除">×</button>
+        </div>`;
+      }).join('');
+      box.innerHTML = `<div class="ai-attach-grid">${cards}</div>`;
+    } catch (e) {}
+  }
+
+  async function __gmAiAddFiles(files) {
+    const arr = [];
+    try {
+      for (const f of (files || [])) {
+        if (!f) continue;
+        const name = String(f.name || 'file');
+        const mime = String(f.type || '');
+        const size = Number(f.size || 0);
+        const MAX_IMG_BYTES = 6 * 1024 * 1024;
+        const MAX_TEXT_BYTES = 300 * 1024;
+        if (mime.startsWith('image/')) {
+          let data_url = '';
+          if (size > MAX_IMG_BYTES) {
+            try {
+              data_url = await __gmCompressImageToDataUrl(f, MAX_IMG_BYTES);
+            } catch (eCmp) { data_url = ''; }
+            if (!data_url) { try { toast('图片过大，已跳过（>6MB）。请裁剪后重试，或更换更小的截图。', 'warn'); } catch (eT) {} continue; }
+          } else {
+            data_url = await new Promise((resolve) => {
+              try {
+                const r = new FileReader();
+                r.onload = () => resolve(String(r.result || ''));
+                r.onerror = () => resolve('');
+                r.readAsDataURL(f);
+              } catch (e) { resolve(''); }
+            });
+          }
+          if (data_url) arr.push({ name, mime, size, data_url });
+          continue;
+        }
+        if ((mime.startsWith('text/') || mime === 'application/json') && size > 0 && size <= MAX_TEXT_BYTES) {
+          const text = await new Promise((resolve) => {
+            try {
+              const r = new FileReader();
+              r.onload = () => resolve(String(r.result || ''));
+              r.onerror = () => resolve('');
+              r.readAsText(f);
+            } catch (e) { resolve(''); }
+          });
+          if (text) arr.push({ name, mime: mime || 'text/plain', size, text });
+          else arr.push({ name, mime, size });
+          continue;
+        }
+        // 其他二进制/文档类型：读取为 data_url 以便统一走上传接口
+        const data_url_any = await new Promise((resolve) => {
+          try {
+            const r = new FileReader();
+            r.onload = () => resolve(String(r.result || ''));
+            r.onerror = () => resolve('');
+            r.readAsDataURL(f);
+          } catch (e) { resolve(''); }
+        });
+        if (data_url_any) arr.push({ name, mime, size, data_url: data_url_any }); else arr.push({ name, mime, size });
+      }
+    } catch (e) {}
+    try {
+      __gmAiPendingAttachments = (Array.isArray(__gmAiPendingAttachments) ? __gmAiPendingAttachments : []).concat(arr);
+    } catch (e) {}
+    try { __gmAiRenderAttachList(); } catch (e) {}
+    try { __gmAiUpdateUploadLimitHint(); } catch (e) {}
+    try {
+      const needUp = (arr || []).filter(a => a && typeof a === 'object' && String(a.data_url||'').startsWith('data:') && !String(a.url||'').trim());
+      if (needUp.length) {
+        const pending = Array.isArray(__gmAiPendingAttachments) ? __gmAiPendingAttachments : [];
+        // 并行上传：为每个文件分别开启上传与进度覆盖
+        await Promise.all(needUp.map(async (a) => {
+          try {
+            __gmAiUploadingCount += 1;
+            __gmAiUpdateSendDisabledForUpload();
+            const idx = pending.indexOf(a);
+            const total = Number(a && a.size || 0);
+            try { __gmAiShowAttProgress(idx, 0, total); } catch (e0) {}
+            const res = await __gmUploadAttachmentWithProgress({ name: String(a.name||'file'), mime: String(a.mime||''), data_url: String(a.data_url||'') }, (sent, tot)=>{
+              try { __gmAiShowAttProgress(idx, sent, tot||total); } catch (e1) {}
+            });
+            try { __gmAiHideAttProgress(idx); } catch (e2) {}
+            if (res && res.ok && Array.isArray(res.items) && res.items[0] && res.items[0].url){
+              if (idx >= 0 && pending[idx]) pending[idx].url = String(res.items[0].url||'');
+            } else {
+              toast(`上传失败：${String(a.name||'file')}`,'err');
+            }
+          } finally {
+            __gmAiUploadingCount = Math.max(0, __gmAiUploadingCount - 1);
+            __gmAiUpdateSendDisabledForUpload();
+          }
+        }));
+      }
+    } catch (e) {}
+  }
+
+  function __gmProfileSupportsVisionFromConfig() {
+    try {
+      const pid = String(__gmAiSelectedProfileId || __gmAiConfig.active_profile_id || '').trim();
+      const profs = Array.isArray(__gmAiConfig && __gmAiConfig.profiles) ? __gmAiConfig.profiles : [];
+      const p = profs.find(x => x && String(x.id||'') === pid) || null;
+      if (!p) return false;
+      return Boolean(p.supports_vision);
+    } catch (e) { return false; }
+  }
+
+  async function __gmCompressImageToDataUrl(file, maxBytes) {
+    return await new Promise((resolve) => {
+      try {
+        const fr = new FileReader();
+        fr.onload = () => {
+          try {
+            const img = new Image();
+            img.onload = () => {
+              try {
+                const cvs = document.createElement('canvas');
+                let { width, height } = img;
+                const scale = Math.sqrt(maxBytes / Math.max(1, file.size));
+                const s = Math.min(1, scale);
+                width = Math.max(1, Math.floor(width * s));
+                height = Math.max(1, Math.floor(height * s));
+                cvs.width = width; cvs.height = height;
+                const ctx = cvs.getContext('2d');
+                ctx.drawImage(img, 0, 0, width, height);
+                let q = 0.85;
+                let out = cvs.toDataURL('image/jpeg', q);
+                // quick quality adjust if still too large
+                let tries = 4;
+                while (tries-- > 0 && out && out.length * 0.75 > maxBytes) {
+                  q = Math.max(0.5, q - 0.1);
+                  out = cvs.toDataURL('image/jpeg', q);
+                }
+                resolve(out && (out.length * 0.75 <= maxBytes) ? out : '');
+              } catch (e) { resolve(''); }
+            };
+            img.onerror = () => resolve('');
+            img.src = String(fr.result || '');
+          } catch (e2) { resolve(''); }
+        };
+        fr.onerror = () => resolve('');
+        fr.readAsDataURL(file);
+      } catch (e0) { resolve(''); }
+    });
+  }
+
+  function aiPickAttachments() {
+    try {
+      const inp = document.getElementById('aiAttachInput');
+      if (inp) inp.click();
+    } catch (e) {}
+  }
+
+  function aiRemoveAttachment(e, el) {
+    try {
+      const idx = Number(el && el.getAttribute && el.getAttribute('data-idx'));
+      if (!Number.isFinite(idx)) return;
+      const atts = Array.isArray(__gmAiPendingAttachments) ? __gmAiPendingAttachments : [];
+      atts.splice(idx, 1);
+      __gmAiPendingAttachments = atts;
+      __gmAiRenderAttachList();
+    } catch (e) {}
+  }
+
+  function aiOpenAttachment(e, el){
+    try{
+      const idx = Number(el && el.getAttribute && el.getAttribute('data-idx'));
+      const atts = Array.isArray(__gmAiPendingAttachments) ? __gmAiPendingAttachments : [];
+      __gmAiOpenUnifiedPreviewForPending(idx);
+    }catch(e){}
+  }
+
   window.aiClearAiCache = async function() {
     try {
       const res = await POST('/api/ai_cache_clear', {});
@@ -15153,6 +16476,7 @@ flex-shrink:0;cursor:pointer;
 
       try { __gmAiBindSearchEnabledToggle(); } catch (eB0) {}
 
+      try { __gmAiUpdateUploadLimitHint(); } catch (eLH) {}
       __gmAiSetMeta('已加载本地配置');
       toast('✓ AI 配置已加载', 'ok');
     } catch (e) {
@@ -15371,14 +16695,11 @@ flex-shrink:0;cursor:pointer;
     const sid = String(sessionId || '');
     if (!pid || !sid) return;
     showAiChatPanel();
-    try { __gmAiPersistDraftForActiveSession(); } catch (e0d) {}
+    try { __gmAiSaveSessionDraft(__gmAiActiveSessionId); } catch (e0d) {}
     __gmAiActiveSessionId = sid;
     __gmAiRenderHistoryChips();
     try { __gmAiSetContinueState(false, ''); } catch (eCS0) {}
-    try {
-      const ta = document.getElementById('aiChatInput');
-      if (ta) ta.value = '';
-    } catch (e0Ta) {}
+    try { __gmAiLoadSessionDraft(sid); } catch (eLd) {}
     if (sid.startsWith(__gmAiEphemeralSessionPrefix)) {
       __gmAiChatMessages = [];
       __gmAiRenderChat();
@@ -15427,6 +16748,14 @@ flex-shrink:0;cursor:pointer;
         __gmAiSessions = Array.isArray(res.sessions) ? res.sessions : [];
         __gmAiActiveSessionId = String(res.active_session_id || '');
         __gmAiRenderHistoryChips();
+        try {
+          // Proactively drop any stale Continue state when active session becomes empty/default
+          if (!__gmAiActiveSessionId) {
+            window.__gmAiActiveRunId = '';
+            __gmAiSetContinueState(false, '');
+            __gmAiClearPersistedContinueState(pid, '');
+          }
+        } catch (eClr) {}
         loadAiChatHistory(pid, __gmAiActiveSessionId).catch(()=>{});
       }
     }).catch(()=>{});
@@ -15508,10 +16837,27 @@ flex-shrink:0;cursor:pointer;
     const res = await GET(url);
     if (res && res.ok) {
       if (Array.isArray(res.sessions)) __gmAiSessions = res.sessions;
-      if (res.active_session_id) __gmAiActiveSessionId = String(res.active_session_id || '');
+      if (res.active_session_id) {
+        const newSid = String(res.active_session_id || '');
+        const oldSid = String(__gmAiActiveSessionId || '');
+        try { if (__gmAiDebug) { __gmDbg('history sid', { oldSid, newSid, lastSendSid: __gmAiLastSendSessionId }); } } catch (eDbgHS) {}
+        if (newSid && oldSid && newSid !== oldSid) {
+          try { __gmAiSaveSessionDraft(oldSid); } catch (eSv0) {}
+          try { __gmAiMigrateAttCaches(oldSid, newSid); } catch (eMg) {}
+          // Bind pending attachments to session: clear UI list when session actually changes
+          try { __gmAiPendingAttachments = []; __gmAiRenderAttachList(); } catch (eClr1) {}
+        } else if (newSid && !oldSid && __gmAiLastSendSessionId && __gmAiLastSendSessionId !== newSid) {
+          try { __gmAiSaveSessionDraft(__gmAiLastSendSessionId); } catch (eSv1) {}
+          try { __gmAiMigrateAttCaches(__gmAiLastSendSessionId, newSid); } catch (eMg2) {}
+          try { __gmAiPendingAttachments = []; __gmAiRenderAttachList(); } catch (eClr2) {}
+        }
+        __gmAiActiveSessionId = newSid;
+        try { __gmAiLoadSessionDraft(newSid); } catch (eLd0) {}
+      }
       __gmAiRenderHistoryChips();
       if (Array.isArray(res.messages)) {
         __gmAiChatMessages = res.messages;
+        try { __gmAiHydrateAttachmentsFromCache(); } catch (eHyd) {}
         __gmAiRenderChat();
       }
     }
@@ -23607,6 +24953,7 @@ flex-shrink:0;cursor:pointer;
           }
           try { __gmAiLoadCapabilitiesOnce(false).catch(()=>{}); } catch (e0cap) {}
           showAiChatPanel();
+          try { __gmAiUpdateUploadLimitHint(); } catch (eLH2) {}
         } catch (e) {}
       }
     }
@@ -24293,8 +25640,6 @@ flex-shrink:0;cursor:pointer;
 
   function __gmAiMediaPreviewGoto(delta) {
     try {
-      const img = document.getElementById('aiMediaPreviewImg');
-      if (!img) return;
       const list = Array.isArray(window.__gmAiMediaPreviewList) ? window.__gmAiMediaPreviewList : [];
       if (!list.length) return;
       const n = list.length;
@@ -24302,8 +25647,7 @@ flex-shrink:0;cursor:pointer;
       idx = (idx + delta) % n;
       if (idx < 0) idx += n;
       window.__gmAiMediaPreviewIdx = idx;
-      img.src = String(list[idx] || '');
-      __gmAiSyncMediaPreviewUi();
+      __gmAiRenderUnifiedCurrent();
     } catch (e) {}
   }
 
@@ -24311,7 +25655,10 @@ flex-shrink:0;cursor:pointer;
     try {
       const list = Array.isArray(window.__gmAiMediaPreviewList) ? window.__gmAiMediaPreviewList : [];
       const idx = Number(window.__gmAiMediaPreviewIdx) || 0;
-      return String(list[idx] || '');
+      const it0 = list[idx];
+      if (!it0) return '';
+      if (typeof it0 === 'string') return String(it0||'');
+      return String(it0.url || '');
     } catch (e) {
       return '';
     }
@@ -24324,16 +25671,21 @@ flex-shrink:0;cursor:pointer;
       const frame = modal.querySelector('.ai-media-frame');
       if (!frame) return;
       const img = document.getElementById('aiMediaPreviewImg');
-      if (!img) return;
+      const textBox = document.getElementById('aiMediaPreviewText');
+      if (!img || !textBox) return;
       const tools = frame.querySelector('.ai-media-tools');
       const prev = document.getElementById('aiMediaPreviewPrev');
       const next = document.getElementById('aiMediaPreviewNext');
       if (!tools || !prev || !next) return;
 
-      const iw = img.clientWidth || 0;
-      const ih = img.clientHeight || 0;
-      const it = img.offsetTop || 0;
-      const il = img.offsetLeft || 0;
+      // Pick the currently visible content element (image or text)
+      const target = (img.style.display !== 'none') ? img : textBox;
+      const targetRect = target.getBoundingClientRect();
+      const frameRect = frame.getBoundingClientRect();
+      const iw = Math.max(0, Math.floor(targetRect.width));
+      const ih = Math.max(0, Math.floor(targetRect.height));
+      const il = Math.max(0, Math.floor(targetRect.left - frameRect.left));
+      const it = Math.max(0, Math.floor(targetRect.top - frameRect.top));
       if (iw <= 0 || ih <= 0) return;
 
       const pad = 10;
@@ -24356,6 +25708,226 @@ flex-shrink:0;cursor:pointer;
     } catch (e) {}
   }
 
+  // ── Unified preview (image/text/file) using aiMediaPreviewModal ──────────────
+  function __gmAiRenderUnifiedCurrent() {
+    try {
+      const modal = document.getElementById('aiMediaPreviewModal');
+      const img = document.getElementById('aiMediaPreviewImg');
+      const pre = document.getElementById('aiMediaPreviewPre');
+      const textBox = document.getElementById('aiMediaPreviewText');
+      const openBtn = document.getElementById('aiMediaPreviewOpenBtn');
+      const dlBtn = document.getElementById('aiMediaPreviewDownloadBtn');
+      if (!modal || !img || !pre || !textBox) return;
+      const list = Array.isArray(window.__gmAiMediaPreviewList) ? window.__gmAiMediaPreviewList : [];
+      const idx = Math.max(0, Math.min(Number(window.__gmAiMediaPreviewIdx)||0, Math.max(0, list.length-1)));
+      const it0 = list[idx];
+      const it = (it0 && typeof it0 === 'object') ? it0 : { kind: 'image', url: String(it0||'') };
+      const kind = String(it.kind || (it.text ? 'text' : 'image'));
+      const url = __gmSafeMediaUrl(it.url || '');
+      const text = String(it.text || '');
+      if (kind === 'image' && url) {
+        img.style.display = '';
+        textBox.style.display = 'none';
+        img.src = url;
+        if (openBtn) openBtn.style.display = '';
+        if (dlBtn) dlBtn.style.display = '';
+      } else if (kind === 'text') {
+        img.style.display = 'none';
+        textBox.style.display = '';
+        pre.textContent = text || '无法内嵌预览';
+        if (openBtn) openBtn.style.display = 'none';
+        if (dlBtn) dlBtn.style.display = 'none';
+        // Defer a layout refresh so tools/controls position to the text box
+        try { requestAnimationFrame(() => { try { if (window.__gmAiMediaPreviewOpen) __gmAiMediaPreviewRefreshLayout(); } catch(_e){} }); } catch(_){ }
+      } else {
+        img.style.display = 'none';
+        textBox.style.display = '';
+        pre.textContent = '无法内嵌预览该文件类型';
+        if (openBtn) openBtn.style.display = url ? '' : 'none';
+        if (dlBtn) dlBtn.style.display = url ? '' : 'none';
+        try { requestAnimationFrame(() => { try { if (window.__gmAiMediaPreviewOpen) __gmAiMediaPreviewRefreshLayout(); } catch(_e){} }); } catch(_){ }
+      }
+      __gmAiSyncMediaPreviewUi();
+      try { if (img && url) { img.onload = () => { try { if (window.__gmAiMediaPreviewOpen) __gmAiMediaPreviewRefreshLayout(); } catch(e){} }; } } catch(_e) {}
+    } catch (e) {}
+  }
+
+  function __gmAiOpenUnifiedPreview(list, startIdx){
+    try{
+      const modal = document.getElementById('aiMediaPreviewModal');
+      window.__gmAiMediaPreviewList = Array.isArray(list) ? list : [];
+      window.__gmAiMediaPreviewIdx = Math.max(0, Math.min(Number(startIdx)||0, Math.max(0, window.__gmAiMediaPreviewList.length-1)));
+      modal.classList.add('show');
+      try{ const frame = modal.querySelector('.ai-media-frame'); if (frame) frame.classList.add('__show-controls'); }catch(_){ }
+      window.__gmAiMediaPreviewOpen = true;
+      __gmAiRenderUnifiedCurrent();
+    }catch(e){}
+  }
+
+  function __gmAiOpenUnifiedPreviewForMessage(mi, ai){
+    try{
+      const m = (__gmAiChatMessages && __gmAiChatMessages[mi]) || null; if (!m) return;
+      const tgtIdx = Number(ai)||0;
+      const tgtBase = (Array.isArray(m.attachments) && m.attachments.length ? m.attachments : (Array.isArray(m._attMeta) ? m._attMeta : []));
+      const tgt = (tgtBase && tgtBase[tgtIdx]) || null;
+      const tgtMime = String(tgt && tgt.mime || '');
+
+      // If clicking an image attachment: use global image list (AI markdown images + sent attachments) for counting
+      if (tgt && tgtMime.startsWith('image/')){
+        const imgs = __gmUnifiedImageList();
+        const u = __gmSafeMediaUrl(String(tgt.url || tgt.data_url || ''));
+        let start = 0;
+        if (u){
+          for (let i=0;i<imgs.length;i++){
+            if (__gmSafeMediaUrl(imgs[i].url||'') === u){ start = i; break; }
+          }
+        }
+        __gmAiOpenUnifiedPreview(imgs, start);
+        return;
+      }
+
+      // Otherwise (text/file), keep original mixed list behavior for rich preview
+      const all = Array.isArray(__gmAiChatMessages) ? __gmAiChatMessages : [];
+      const list = [];
+      const same = (x,y)=>{
+        try{
+          if (!x||!y) return false;
+          const xu = String(x.url||x.data_url||'');
+          const yu = String(y.url||y.data_url||'');
+          const xt = typeof x.text==='string'?x.text:'';
+          const yt = typeof y.text==='string'?y.text:'';
+          return (xu && yu && xu===yu) || (xt && yt && xt===yt);
+        }catch(_){return false;}
+      };
+      for (const msg of all){
+        const base = (Array.isArray(msg.attachments) && msg.attachments.length ? msg.attachments : (Array.isArray(msg._attMeta) ? msg._attMeta : []));
+        for (const a of (base||[])){
+          if (!a) continue;
+          const mime = String(a.mime||'');
+          const url = String(a.url || a.data_url || '');
+          if (mime.startsWith('image/') && url){ list.push({ kind:'image', url, name:a.name||'file', mime, __src:a }); continue; }
+          if (typeof a.text === 'string' && a.text){ list.push({ kind:'text', text:String(a.text||''), name:a.name||'file', mime: mime||'text/plain', __src:a }); continue; }
+          if (url){ list.push({ kind:'file', url, name:a.name||'file', mime, __src:a }); }
+        }
+      }
+      let start = 0;
+      if (tgt){
+        const n = list.length;
+        for (let i=0;i<n;i++){
+          const it = list[i] && list[i].__src;
+          if (it && same(it, tgt)) { start = i; break; }
+        }
+      }
+      __gmAiOpenUnifiedPreview(list, start);
+    }catch(e){}
+  }
+
+  function __gmAiOpenUnifiedPreviewForPending(idx){
+    try{
+      const atts = Array.isArray(__gmAiPendingAttachments) ? __gmAiPendingAttachments : [];
+      const list = [];
+      for (const a of (atts||[])){
+        if (!a) continue;
+        const mime = String(a.mime||'');
+        const url = String(a.url || a.data_url || '');
+        if (mime.startsWith('image/') && url){ list.push({ kind:'image', url, name:a.name||'file', mime }); continue; }
+        if (typeof a.text === 'string' && a.text){ list.push({ kind:'text', text:String(a.text||''), name:a.name||'file', mime: mime||'text/plain' }); continue; }
+        if (url){ list.push({ kind:'file', url, name:a.name||'file', mime }); }
+      }
+      const i = Math.max(0, Math.min(Number(idx)||0, Math.max(0, list.length-1)));
+      __gmAiOpenUnifiedPreview(list, i);
+    }catch(e){}
+  }
+
+  function __gmAiCollectAllSentAttachments(){
+    const out = [];
+    try{
+      const msgs = Array.isArray(__gmAiChatMessages) ? __gmAiChatMessages : [];
+      for (const m of msgs){
+        const base = (Array.isArray(m.attachments) && m.attachments.length ? m.attachments : (Array.isArray(m._attMeta) ? m._attMeta : []));
+        for (const a of (base||[])){
+          if (!a) continue;
+          const mime = String(a.mime||'');
+          const url = String(a.url || a.data_url || '');
+          if (mime.startsWith('image/') && url){ out.push({ kind:'image', url, name:a.name||'file', mime, __src:a }); continue; }
+          if (typeof a.text === 'string' && a.text){ out.push({ kind:'text', text:String(a.text||''), name:a.name||'file', mime: mime||'text/plain', __src:a }); continue; }
+          if (url){ out.push({ kind:'file', url, name:a.name||'file', mime, __src:a }); }
+        }
+      }
+    }catch(e){}
+    return out;
+  }
+
+  function __gmAiOpenUnifiedPreviewForMdImage(src){
+    try{
+      const list = __gmUnifiedImageList();
+      const safe = __gmSafeMediaUrl(src);
+      let start = 0;
+      if (safe){
+        for (let i=0;i<list.length;i++){
+          const it = list[i];
+          if (it && it.kind==='image' && __gmSafeMediaUrl(it.url)===safe){ start = i; break; }
+        }
+      }
+      __gmAiOpenUnifiedPreview(list, start);
+    }catch(e){}
+  }
+
+  function __gmAiCollectMdImages(){
+    const out = [];
+    try{
+      const root = document.getElementById('aiChatInner') || document.getElementById('aiChatList') || document;
+      const imgs = root.querySelectorAll('.ai-md img');
+      for (const img of imgs){
+        if (!img || !img.src) continue;
+        const modal = document.getElementById('aiMediaPreviewModal');
+        if (modal && modal.contains(img)) continue;
+        const u = __gmSafeMediaUrl(img.getAttribute('src')||'');
+        if (!u) continue;
+        out.push({ kind:'image', url:u, name:img.getAttribute('alt')||'image', mime:'image/*' });
+      }
+    }catch(e){}
+    return out;
+  }
+
+  function __gmUnifiedImageList(){
+    try{
+      const md = __gmAiCollectMdImages();
+      const atts = __gmAiCollectAllSentAttachments().filter(x => x && x.kind === 'image');
+      const out = [];
+      const seen = new Set();
+      const pushIfNew = (it) => {
+        const u = __gmSafeMediaUrl(it && it.url || '');
+        if (!u || seen.has(u)) return;
+        seen.add(u);
+        out.push({ kind: 'image', url: u, name: it.name || 'image', mime: it.mime || 'image/*' });
+      };
+      for (const it of (md || [])) pushIfNew(it);
+      for (const it of (atts || [])) pushIfNew(it);
+      return out;
+    }catch(e){ return []; }
+  }
+  // Ensure direct delegation on chat inner for markdown images
+  (function __gmBindAiMdOnInner(){
+    try{
+      const inner = document.getElementById('aiChatInner');
+      if (inner && !inner.__gmMdDelegateBound){
+        inner.__gmMdDelegateBound = true;
+        inner.addEventListener('click', (e)=>{
+          try{
+            const img = e.target && e.target.closest ? e.target.closest('.ai-md img') : null;
+            if (!img) return;
+            const modal = document.getElementById('aiMediaPreviewModal');
+            if (modal && modal.contains(img)) return;
+            const src = String(img.getAttribute('src')||'');
+            if (!src) return;
+            try { e.preventDefault(); e.stopPropagation(); } catch(_){ }
+            __gmAiOpenUnifiedPreviewForMdImage(src);
+          }catch(_){ }
+        });
+      }
+    }catch(_){ }
+  })();
   (function __gmBindAiMediaPreviewButtons(){
     try {
       const prev = document.getElementById('aiMediaPreviewPrev');
@@ -24476,7 +26048,7 @@ flex-shrink:0;cursor:pointer;
           const src = String(el.getAttribute('src') || '');
           if (!src) return;
           e.preventDefault();
-          __gmAiOpenMediaPreview(src);
+          __gmAiOpenUnifiedPreviewForMdImage(src);
           return;
         }
       }
@@ -24539,7 +26111,7 @@ flex-shrink:0;cursor:pointer;
       if (/^data:image\/(png|jpe?g|gif|webp|bmp|svg\+xml);base64,/i.test(u)) return u;
       if (/^data:audio\/(mpeg|mp3|wav|ogg|aac|mp4|webm|x-wav|flac);base64,/i.test(u)) return u;
       if (/^data:video\/(mp4|webm|ogg|quicktime);base64,/i.test(u)) return u;
-      if (u.startsWith('/api/raw_file?path=')) return u;
+      if (u.startsWith('/api/')) return u; // allow any API-served attachment URLs
       if (u.startsWith('./') || u.startsWith('../') || (!u.startsWith('/') && !/^[a-zA-Z]+:/i.test(u))) {
         const mapped = __gmMediaUrlFromMaybePath(u);
         if (mapped && String(mapped).startsWith('/api/raw_file?path=')) return mapped;
@@ -25145,6 +26717,36 @@ flex-shrink:0;cursor:pointer;
   __gmBindDiffViewDelegation();
   __gmBindStaticUiDelegation();
   __gmInitAutoSaveToggle();
+
+  try { if (!window.__gmDbg) window.__gmDbg = console.log.bind(console); } catch(_) {}
+  try { if (typeof window.__gmAiDebug === 'undefined') window.__gmAiDebug = false; } catch(_) {}
+
+  try {
+    if (!window.__gmGlobalClickDbgBoundV2) {
+      window.__gmGlobalClickDbgBoundV2 = true;
+      const logFn = (...args)=>{ try{ if (window.__gmAiDebug) (window.__gmDbg?__gmDbg:console.log)(...args); }catch(_){ try{ if (window.__gmAiDebug) console.log(...args);}catch(__){} } };
+      window.addEventListener('click', (e)=>{
+        const el = e.target && e.target.closest ? e.target.closest('[data-action]') : null;
+        const act = el ? String(el.getAttribute('data-action')||'') : '';
+        logFn('win click (capture=false)', { tag: (e.target && e.target.tagName)||'', hasEl: !!el, act });
+      }, false);
+      window.addEventListener('click', (e)=>{
+        const el = e.target && e.target.closest ? e.target.closest('[data-action]') : null;
+        const act = el ? String(el.getAttribute('data-action')||'') : '';
+        logFn('win click (capture=true)', { tag: (e.target && e.target.tagName)||'', hasEl: !!el, act });
+      }, true);
+      document.addEventListener('click', (e)=>{
+        const el = e.target && e.target.closest ? e.target.closest('[data-action]') : null;
+        const act = el ? String(el.getAttribute('data-action')||'') : '';
+        logFn('doc click (capture=true)', { tag: (e.target && e.target.tagName)||'', hasEl: !!el, act });
+      }, true);
+      document.addEventListener('click', (e)=>{
+        const el = e.target && e.target.closest ? e.target.closest('[data-action]') : null;
+        const act = el ? String(el.getAttribute('data-action')||'') : '';
+        logFn('doc click (capture=false)', { tag: (e.target && e.target.tagName)||'', hasEl: !!el, act });
+      }, false);
+    }
+  } catch (_) {}
 
   // ── Git Sync Status Indicator ───────────────────────────────────────────────
   let __gmSyncStatusInFlight = false;
