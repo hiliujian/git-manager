@@ -1584,6 +1584,12 @@ def _hivo_resolve_path_if_needed(rp: str) -> str:
         if not p0:
             return ""
         p1 = p0.replace("\\", "/")
+        # Normalize chat attachment shorthand to repo-relative path
+        try:
+            if p1.startswith("attachments/"):
+                return f"hivo_ai_data/{p1}"
+        except Exception:
+            pass
         if "/" in p1:
             return p1
         hits = find_files_by_name(p1, max_results=5)
@@ -2129,21 +2135,143 @@ def _hivo_parse_context_refs_structured(context_refs: list, per_file_chars: int 
             except Exception as e:
                 logger.debug(f"Exception ignored: {e}")
 
-            if is_media:
-                item["资源类型"] = "媒体/二进制"
+            # PDF 结构化解析
+        if is_pdf:
+            page_count = 0
+            pages = []
+            ok = False
+            try:
                 try:
-                    size0 = int(os.path.getsize(full)) if full and os.path.exists(full) else 0
+                    import PyPDF2  # type: ignore
+                    with open(full, "rb") as fp:
+                        r = PyPDF2.PdfReader(fp)
+                        page_count = len(r.pages)
+                        for i, p in enumerate(r.pages):
+                            try:
+                                txt = p.extract_text() or ""
+                            except Exception:
+                                txt = ""
+                            pages.append({"page": i+1, "content": txt})
+                    ok = True
                 except Exception:
-                    size0 = 0
-                media_meta = {
-                    "path": resolved,
-                    "mime": mime0 or "application/octet-stream",
-                    "size": size0,
-                    "raw_url_template": "/api/raw_file?path={path}",
-                }
-                item["媒体元信息"] = media_meta
-                item["提示"] = "媒体/二进制内容不进行文本分块传输；请使用 raw_file 返回的引用信息，并在需要理解时提供可解析文本（如 OCR/转写/关键帧描述等）。"
-            elif content and used < int(total_chars):
+                    ok = False
+            except Exception:
+                ok = False
+            return True, "", {"file": {"file_name": bn, "file_type": "application/pdf", "file_size": int(os.path.getsize(full) if os.path.exists(full) else 0), "page_count": int(page_count), "pages": pages, **({"note": "pdf_parser_unavailable"} if (not ok and not pages) else {})}}
+
+        # Office 文档结构化解析（尽力而为）
+        if is_docx:
+            sections = []
+            ok = False
+            try:
+                try:
+                    import docx  # type: ignore
+                    d = docx.Document(full)
+                    cur = {"title": "", "content": []}
+                    for para in d.paragraphs:
+                        t = (para.text or "").strip()
+                        if not t:
+                            continue
+                        if para.style and ("Heading" in str(para.style.name or "")) and cur["content"]:
+                            sections.append({"title": cur["title"], "content": "\n".join(cur["content"])})
+                            cur = {"title": t, "content": []}
+                        else:
+                            if not cur["title"]:
+                                cur["title"] = t[:30]
+                            cur["content"].append(t)
+                    if cur["content"]:
+                        sections.append({"title": cur["title"], "content": "\n".join(cur["content"])})
+                    ok = True
+                except Exception:
+                    ok = False
+            except Exception:
+                ok = False
+            if not ok:
+                # 退化为简单正文（不可用时留空）
+                return True, "", {"file": {"file_name": bn, "file_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "content": "", "note": "docx_parser_unavailable"}}
+            return True, "", {"file": {"file_name": bn, "file_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "sections": sections}}
+
+        if is_xlsx:
+            sheets = []
+            ok = False
+            try:
+                try:
+                    import openpyxl  # type: ignore
+                    wb = openpyxl.load_workbook(full, read_only=True, data_only=True)
+                    for ws in wb.worksheets:
+                        rows = []
+                        for row in ws.iter_rows(values_only=True):
+                            try:
+                                rows.append(["" if (v is None) else (str(v)) for v in row])
+                            except Exception:
+                                rows.append([""])
+                        sheets.append({"name": ws.title, "rows": rows})
+                    ok = True
+                except Exception:
+                    ok = False
+            except Exception:
+                ok = False
+            if not ok:
+                return True, "", {"file": {"file_name": bn, "file_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "sheets": [], "note": "xlsx_parser_unavailable"}}
+            return True, "", {"file": {"file_name": bn, "file_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "sheets": sheets}}
+
+            
+        if is_pptx:
+            slides = []
+            ok = False
+            try:
+                try:
+                    from pptx import Presentation  # type: ignore
+                    prs = Presentation(full)
+                    for i, s in enumerate(prs.slides):
+                        title = ""
+                        content = []
+                        try:
+                            title = s.shapes.title.text if s.shapes.title else ""
+                        except Exception:
+                            title = ""
+                        for shp in s.shapes:
+                            try:
+                                if hasattr(shp, "text") and shp.text:
+                                    content.append(str(shp.text))
+                            except Exception:
+                                continue
+                        slides.append({"slide": i+1, "title": title or ("Slide " + str(i+1)), "content": "\n".join(content)})
+                    ok = True
+                except Exception:
+                    ok = False
+            except Exception:
+                ok = False
+            if not ok:
+                return True, "", {"file": {"file_name": bn, "file_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation", "slides": [], "note": "pptx_parser_unavailable"}}
+            return True, "", {"file": {"file_name": bn, "file_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation", "slides": slides}}
+
+        if is_zip:
+            entries = []
+            try:
+                import zipfile
+                with zipfile.ZipFile(full, 'r') as zf:
+                    for n in zf.namelist():
+                        t, _ = mimetypes.guess_type(n)
+                        entries.append({"name": n, "type": t or "application/octet-stream"})
+            except Exception:
+                entries = []
+            return True, "", {"file": {"file_name": bn, "file_type": "application/zip", "entries": entries}}
+
+        if is_media:
+            item["资源类型"] = "媒体/二进制"
+            try:
+                size0 = int(os.path.getsize(full)) if full and os.path.exists(full) else 0
+            except Exception:
+                size0 = 0
+            media_meta = {
+                "path": resolved,
+                "mime": mime0 or "application/octet-stream",
+                "size": size0,
+            }
+            item["媒体元信息"] = media_meta
+            item["提示"] = "媒体/二进制内容不进行文本分块传输；请使用 get_file 工具读取获取实际内容（文本或 data_url），并在需要理解时提供可解析文本（如 OCR/转写/关键帧描述等）。"
+        elif content and used < int(total_chars):
                 # Chunking (prefer semantic boundaries; fallback to fixed lines)
                 try:
                     lines = str(content or "").splitlines(True)
@@ -4759,6 +4887,49 @@ def _hivo_ai_clean_messages(messages: list, limit: int):
                         item["_attMeta"] = meta_out
             except Exception:
                 pass
+        elif role == "assistant":
+            # 保留 tool_receipts（含 request/data），过滤 attachments，做长度截断
+            try:
+                tr = m.get("tool_receipts")
+                if isinstance(tr, list) and tr:
+                    # 读取配置阈值
+                    try:
+                        cfg0 = _hivo_load_cfg()
+                        lim0 = cfg0.get("limits") if isinstance(cfg0.get("limits"), dict) else {}
+                        req_max = int(lim0.get("tool_receipt_request_max") or 2000)
+                        dat_max = int(lim0.get("tool_receipt_data_max") or 4000)
+                    except Exception:
+                        req_max, dat_max = 2000, 4000
+                    out = []
+                    for r in tr[:50]:
+                        if not isinstance(r, dict):
+                            continue
+                        t = str(r.get("type") or "")
+                        if t == "attachments":
+                            continue
+                        ok1 = bool(r.get("ok"))
+                        msg1 = str(r.get("msg") or "")[:800]
+                        req = r.get("request") if isinstance(r.get("request"), dict) else {}
+                        dat = r.get("data") if isinstance(r.get("data"), dict) else {}
+                        def _trim_json(o, mx):
+                            try:
+                                s = json.dumps(o, ensure_ascii=False)
+                                if len(s) > mx:
+                                    s = s[:mx]
+                                return json.loads(s)
+                            except Exception:
+                                return {}
+                        out.append({
+                            "type": t,
+                            "ok": ok1,
+                            "msg": msg1,
+                            "request": _trim_json(req, req_max),
+                            "data": _trim_json(dat, dat_max),
+                        })
+                    if out:
+                        item["tool_receipts"] = out
+            except Exception:
+                pass
         cleaned.append(item)
     lim = int(limit) if str(limit).strip() else 80
     if lim < 10:
@@ -6012,22 +6183,13 @@ def get_capabilities_spec():
             "example": {"type": "diff_file", "path": "server.py", "status": "M", "ctx_lines": 80},
         },
         {
-            "type": "file_content",
-            "desc": "读取文件完整内容（文本）。",
+            "type": "get_file",
+            "desc": "统一文件接口：文本直接返回 content；媒体/二进制直接返回 data_url（base64，受限大小），不返回本地URL。仅使用 path（相对路径或 attachments/...）",
             "required": ["path"],
             "properties": {
-                "path": {"type": "string", "desc": "相对路径"},
+                "path": {"type": "string", "desc": "相对路径或 attachments/..."}
             },
-            "example": {"type": "file_content", "path": "README.md"},
-        },
-        {
-            "type": "raw_file",
-            "desc": "获取媒体/二进制文件的结构化信息对象。返回 {file:{path,file_name,file_type,file_size,raw_url_template}}；其中 raw_url_template 为 /api/raw_file?path={path}，{path} 用 file.path 替换。不要自行发明或二次包装 raw_file URL。",
-            "required": ["path"],
-            "properties": {
-                "path": {"type": "string", "desc": "相对路径"},
-            },
-            "example": {"type": "raw_file", "path": "assets/logo.png"},
+            "example": {"type": "get_file", "path": "README.md"},
         },
         {
             "type": "undo_stats",
@@ -6886,7 +7048,7 @@ def _ai_build_system_context_text():
         "- `read_file_range` - 读取文件片段（指定行号）\n"
         "- `delete_file` - 删除文件\n"
         "- `rename_file` - 重命名或移动文件\n"
-        "- `raw_file` - 获取媒体文件信息（返回结构化对象）\n\n"
+        "- `raw_file` - 前端预览/下载用（工具链不调用）\n\n"
         
         "### 文件查找\n"
         "- `find_files` - 按文件名搜索（支持模糊匹配）\n"
@@ -6976,9 +7138,8 @@ def _ai_build_system_context_text():
         "- `split` - 双栏对比视图（左旧右新）  \n"
         "- `unified` - 统一 diff 视图（传统 git diff）\n\n"
         
-        "**raw_file 返回格式**  \n"
-        "返回结构化对象，包含 `raw_url_template`，  \n"
-        "使用时将 `{path}` 替换为文件路径即可，不要额外包装\n"
+        "**raw_file 用途**  \n"
+        "仅供前端图片/媒体预览与文件下载，不用于 AI 工具链。\n"
     )
 
     if extra:
@@ -7154,13 +7315,252 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
         return True, "", {"file": {"path": pick, "file_name": os.path.basename(pick), "view": view, "encoding": encoding, "content": content}}
 
     # File/Workspace
-    if t in ("file_content",):
-        rp = _hivo_resolve_path_if_needed(str(tool.get("path") or tool.get("name") or "").strip())
-        content, encoding = get_file_content(rp, return_encoding=True)
-        if content is None:
-            return False, "无法读取文件内容", {"path": rp}
+    if t in ("get_file",):
+        rp = str(tool.get("path") or tool.get("name") or "").strip()
+        rp = _hivo_resolve_path_if_needed(rp)
+        # 不再支持 URL 解析；仅使用 path
+        # 若是对话附件，改从 hivo_ai_data/attachments 读取
+        full = ""
+        try:
+            base_data = str(_hivo_ai_data_dir())
+            rp_norm = str(rp or "").replace("\\", "/")
+            if rp_norm.startswith("hivo_ai_data/attachments/"):
+                suffix = rp_norm.split("hivo_ai_data/", 1)[1]
+                rp = suffix
+                full = os.path.abspath(os.path.join(base_data, suffix))
+            elif rp_norm.startswith("attachments/"):
+                rp = rp_norm
+                full = os.path.abspath(os.path.join(base_data, rp_norm))
+            else:
+                full = _safe_repo_abspath(rp_norm)
+        except Exception:
+            full = _safe_repo_abspath(rp)
+        # 可观测性（已按需禁用详细日志）
+        if not (full and os.path.exists(full)) or os.path.isdir(full):
+            return False, "文件不存在", {"path": rp}
+        # 判定媒体 or 文本
+        try:
+            mime0, _enc0 = mimetypes.guess_type(full)
+        except Exception:
+            mime0 = None
+        # 预判常见结构化类型（优先于 is_media 判定）
+        mime_s = str(mime0 or "").lower()
+        ext_s = os.path.splitext(full)[1].lower()
+        is_pdf = (mime_s == "application/pdf" or ext_s == ".pdf")
+        is_docx = (mime_s == "application/vnd.openxmlformats-officedocument.wordprocessingml.document" or ext_s == ".docx")
+        is_xlsx = (mime_s == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" or ext_s == ".xlsx")
+        is_pptx = (mime_s == "application/vnd.openxmlformats-officedocument.presentationml.presentation" or ext_s == ".pptx")
+        is_zip = (mime_s in ("application/zip", "application/x-zip-compressed") or ext_s == ".zip")
+        is_media = False
+        if not (is_pdf or is_docx or is_xlsx or is_pptx or is_zip):
+            if mime0 and (mime_s.startswith("image/") or mime_s.startswith("audio/") or mime_s.startswith("video/")):
+                is_media = True
+            else:
+                try:
+                    with open(full, "rb") as fchk:
+                        sample = fchk.read(4096)
+                    if b"\x00" in sample:
+                        is_media = True
+                except Exception:
+                    pass
         bn = os.path.basename(rp.replace("\\", "/"))
-        return True, "", {"file": {"path": rp, "file_name": bn, "encoding": encoding, "content": content}}
+        if is_media:
+            # 返回 data_url（base64），大小上限从配置读取；超过阈值优先尝试按比例缩放到阈值内，失败才回退为截断。
+            try:
+                size0 = int(os.path.getsize(full))
+            except Exception:
+                size0 = 0
+            ftype = mime0 or "application/octet-stream"
+            try:
+                cfg0 = _hivo_load_cfg()
+                lim0 = cfg0.get("limits") if isinstance(cfg0.get("limits"), dict) else {}
+                max_bytes = int(lim0.get("media_base64_max_bytes") or 2*1024*1024)
+            except Exception:
+                max_bytes = 2*1024*1024
+
+            b: bytes = b""
+            truncated = False
+            downscaled = False
+            width, height = (0, 0)
+            if size0 > max_bytes and ftype.startswith("image/"):
+                # 兜底：尝试用 Pillow 压缩/缩放到阈值内
+                try:
+                    from PIL import Image  # type: ignore
+                    import io
+                    with Image.open(full) as im:
+                        im = im.convert("RGB")
+                        try:
+                            width, height = im.size
+                        except Exception:
+                            width, height = (0, 0)
+                        # 估算按面积缩放比，避免过度缩小
+                        import math
+                        ratio = math.sqrt(max(0.1, min(1.0, float(max_bytes) / float(max(1, size0)))))
+                        w, h = im.size
+                        nw = max(1, int(w * ratio))
+                        nh = max(1, int(h * ratio))
+                        if nw < w or nh < h:
+                            im = im.resize((nw, nh))
+                            width, height = (nw, nh)
+                        # 逐步降低质量以贴近阈值
+                        buf = io.BytesIO()
+                        q = 85
+                        for q in (85, 75, 65, 55, 45, 35):
+                            buf.seek(0); buf.truncate(0)
+                            im.save(buf, format="JPEG", quality=q, optimize=True)
+                            if buf.tell() <= max_bytes:
+                                break
+                        b = buf.getvalue()
+                        ftype = "image/jpeg"
+                        downscaled = True
+                except Exception:
+                    downscaled = False
+                    b = b""
+
+            if not b:
+                # 常规路径：读取原始字节；若超限且未能缩放，则截断
+                try:
+                    with open(full, "rb") as fb:
+                        if size0 > max_bytes and not downscaled:
+                            b = fb.read(max_bytes)
+                            truncated = True
+                        else:
+                            b = fb.read()
+                except Exception:
+                    b = b""; truncated = False
+
+            import base64
+            b64 = ""
+            try:
+                if b:
+                    b64 = base64.b64encode(b).decode("ascii", errors="ignore")
+            except Exception:
+                b64 = ""
+            if ftype.startswith("image/"):
+                # 返回纯数据与维度信息，不返回 path
+                return True, "", {
+                    "file": {
+                        "file_name": bn,
+                        "file_type": ftype,
+                        "file_size": size0,
+                        "image_data": b64,
+                        "width": int(width),
+                        "height": int(height),
+                        "truncated": bool(truncated) and (not downscaled),
+                        "max_bytes": int(max_bytes),
+                    }
+                }
+            else:
+                # 非图片媒体：若为音频/视频，返回 data_url；否则（未知二进制）仅返回元数据
+                if ftype.startswith("audio/") or ftype.startswith("video/"):
+                    data_url = f"data:{ftype};base64,{b64}" if b64 else ""
+                    return True, "", {
+                        "file": {
+                            "file_name": bn,
+                            "file_type": ftype,
+                            "file_size": size0,
+                            "data_url": data_url,
+                            "truncated": bool(truncated) and (not downscaled),
+                            "max_bytes": int(max_bytes),
+                        }
+                    }
+                else:
+                    # 未知二进制：返回基础元数据（避免巨大 data_url）
+                    try:
+                        import hashlib
+                        h = hashlib.sha256()
+                        with open(full, "rb") as fb2:
+                            for chunk in iter(lambda: fb2.read(1024*1024), b""):
+                                h.update(chunk)
+                        sha256 = h.hexdigest()
+                    except Exception:
+                        sha256 = ""
+                    return True, "", {
+                        "file": {
+                            "file_name": bn,
+                            "file_type": ftype or "application/octet-stream",
+                            "size": size0,
+                            "sha256": sha256,
+                            "description": "未知二进制文件，暂不支持解析",
+                        }
+                    }
+        # 文本：读取内容（区分附件与仓库文件）
+        try:
+            base_data = str(_hivo_ai_data_dir())
+        except Exception:
+            base_data = ""
+        is_under_attachments = False
+        try:
+            if base_data:
+                ap = os.path.abspath(full)
+                is_under_attachments = (os.path.commonpath([base_data, ap]) == base_data)
+        except Exception:
+            is_under_attachments = False
+
+        if is_under_attachments:
+            # 直接读取绝对路径并进行编码探测/解码
+            try:
+                with open(full, "rb") as ftxt:
+                    data = ftxt.read()
+            except Exception:
+                data = b""
+            if not data:
+                return True, "", {"file": {"file_name": bn, "file_type": "text/plain", "encoding": "utf-8", "content": ""}}
+            encoding = None
+            try:
+                try:
+                    content = data.decode("utf-8")
+                    encoding = "utf-8"
+                except UnicodeDecodeError:
+                    try:
+                        content = data.decode("utf-8-sig")
+                        encoding = "utf-8-sig"
+                    except UnicodeDecodeError:
+                        ok = False
+                        for enc0 in ("gb18030", "gbk", "cp936", "gb2312"):
+                            try:
+                                content = data.decode(enc0)
+                                encoding = enc0
+                                ok = True
+                                break
+                            except UnicodeDecodeError:
+                                continue
+                        if not ok:
+                            try:
+                                enc = _detect_text_encoding_from_bytes(data)
+                                try:
+                                    content = data.decode(enc)
+                                    encoding = enc
+                                except UnicodeDecodeError:
+                                    content = data.decode(enc, errors="replace")
+                                    encoding = enc
+                            except Exception:
+                                content = data.decode("utf-8", errors="replace")
+                                encoding = "utf-8"
+            except Exception:
+                content = ""
+                encoding = "utf-8"
+            # 返回文本内容，不返回 path
+            ftype_txt = None
+            try:
+                ftype_txt, _ = mimetypes.guess_type(bn)
+            except Exception:
+                ftype_txt = None
+            return True, "", {"file": {"file_name": bn, "file_type": (ftype_txt or "text/plain"), "encoding": encoding, "content": content}}
+        else:
+            # 仓库内文件：按相对路径读取
+            rp_norm = str(rp or "").replace("\\", "/")
+            content, encoding = get_file_content(rp_norm, return_encoding=True)
+            if content is None:
+                return False, "无法读取文件内容", {"path": rp}
+            ftype_txt = None
+            try:
+                ftype_txt, _ = mimetypes.guess_type(bn)
+            except Exception:
+                ftype_txt = None
+            return True, "", {"file": {"file_name": bn, "file_type": (ftype_txt or "text/plain"), "encoding": encoding, "content": content}}
+
+    
 
     if t in ("read_file_range",):
         rp = _hivo_resolve_path_if_needed(str(tool.get("path") or "").strip())
@@ -7296,34 +7696,6 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
         notify_files_updated()
         return True, "", {}
 
-    if t in ("raw_file",):
-        rp = _hivo_resolve_path_if_needed(str(tool.get("path") or "").strip())
-        if not rp:
-            return False, "缺少 path", {}
-        full = _safe_repo_abspath(rp)
-        if not full or (not os.path.exists(full)) or os.path.isdir(full):
-            return False, "文件不存在", {"path": rp}
-        try:
-            size0 = int(os.path.getsize(full))
-        except Exception:
-            size0 = 0
-        try:
-            mime0, _enc0 = mimetypes.guess_type(full)
-        except Exception:
-            mime0 = None
-        if not mime0:
-            mime0 = "application/octet-stream"
-        bn = os.path.basename(rp.replace("\\", "/"))
-        return True, "", {
-            "file": {
-                "path": rp,
-                "file_name": bn,
-                "file_type": mime0,
-                "file_size": size0,
-                "raw_url_template": "/api/raw_file?path={path}",
-            },
-            "hint": "Use file.path for定位; use file.raw_url_template with {path}=file.path if you must form a URL. Prefer returning the structured file object; do NOT invent or re-wrap raw_file URLs.",
-        }
 
     # Write
     if t in ("save_file",):
@@ -8064,40 +8436,38 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
     if keep_n > 0 and len(hist) > keep_n:
         hist = hist[-keep_n:]
 
-    def _profile_supports_vision(cfg0: dict, pid0: str):
-        try:
-            prof0 = _ai_pick_profile(cfg0, pid0)
-        except Exception:
-            prof0 = None
-        try:
-            if isinstance(prof0, dict) and ("supports_vision" in prof0):
-                return bool(prof0.get("supports_vision"))
-        except Exception:
-            pass
-        try:
-            model0 = str((prof0 or {}).get("model") or "").lower()
-            if "vision" in model0 or "-vl" in model0 or "vl-" in model0 or "qwen-vl" in model0:
-                return True
-        except Exception:
-            return False
-        return False
 
-    def _format_attachments_as_text(att0: list):
+    def _attempt_image_text(full_path: str, mime: str, max_chars: int = 4000) -> str:
+        """Best-effort OCR/文本提取：优先使用 Pillow + pytesseract；若不可用，返回简要占位描述。
+        不抛异常，始终返回字符串。"""
         try:
-            items = []
-            for a in (att0 or []):
-                if not isinstance(a, dict):
-                    continue
-                nm = str(a.get("name") or "").strip() or "file"
-                mime = str(a.get("mime") or "").strip()
+            try:
+                cfg0 = _hivo_load_cfg()
+                lim0 = cfg0.get("limits") if isinstance(cfg0.get("limits"), dict) else {}
+                mc = int(lim0.get("ocr_text_max_chars") or 4000)
+                max_chars = max(200, min(20000, mc))
+            except Exception:
+                max_chars = 4000
+            txt = ""
+            try:
+                from PIL import Image  # type: ignore
+                import pytesseract  # type: ignore
+                with Image.open(full_path) as im:
+                    im = im.convert("RGB")
+                    txt = str(pytesseract.image_to_string(im) or "").strip()
+            except Exception:
+                txt = ""
+            if not txt:
+                # 优雅降级，占位信息
                 try:
-                    sz = int(a.get("size") or 0)
+                    sz = int(os.path.getsize(full_path) or 0)
                 except Exception:
                     sz = 0
-                items.append(f"- {nm} ({mime or 'unknown'}, {sz} bytes)")
-            if not items:
-                return ""
-            return "【附件】\n" + "\n".join(items)
+                base = os.path.basename(full_path)
+                return f"[图片占位] {base} ({mime or 'image/unknown'}, {sz} bytes)。未启用/未安装 OCR 依赖，无法自动提取文字。"
+            if len(txt) > max_chars:
+                txt = txt[:max_chars] + "\n...（OCR 文本已截断）..."
+            return txt
         except Exception:
             return ""
 
@@ -8131,13 +8501,26 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
                 if not isinstance(a, dict):
                     continue
                 u = str(a.get("url") or a.get("data_url") or "").strip()
+                pth = str(a.get("path") or "").strip()
                 t = a.get("text")
-                if u or (isinstance(t, str) and t.strip()):
+                if pth or u or (isinstance(t, str) and t.strip()):
                     return True
         except Exception:
             pass
         return False
     attachments_present = _has_meaningful_attachments(atts)
+    # 预置回执：即便模型未调用任何工具，但用户本轮携带了附件，也生成一条摘要回执便于前端展示“工具摘要”按钮
+    pre_receipts: list[dict] = []
+    try:
+        if attachments_present:
+            cnt = 0
+            try:
+                cnt = sum(1 for a in (atts or []) if isinstance(a, dict))
+            except Exception:
+                cnt = len(atts or [])
+            pre_receipts.append({"type": "attachments", "ok": True, "msg": f"{cnt} 个附件", "data": {"count": cnt}})
+    except Exception:
+        pre_receipts = []
 
     if user_text:
         if atts:
@@ -8150,28 +8533,75 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
                         continue
                     nm = str(a.get("name") or "file").strip() or "file"
                     mime = str(a.get("mime") or "").strip()
-                    url_http = str(a.get("url") or a.get("data_url") or "").strip()
-                    if url_http:
-                        lines.append(f"- {nm} ({mime or 'unknown'}): {url_http}")
+                    pth = str(a.get("path") or "").strip()
+                    # 若前端还未提供 path，但存在 URL（/api/ai_attachment?path=...），尽量解析出 path 供模型使用
+                    if (not pth):
+                        try:
+                            u = str(a.get("url") or "").strip()
+                            if u and ("/api/ai_attachment" in u) and ("path=" in u):
+                                from urllib.parse import urlparse, parse_qs
+                                pr = urlparse(u)
+                                if pr and pr.path and pr.path.endswith("/api/ai_attachment"):
+                                    qs = parse_qs(pr.query or "")
+                                    p0 = (qs.get("path") or [""])[0]
+                                    pth = str(p0 or "").replace("\\", "/").lstrip("/")
+                        except Exception:
+                            pth = pth
+                    if pth:
+                        lines.append(f"- {nm} ({mime or 'unknown'}): path={pth}")
                     else:
                         lines.append(f"- {nm} ({mime or 'unknown'})")
             except Exception:
                 lines = []
             sys_hint = (
                 "【附件说明】本轮对话包含用户上传的附件。请基于附件内容回答问题。\n"
-                "如需查看具体内容，请使用系统提供的‘查看文件’工具读取上列链接对应的文件；\n"
+                "如需查看具体内容，请使用系统提供的‘查看文件’工具（get_file）并传 path 字段读取上列文件；\n"
                 "若模型或当前环境不支持工具调用，请明确告知受限之处，并仅基于可见信息给出分析。"
             )
             if lines:
-                sys_hint = (sys_hint + "\n附件清单:\n" + "\n".join(lines)).strip()
+                sys_hint = (sys_hint + "\n附件清单(请以 path 调用 get_file):\n" + "\n".join(lines)).strip()
             hist.append({"role": "system", "content": sys_hint})
 
-            # 2) 用户消息：保留用户文本，并内联文本型附件（便于无需工具即可参考）
+            # 2) 方案B：不注入 image_url。统一以纯文本消息承载：用户文本 + 可解析的文本附件 + （可用时）OCR 文本。
             txt_files = _format_text_attachments(atts)
-            txt = str(user_text)
+            # OCR 提取（可选）
+            ocr_blocks = []
+            try:
+                for a in (atts or []):
+                    mime = str(a.get("mime") or "")
+                    pth = str(a.get("path") or "").replace("\\", "/")
+                    if not (mime.startswith("image/") and pth):
+                        continue
+                    full = None
+                    try:
+                        rp_norm = pth
+                        if not (rp_norm.startswith("attachments/") or rp_norm.startswith("hivo_ai_data/attachments/")):
+                            full = _safe_repo_abspath(rp_norm)
+                        else:
+                            base_data = str(_hivo_ai_data_dir());
+                            if rp_norm.startswith("hivo_ai_data/attachments/"):
+                                suffix = rp_norm.split("hivo_ai_data/", 1)[1]
+                            else:
+                                suffix = rp_norm
+                            full = os.path.abspath(os.path.join(base_data, suffix))
+                    except Exception:
+                        full = None
+                    if (not full) or (not os.path.exists(full)) or os.path.isdir(full):
+                        continue
+                    txt1 = _attempt_image_text(full, mime)
+                    if txt1:
+                        nm = str(a.get("name") or os.path.basename(pth) or "image").strip()
+                        ocr_blocks.append(f"【图片：{nm} / {mime}】\n{txt1}")
+            except Exception:
+                pass
+            joined = []
+            if str(user_text):
+                joined.append(str(user_text))
             if txt_files:
-                txt = (txt + "\n\n" + txt_files).strip()
-            hist.append({"role": "user", "content": txt})
+                joined.append(txt_files)
+            if ocr_blocks:
+                joined.append("\n\n".join(ocr_blocks))
+            hist.append({"role": "user", "content": "\n\n".join([x for x in joined if x]).strip()})
         else:
             hist.append({"role": "user", "content": str(user_text)})
 
@@ -8192,7 +8622,7 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
     # 补充：标准工具调用范式（减少调用歧义，统一结构）
     tool_examples = (
         "【工具使用范式（示例）】\n"
-        "- file_content（读取文件全文）：{\"type\":\"file_content\", \"path\":\"相对或绝对路径\"} 或 {\"type\":\"file_content\", \"url\":\"http(s)/api 链接\"}\n"
+        "- get_file（统一文件接口：文本返回内容；二进制/媒体返回文件对象）：{\"type\":\"get_file\", \"path\":\"相对路径或 attachments/...\"}\n"
         "- read_file_range（读取行范围）：{\"type\":\"read_file_range\", \"path\":\"路径\", \"start\":1, \"end\":200}\n"
         "- list_dir_tree（目录树）：{\"type\":\"list_dir_tree\", \"path\":\"目录\", \"depth\":4, \"max_entries\":600}\n"
         "- search_code（代码搜索）：{\"type\":\"search_code\", \"query\":\"关键词\", \"case_sensitive\":false, \"max_results\":50}\n"
@@ -8204,7 +8634,6 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
         "- unstage_file（取消暂存单文件）：{\"type\":\"unstage_file\", \"path\":\"文件路径\"}\n"
         "- discard_staged_file（丢弃暂存修改）：{\"type\":\"discard_staged_file\", \"path\":\"文件路径\"}\n"
         "- unstage_all_staged（取消全部暂存）：{\"type\":\"unstage_all_staged\"}；discard_all_staged：{\"type\":\"discard_all_staged\"}\n"
-        "- raw_file（二进制/原样）：{\"type\":\"raw_file\", \"path\":\"文件路径\"}\n"
         "- save_file（保存文件）：{\"type\":\"save_file\", \"path\":\"文件路径\", \"content\":\"新内容\"}\n"
         "- delete_file（删除文件）：{\"type\":\"delete_file\", \"path\":\"文件路径\"}\n"
         "- rename_file（重命名/移动）：{\"type\":\"rename_file\", \"old_path\":\"旧\", \"new_path\":\"新\"}\n"
@@ -8215,7 +8644,7 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
         "- verify_python（语法校验）：{\"type\":\"verify_python\", \"files\":[\"server.py\"]}\n"
         "- switch_branch（切换分支）：{\"type\":\"switch_branch\", \"branch\":\"feature/x\"}；commit_and_switch：{\"type\":\"commit_and_switch\", \"message\":\"WIP\", \"branch\":\"feature/x\"}\n"
         "- undo（撤销上一组操作）：{\"type\":\"undo\"}\n"
-        "说明：务必输出严格 JSON（不要多余文本/注释）。路径不明确时先 find_files/search_code；读取大文件建议用 read_file_range 分段。若需读取用户上传的附件，请优先使用 file_content 的 url 参数。"
+        "说明：务必输出严格 JSON（不要多余文本/注释）。路径不明确时先 find_files/search_code；读取大文件建议用 read_file_range 分段。若需读取用户上传的附件，请使用 get_file（传 path，如 attachments/...）。"
     )
     sys0 = {"role": "system", "content": sys_text}
     msgs = [sys0]
@@ -8288,10 +8717,11 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
         except Exception as e:
             logger.debug(f"Exception ignored: {e}")
         _hivo_ws_emit(run_id, session_id, "done", _hivo_status_message(cfg, "done"))
-        _hivo_ws_emit_final(run_id, session_id, content, ok=True, extra={"rounds": 1})
+        _hivo_ws_emit_final(run_id, session_id, content, ok=True, extra={"rounds": 1, "tool_receipts": pre_receipts})
         return True, content, run_id
 
     tool_sig_hist = []
+    last_tool_receipts = []
     rep_escalations = 0
     for round_i in range(max(1, max_rounds)):
         if _hivo_agent_is_cancelled(run_id):
@@ -8357,7 +8787,7 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
             except Exception as e:
                 logger.debug(f"Exception ignored: {e}")
             _hivo_ws_emit(run_id, session_id, "done", _hivo_status_message(cfg, "done"))
-            _hivo_ws_emit_final(run_id, session_id, content, ok=True, extra={"rounds": round_i + 1})
+            _hivo_ws_emit_final(run_id, session_id, content, ok=True, extra={"rounds": round_i + 1, "tool_receipts": (pre_receipts + last_tool_receipts) if pre_receipts else last_tool_receipts})
             return True, content, run_id
 
         sig = _hivo_repeat_signature(calls, mode=rep_sig_mode)
@@ -8478,7 +8908,7 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
             except Exception as e:
                 logger.debug(f"Exception ignored: {e}")
 
-            receipts.append({"type": name, "ok": bool(ok1), "msg": msg1 or "", "data": data1})
+            receipts.append({"type": name, "ok": bool(ok1), "msg": msg1 or "", "request": c2 if isinstance(c2, dict) else {}, "data": data1})
 
         # Auto browser screenshot: only when the round includes a state-changing browser action
         # (open/click/type) but no screenshot was taken, append one extra receipt.
@@ -8539,6 +8969,19 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
                     f0 = data1.get("file") if isinstance(data1.get("file"), dict) else {}
                     if f0:
                         payload = json.dumps({"file": f0}, ensure_ascii=False, indent=2)
+                elif nm in ("get_file",):
+                    f0 = data1.get("file") if isinstance(data1.get("file"), dict) else {}
+                    if f0:
+                        # 文本：直接附带内容并给出 path；媒体：仅提示类型与是否截断，避免刷屏
+                        if "content" in f0:
+                            payload = str(f0.get("content") or "")
+                            path1 = str(f0.get("path") or "")
+                            if payload:
+                                receipt_lines.append(f"  path: {path1}")
+                        elif "data_url" in f0:
+                            mt = str(f0.get("file_type") or "")
+                            trunc = bool(f0.get("truncated"))
+                            payload = f"image_base64({mt}) - {'truncated' if trunc else 'full'}"
                 elif nm in ("run_cmd",):
                     res1 = data1.get("result") if isinstance(data1.get("result"), dict) else {}
                     payload = str(res1.get("output") or data1.get("output") or "")
@@ -8591,6 +9034,10 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
             except Exception as e:
                 logger.debug(f"Exception ignored: {e}")
         receipt_text = "\n".join(receipt_lines)
+        try:
+            last_tool_receipts = (pre_receipts + receipts) if pre_receipts else receipts[:]
+        except Exception:
+            last_tool_receipts = receipts
 
         msgs.append({"role": "assistant", "content": content})
         msgs.append({
@@ -11013,7 +11460,7 @@ class Handler(BaseHTTPRequestHandler):
                             f.write(raw)
                         rel_path = f"attachments/{fname}".replace("\\", "/")
                         url = f"/api/ai_attachment?path={urllib.parse.quote(rel_path)}"
-                        saved.append({"name": nm, "mime": mime, "size": size0, "url": url})
+                        saved.append({"name": nm, "mime": mime, "size": size0, "url": url, "path": rel_path})
                     except Exception as e:
                         logger.debug(f"Exception ignored while saving attachment: {e}")
                         continue

@@ -28,6 +28,8 @@
       --gm-ai-pulse-dur: 1.9s;
     }
 
+  
+  
     @keyframes gmSpin{0%{transform:rotate(0)}100%{transform:rotate(360deg)}}
     /* Per-file upload progress overlay */
     .ai-attach-card{position:relative}
@@ -38,8 +40,8 @@
 
     /* removed old lightbox CSS */
 
-    
-
+  </style>
+  <script>
   async function __gmAiEnsureAttachmentUrls(atts) {
     try {
       const arr = Array.isArray(atts) ? atts : [];
@@ -52,6 +54,7 @@
       })();
       const FRONT_MAX_EACH = Number(lim && lim.max_attachment_bytes) || (20 * 1024 * 1024); // 20MB
       const FRONT_MAX_TOTAL = Number(lim && lim.max_upload_total_bytes) || (100 * 1024 * 1024); // 100MB
+      const DATA_URL_MAX_BYTES = Number(lim && lim.media_base64_max_bytes) || (2 * 1024 * 1024); // 与后端一致
       // Pre-check size limits
       let totalBytes = 0;
       const sizes = [];
@@ -73,7 +76,76 @@
           toast(`本次附件总大小超过限制（>${(FRONT_MAX_TOTAL/1024/1024)|0}MB）`,'warn');
           return { ok: false, items: [] };
         }
+        // 预警：图片超过 data_url 发送阈值将被后端截断
+        try {
+          const mime = String(a && a.mime || '');
+          if (mime.startsWith('image/') && DATA_URL_MAX_BYTES > 0 && size > DATA_URL_MAX_BYTES) {
+            toast(`提示：图片“${String(a.name||'图片')}”体积较大（${((size)/1024/1024).toFixed(1)}MB），发送给 AI 时可能被截断（阈值 ${(DATA_URL_MAX_BYTES/1024/1024).toFixed(1)}MB）。建议压缩后再上传。`, 'warn');
+          }
+        } catch (e) {}
       }
+
+      // 客户端压缩：将超过 data_url 阈值的图片在上传前压缩到阈值内
+      async function __gmCompressDataUrlToMaxBytes(dataUrl, maxBytes){
+        try{
+          if (!dataUrl || !dataUrl.startsWith('data:')) return dataUrl;
+          const img = new Image();
+          // Allow cross-origin data URLs
+          img.decoding = 'async';
+          const p = new Promise((resolve, reject)=>{
+            img.onload = ()=>resolve(true);
+            img.onerror = ()=>reject(new Error('img load failed'));
+          });
+          img.src = dataUrl;
+          await p;
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
+          if (!ctx) return dataUrl;
+          let w = img.naturalWidth || img.width || 0;
+          let h = img.naturalHeight || img.height || 0;
+          if (!w || !h) return dataUrl;
+          // 先按面积缩放接近目标大小，再通过质量迭代逼近
+          const bytes0 = (()=>{ try{ const b64 = dataUrl.split(',')[1]||''; return Math.floor(b64.length * 0.75);}catch{ return 0; }})();
+          let ratio = Math.sqrt(Math.max(0.1, Math.min(1, (maxBytes>0 && bytes0>0) ? (maxBytes/bytes0) : 1)));
+          ratio = isFinite(ratio) ? ratio : 1;
+          let nw = Math.max(1, Math.floor(w * ratio));
+          let nh = Math.max(1, Math.floor(h * ratio));
+          canvas.width = nw; canvas.height = nh;
+          ctx.drawImage(img, 0, 0, nw, nh);
+          let qList = [0.85,0.75,0.65,0.55,0.45,0.35];
+          let out = canvas.toDataURL('image/jpeg', qList[0]);
+          const est = (u)=>{ try{ const b64 = String(u||'').split(',')[1]||''; return Math.floor(b64.length*0.75);}catch{return 0;} };
+          if (est(out) <= maxBytes) return out;
+          for (let i=1;i<qList.length;i++){
+            out = canvas.toDataURL('image/jpeg', qList[i]);
+            if (est(out) <= maxBytes) return out;
+          }
+          return out; // 尽力而为：若仍超限，返回最后一次（由后端再兜底）
+        }catch{ return dataUrl; }
+      }
+
+      // 对待上传的图片进行就地压缩（仅在超过阈值时）
+      try{
+        const warned = { v: false };
+        for (let i=0;i<arr.length;i++){
+          const a = arr[i];
+          if (!a || typeof a !== 'object') continue;
+          const mime = String(a.mime||'');
+          const du = String(a.data_url||'');
+          if (!mime.startsWith('image/') || !du.startsWith('data:')) continue;
+          const sz = Number(sizes[i]||0);
+          if (DATA_URL_MAX_BYTES>0 && sz>DATA_URL_MAX_BYTES){
+            if (!warned.v){ try{ toast('检测到大图，正在本地压缩以便更好地发送给 AI…','ok'); }catch(_){} warned.v = true; }
+            const du2 = await __gmCompressDataUrlToMaxBytes(du, DATA_URL_MAX_BYTES);
+            try{
+              const b64 = String(du2.split(',')[1]||'');
+              const sz2 = Math.floor(b64.length*0.75);
+              if (sz2>0){ sizes[i] = sz2; totalBytes = Math.max(0, totalBytes - sz + sz2); }
+              a.data_url = du2;
+            }catch(_){ a.data_url = du2; }
+          }
+        }
+      }catch(_){ }
 
       const items = [];
       arr.forEach((a)=>{
@@ -109,28 +181,7 @@
     }
   }
 
-  function __gmAiGetLimits() {
-    try {
-      const c = (__gmAiConfig && typeof __gmAiConfig === 'object') ? __gmAiConfig : null;
-      const l = (c && c.limits && typeof c.limits === 'object') ? c.limits : null;
-      return {
-        each: Number(l && l.max_attachment_bytes) || (20*1024*1024),
-        total: Number(l && l.max_upload_total_bytes) || (100*1024*1024),
-      };
-    } catch (e) { return { each: 20*1024*1024, total: 100*1024*1024 }; }
-  }
-
-  function __gmAiUpdateUploadLimitHint() {
-    try {
-      const el = document.getElementById('aiUploadHint');
-      if (!el) return;
-      const { each, total } = __gmAiGetLimits();
-      el.textContent = `上传限制：单个≤${formatMB(each)}，总计≤${formatMB(total)}`;
-      el.style.display = '';
-    } catch (e) {}
-  }
-
-  function formatMB(bytes){ try { return `${(bytes/1024/1024).toFixed(0)}MB`; } catch { return `${bytes}B`; } }
+  
   function formatBytes(bytes){
     try {
       const b = Number(bytes)||0;
@@ -151,6 +202,7 @@
       const k2t = '__gm_ai_att_by_content_' + ts;
       const k3f = '__gm_ai_att_recent_' + fs;
       const k3t = '__gm_ai_att_recent_' + ts;
+      
 
       const mapMerge = (kf, kt) => {
         try {
@@ -244,6 +296,7 @@
       localStorage.setItem(key, JSON.stringify(map));
     } catch (e) {}
   }
+  
   function __gmAiRecentMetaKey(sessionId) {
     const s0 = (sessionId != null ? String(sessionId) : '').trim();
     const s1 = (typeof __gmAiActiveSessionId !== 'undefined' ? String(__gmAiActiveSessionId || '') : '').trim();
@@ -282,11 +335,15 @@
       const map2 = (() => { try { return JSON.parse(localStorage.getItem(key2) || '{}') || {}; } catch (e) { return {}; }})();
       const key3 = __gmAiAttFullByContentKey(__gmAiActiveSessionId);
       const map3 = (() => { try { return JSON.parse(localStorage.getItem(key3) || '{}') || {}; } catch (e) { return {}; }})();
+      
       if (!Array.isArray(__gmAiChatMessages)) return;
       try { __gmDbg('hydrate begin', { sid: __gmAiActiveSessionId, msgs: __gmAiChatMessages.length, cacheUndo: Object.keys(map||{}).length, cacheContent: Object.keys(map2||{}).length }); } catch (eDbg0) {}
       for (const m of __gmAiChatMessages) {
         try {
-          if (!m || String(m.role || '') !== 'user') continue;
+          if (!m) continue;
+          const role = String(m.role || '');
+          if (role === 'assistant') { continue; }
+          if (role !== 'user') continue;
           const ug = String(m.undo_gid || '').trim();
           const cached = ug ? map[ug] : undefined;
           if (Array.isArray(cached) && cached.length) {
@@ -389,6 +446,8 @@
     } catch (e) {}
   }
 
+  </script>
+  <style>
     /* Light Theme */
     [data-theme="light"] {
       --bg:        #ffffff;
@@ -2078,7 +2137,7 @@ flex-shrink:0;cursor:pointer;
     .ai-undo-history{position:fixed;z-index:2400;display:none;min-width:var(--ai-menu-minw);max-width:var(--ai-menu-maxw);
       background:rgba(26,28,36,.96);border:1px solid rgba(61,66,98,.85);border-radius:12px;
       box-shadow:0 22px 60px rgba(0,0,0,0.55);padding:6px;backdrop-filter: blur(10px);
-      overflow-y:auto;overflow-x:hidden;}
+      overflow-y:auto;overflow-x:hidden;max-height:calc(100vh - 120px);}
     .ai-undo-history.show{display:block;}
     [data-theme="light"] .ai-undo-history{background:rgba(255,255,255,.96);border:1px solid rgba(206,212,218,.9);
       box-shadow:0 22px 60px rgba(0,0,0,0.15);}
@@ -2241,6 +2300,10 @@ flex-shrink:0;cursor:pointer;
       background:transparent;color:var(--text3);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;
       padding:0;font-size:12px;line-height:1;}
     .ai-msg-actions button:hover{background:var(--bg4);border-color:var(--border);color:var(--danger);}
+    /* Keep actions visible when tools are open, and show persistent active style */
+    .ai-bubble.ai-tools-open .ai-msg-actions{opacity:0.9;}
+    .ai-msg-actions button.active{background:var(--bg4);border-color:var(--border);color:#22c55e;}
+    .ai-msg-actions button.active:hover{background:var(--bg4);border-color:var(--border);color:#22c55e;}
     .ai-msg.user .ai-bubble{background:linear-gradient(135deg, rgba(76,166,255,0.22), rgba(177,151,252,0.16));
       border-color:rgba(110,168,254,0.28);}
     .ai-msg.assistant .ai-bubble{background:rgba(255,255,255,0.035);}
@@ -3029,7 +3092,7 @@ flex-shrink:0;cursor:pointer;
           <div class="ai-inputbar">
             <div class="ai-composer-wrap">
               <div id="aiAttachList" class="ai-attach-preview"></div>
-              <div id="aiUploadHint" style="display:none;margin:6px 0 0 0;font-size:12px;color:var(--text2);"></div>
+              
               <div id="aiUploadProg" style="display:none;margin:6px 0 0 0;padding:6px 10px;border:1px solid var(--border);border-radius:10px;background:var(--bg2);font-size:12px;color:var(--text2);">
                 <span style="display:inline-block;width:12px;height:12px;border-radius:50%;border:2px solid var(--border);border-top-color:var(--text2);margin-right:8px;vertical-align:-2px;animation: gmSpin 0.9s linear infinite;"></span>
                 <span id="aiUploadProgText">正在上传附件…</span>
@@ -3400,7 +3463,7 @@ flex-shrink:0;cursor:pointer;
               xhr.open('POST', '/api/ai_store_attachments', true);
               xhr.setRequestHeader('Content-Type','application/json');
               xhr.responseType = 'json';
-              try { if (window.__gmAiDebug) { console.log('[UPLOAD] start', { name: String(item&&item.name||''), mime: String(item&&item.mime||''), hasData: !!(item&&item.data_url) }); } } catch(_){ }
+              
               if (xhr.upload && typeof xhr.upload.addEventListener === 'function'){
                 xhr.upload.addEventListener('progress', (e)=>{
                   try{ if (typeof onProgress==='function') onProgress(e.loaded||0, e.total||0); }catch(_){ }
@@ -3411,7 +3474,6 @@ flex-shrink:0;cursor:pointer;
                   try{
                     const ok = (xhr.status >= 200 && xhr.status < 300);
                     const body = xhr.response || null;
-                    try { if (window.__gmAiDebug) { console.log('[UPLOAD] done', { status: xhr.status, ok, body }); } } catch(_){ }
                     if (!ok) {
                       try { toast('上传附件失败，服务器返回错误状态：' + xhr.status, 'warn'); } catch(_){ }
                       resolve(null);
@@ -3422,7 +3484,6 @@ flex-shrink:0;cursor:pointer;
                 }
               };
               const body = JSON.stringify({ items: [item] });
-              try { if (window.__gmAiDebug) { console.log('[UPLOAD] send body length', { bytes: body.length }); } } catch(_){ }
               xhr.send(body);
             }catch(e){ resolve(null); }
           });
@@ -5051,13 +5112,7 @@ flex-shrink:0;cursor:pointer;
 
     const messagesForSend = __gmAiBuildMessagesForSend(__gmAiChatMessages);
     
-    // warn if sending images but current model likely not vision-capable
-    try {
-      const hasImg = Array.isArray(attachmentsBackup) && attachmentsBackup.some(a => a && typeof a === 'object' && String(a.mime||'').startsWith('image/') && String(a.data_url||'').startsWith('data:'));
-      if (hasImg && !__gmProfileSupportsVisionFromConfig()) {
-        toast('当前模型可能不支持图像理解，已尝试以文本方式补充说明。建议切换带有 Vision 能力的模型。', 'warn');
-      }
-    } catch (eVisWarn) {}
+    
 
     const res = await api('/api/hivo_agent', {
       method: 'POST',
@@ -5463,7 +5518,7 @@ flex-shrink:0;cursor:pointer;
           const el = e.target && e.target.closest ? e.target.closest('[data-action]') : null;
           const act = el ? String(el.getAttribute('data-action') || '') : '';
           if (act === 'aiChatOpenPreview') {
-            try { if (window.__gmAiDebug) { (window.__gmDbg?__gmDbg:console.log)('delegation click (capture)', { act, tag: el.tagName, id: el.id, cls: el.className }); } } catch (_) {}
+            try { if (window.__gmAiDebug && window.__gmDbg) { __gmDbg('delegation click (capture)', { act, tag: el.tagName, id: el.id, cls: el.className }); } } catch (_) {}
             e.preventDefault();
             try{
               const mi = parseInt(String(el.getAttribute('data-msg-idx')||''),10);
@@ -5473,7 +5528,7 @@ flex-shrink:0;cursor:pointer;
               if (!msg) return;
               const base = (Array.isArray(msg.attachments) && msg.attachments.length ? msg.attachments : (Array.isArray(msg._attMeta) ? msg._attMeta : []));
               let a = base[ai]; if (!a) return;
-              try { if (window.__gmAiDebug) { (window.__gmDbg?__gmDbg:console.log)('click preview start (capture)', { msgIdx: mi, attIdx: ai, hasAtt: !!a, url: a && a.url, data_url: a && a.data_url, hasText: !!(a && typeof a.text==='string' && a.text), hasUndo: !!(msg && msg.undo_gid) }); } } catch(_){ }
+              try { if (window.__gmAiDebug && window.__gmDbg) { __gmDbg('click preview start (capture)', { msgIdx: mi, attIdx: ai, hasAtt: !!a, url: a && a.url, data_url: a && a.data_url, hasText: !!(a && typeof a.text==='string' && a.text), hasUndo: !!(msg && msg.undo_gid) }); } } catch(_){ }
               const hasUrl = !!(a && (a.url || a.data_url) || (a && typeof a.text === 'string' && a.text));
               if (!hasUrl) {
                 try {
@@ -5522,7 +5577,7 @@ flex-shrink:0;cursor:pointer;
                   }
                 } catch(_){ }
               }
-              try { if (window.__gmAiDebug) { (window.__gmDbg?__gmDbg:console.log)('click preview resolved (capture)', { msgIdx: mi, attIdx: ai, url: a && a.url, data_url: a && a.data_url, hasText: !!(a && typeof a.text==='string' && a.text) }); } } catch(_){ }
+              try { if (window.__gmAiDebug && window.__gmDbg) { __gmDbg('click preview resolved (capture)', { msgIdx: mi, attIdx: ai, url: a && a.url, data_url: a && a.data_url, hasText: !!(a && typeof a.text==='string' && a.text) }); } } catch(_){ }
               __gmAiOpenUnifiedPreviewForMessage(mi, ai);
             }catch(_){ }
           }
@@ -5548,7 +5603,7 @@ flex-shrink:0;cursor:pointer;
           if (!el) return;
           const act = String(el.getAttribute('data-action') || '');
           if (!act) return;
-          try { if (window.__gmAiDebug) { __gmDbg('delegation click', { act, tag: el.tagName, id: el.id, cls: el.className }); } } catch (eDbgD) {}
+          try { if (window.__gmAiDebug && window.__gmDbg) { __gmDbg('delegation click', { act, tag: el.tagName, id: el.id, cls: el.className }); } } catch (eDbgD) {}
 
           if (act === 'showStagedPanel') { e.preventDefault(); showStagedPanel(); return; }
           if (act === 'pullUpdate') { e.preventDefault(); pullUpdate(); return; }
@@ -5582,7 +5637,7 @@ flex-shrink:0;cursor:pointer;
               const msg = (__gmAiChatMessages && __gmAiChatMessages[mi]) || null;
               const base = (Array.isArray(msg.attachments) && msg.attachments.length ? msg.attachments : (Array.isArray(msg._attMeta) ? msg._attMeta : []));
               let a = base[ai];
-              try { if (__gmAiDebug) { __gmDbg('click preview start', { msgIdx: mi, attIdx: ai, hasAtt: !!a, url: a && a.url, data_url: a && a.data_url, hasText: !!(a && typeof a.text==='string' && a.text), hasUndo: !!(msg && msg.undo_gid) }); } } catch(eDbgC0) {}
+              try { if (__gmAiDebug && window.__gmDbg) { __gmDbg('click preview start', { msgIdx: mi, attIdx: ai, hasAtt: !!a, url: a && a.url, data_url: a && a.data_url, hasText: !!(a && typeof a.text==='string' && a.text), hasUndo: !!(msg && msg.undo_gid) }); } } catch(eDbgC0) {}
               // Fallback: when only _attMeta exists without url/data_url/text, try resolve from local cache by undo_gid
               const hasUrl = !!(a && (a.url || a.data_url) || (a && typeof a.text === 'string' && a.text));
               if (!hasUrl) {
@@ -5632,7 +5687,7 @@ flex-shrink:0;cursor:pointer;
                   }
                 } catch(eRes) {}
               }
-              try { if (__gmAiDebug) { __gmDbg('click preview resolved', { msgIdx: mi, attIdx: ai, url: a && a.url, data_url: a && a.data_url, hasText: !!(a && typeof a.text==='string' && a.text) }); } } catch(eDbgC1) {}
+              try { if (__gmAiDebug && window.__gmDbg) { __gmDbg('click preview resolved', { msgIdx: mi, attIdx: ai, url: a && a.url, data_url: a && a.data_url, hasText: !!(a && typeof a.text==='string' && a.text) }); } } catch(eDbgC1) {}
               __gmAiOpenUnifiedPreviewForMessage(mi, ai);
             }catch(e){}
             return;
@@ -5653,7 +5708,7 @@ flex-shrink:0;cursor:pointer;
               const cur = Number.isFinite(prev) && prev > 0 ? prev : (total > 5 ? 5 : total);
               const next = Math.min(total, cur + 6);
               msg._attShown = next;
-              try { if (__gmAiDebug) { __gmDbg('more click', { idx, total, prev: cur, next }); } } catch (eDbgMC) {}
+              try { if (__gmAiDebug && window.__gmDbg) { __gmDbg('more click', { idx, total, prev: cur, next }); } } catch (eDbgMC) {}
               __gmAiRenderChat();
             } catch (eMore) {}
             return;
@@ -5667,6 +5722,20 @@ flex-shrink:0;cursor:pointer;
           if (act === 'selectAiProfile') { e.preventDefault(); selectAiProfile(String(el.getAttribute('data-id') || '')); return; }
           if (act === 'editAiSearchProfile') { e.preventDefault(); editAiSearchProfile(String(el.getAttribute('data-id') || '')); return; }
           if (act === 'aiDeleteMsg') { e.preventDefault(); aiDeleteMsg(parseInt(String(el.getAttribute('data-idx') || ''), 10)); return; }
+          if (act === 'aiShowToolSummary') { e.preventDefault(); try { (window.aiShowToolSummary||aiShowToolSummary)(e, el); } catch(err){ } return; }
+          if (act === 'aiToggleToolItem') {
+            e.preventDefault();
+            try {
+              const wrap = el && el.closest ? el.closest('.ai-undo-row') : null;
+              if (!wrap) return;
+              const idx = String(el.getAttribute('data-idx') || '');
+              const det = wrap.querySelector(`.ai-tool-detail[data-idx="${idx}"]`);
+              if (!det) return;
+              const cur = String(det.style.display || '');
+              det.style.display = (cur === 'none' || !cur) ? 'block' : 'none';
+            } catch(_){ }
+            return;
+          }
           if (act === 'aiPickMention') { e.preventDefault(); aiPickMention(parseInt(String(el.getAttribute('data-idx') || ''), 10)); return; }
           if (act === 'onAiHistoryChipClick') { e.preventDefault(); onAiHistoryChipClick(String(el.getAttribute('data-id') || '')); return; }
           if (act === 'onAiHistoryChipDelete') {
@@ -5796,7 +5865,7 @@ flex-shrink:0;cursor:pointer;
                     const fn = sel ? (sel.focusNode || sel.anchorNode) : null;
                     const fe = fn ? ((fn.nodeType === Node.ELEMENT_NODE) ? fn : (fn.parentElement || null)) : null;
                     const activeLine = fe && fe.closest ? fe.closest('.editable-line') : null;
-                    if (window.__gmAiDebug) console.log('[gmdbg] revertHint.remove', {
+                    if (false) console.log('[gmdbg] revertHint.remove', {
                       where: 'toggleFoldBtn',
                       enabled: !!window.__gmRevertBlockHintEnabled,
                       hasActiveLine: !!activeLine,
@@ -8220,7 +8289,7 @@ flex-shrink:0;cursor:pointer;
                         const fn = sel ? (sel.focusNode || sel.anchorNode) : null;
                         const fe = fn ? ((fn.nodeType === Node.ELEMENT_NODE) ? fn : (fn.parentElement || null)) : null;
                         const activeLine = fe && fe.closest ? fe.closest('.editable-line') : null;
-                        if (window.__gmAiDebug) console.log('[gmdbg] revertHint.remove', {
+                        if (false) console.log('[gmdbg] revertHint.remove', {
                           where: 'enhanceMenu.rerenderCurrent',
                           enabled: !!window.__gmRevertBlockHintEnabled,
                           hasActiveLine: !!activeLine,
@@ -8811,7 +8880,7 @@ flex-shrink:0;cursor:pointer;
     if (!window.__gmCeHostEditingInited) {
       window.__gmCeHostEditingInited = true;
 
-      try { if (window.__gmAiDebug) console.log('[gmdbg] cehost.editing.inited'); } catch (e0) {}
+      
 
       // Debug: trace who prevents/blocks Backspace at line-start by patching event methods.
       try {
@@ -8837,25 +8906,19 @@ flex-shrink:0;cursor:pointer;
           const _sip = Event.prototype.stopImmediatePropagation;
           Event.prototype.preventDefault = function () {
             try {
-              if (this && this.type === 'keydown' && this.key === 'Backspace' && __gmInDiffView(this)) {
-                if (window.__gmAiDebug) console.log('[gmdbg] trace.preventDefault', { type: this.type, key: this.key, defaultPrevented: this.defaultPrevented, stack: (new Error()).stack });
-              }
+              if (this && this.type === 'keydown' && this.key === 'Backspace' && __gmInDiffView(this)) { }
             } catch (e2) {}
             return _pd.apply(this, arguments);
           };
           Event.prototype.stopPropagation = function () {
             try {
-              if (this && this.type === 'keydown' && this.key === 'Backspace' && __gmInDiffView(this)) {
-                if (window.__gmAiDebug) console.log('[gmdbg] trace.stopPropagation', { type: this.type, key: this.key, stack: (new Error()).stack });
-              }
+              if (this && this.type === 'keydown' && this.key === 'Backspace' && __gmInDiffView(this)) { }
             } catch (e2) {}
             return _sp.apply(this, arguments);
           };
           Event.prototype.stopImmediatePropagation = function () {
             try {
-              if (this && this.type === 'keydown' && this.key === 'Backspace' && __gmInDiffView(this)) {
-                if (window.__gmAiDebug) console.log('[gmdbg] trace.stopImmediatePropagation', { type: this.type, key: this.key, stack: (new Error()).stack });
-              }
+              if (this && this.type === 'keydown' && this.key === 'Backspace' && __gmInDiffView(this)) { }
             } catch (e2) {}
             return _sip.apply(this, arguments);
           };
@@ -8876,7 +8939,7 @@ flex-shrink:0;cursor:pointer;
             if (!(el2 && host.contains(el2))) return;
           }
           const sel = window.getSelection ? window.getSelection() : null;
-          if (window.__gmAiDebug) console.log('[gmdbg] raw.keydown.backspace', {
+          /* debug log removed: raw.keydown.backspace */ if (false) console.log('[gmdbg] raw.keydown.backspace', {
             isCeHost: (() => { try { return !!__isCeHost(); } catch (e2) { return null; } })(),
             defaultPrevented: !!e.defaultPrevented,
             targetTag: t && t.tagName ? String(t.tagName) : null,
@@ -8921,7 +8984,7 @@ flex-shrink:0;cursor:pointer;
               line = el && el.closest ? el.closest('.editable-line') : null;
             } catch (e2) {}
           }
-          if (window.__gmAiDebug) console.log('[gmdbg] raw.beforeinput', {
+          /* debug log removed: raw.beforeinput */ if (false) console.log('[gmdbg] raw.beforeinput', {
             it,
             isCeHost: (() => { try { return !!__isCeHost(); } catch (e2) { return null; } })(),
             hasLine: !!line,
@@ -9055,7 +9118,7 @@ flex-shrink:0;cursor:pointer;
 
           const __gmDelDbg = (tag, payload) => {
             try {
-              if (window.__gmAiDebug) console.log('[gmdbg]', tag, payload);
+              /* debug log removed: __gmDelDbg */
             } catch (e2) {}
             try { if (typeof __gmDbg === 'function') { __gmDbg(tag, payload); } } catch (e2) {}
           };
@@ -9851,7 +9914,7 @@ flex-shrink:0;cursor:pointer;
 
                   const __gmDelDbg = (tag, payload) => {
                     try {
-                      if (window.__gmAiDebug) console.log('[gmdbg]', tag, payload);
+                      /* debug log removed: __gmDelDbg */
                     } catch (e3) {}
                     try { if (typeof __gmDbg === 'function') { __gmDbg(tag, payload); } } catch (e3) {}
                   };
@@ -13509,13 +13572,14 @@ flex-shrink:0;cursor:pointer;
               m.pending = false;
               m.stage = (data.ok === false) ? 'error' : 'done';
               m.content = String(data.content || '');
+              try { if (Array.isArray(data.tool_receipts)) m.tool_receipts = data.tool_receipts; } catch(_){ }
+              try { __gmAiSaveHistoryNow(); } catch(_){ }
               __gmAiRenderChat();
               try { __gmAiRefreshSendCounter(); } catch (eC3) {}
               __gmAiIsResponding = false;
               try { __gmAiSetSendButtonState(false); } catch (eB3) {}
               try { if (String(window.__gmAiActiveRunId || '') === runId) window.__gmAiActiveRunId = ''; } catch (eAR1) {}
               __gmAiActiveTurnUndoGroupId = '';
-              try { __gmAiSaveHistoryNow(); } catch (eH2) {}
               try {
                 if (data && (data.can_continue === true || data.continue === true)) {
                   const rr = String(data.continue_reason || data.reason || '');
@@ -13932,7 +13996,7 @@ flex-shrink:0;cursor:pointer;
     try {
       let on = !!__gmAiDebug;
       try { on = on || (String(localStorage.getItem('gm_ai_debug') || '') === '1'); } catch (eLS) {}
-      if (on && console && console.log) console.log('[GM-AI]', ...args);
+      if (on && console && console.warn) console.warn('[GM-AI]', ...args);
     } catch (e) {}
   }
   let __gmAiEphemeralSessionPrefix = '__local__';
@@ -14245,7 +14309,8 @@ flex-shrink:0;cursor:pointer;
       profiles.forEach(p => {
         const id = String(p && p.id || '');
         if (!id) return;
-        const nm = String(p && p.name || id);
+        const modelPretty = __gmAiPrettyModelName(String(p && p.model || ''));
+        const nm = modelPretty || String(p && p.name || id);
         const cls = 'ai-model-mi' + (id === act ? ' selected' : '');
         items.push(`<div class="${cls}" data-action="selectAiProfile" data-id="${esc(id)}"><div class="nm">${esc(nm)}</div><div class="sub"></div></div>`);
       });
@@ -14330,7 +14395,16 @@ flex-shrink:0;cursor:pointer;
 
   function __gmAiRenderChat() {
     try {
-      try { if (window.__gmAiDebug) console.log('[TRACE] renderChat: enter'); } catch (eR0) {}
+      
+      
+      try {
+        const olds = document.querySelectorAll('.ai-tool-inline');
+        olds.forEach(n => { try { n.remove(); } catch(_){} });
+        const actBtns = document.querySelectorAll('.ai-msg-actions button[data-action="aiShowToolSummary"].active');
+        actBtns.forEach(b => { try { b.classList.remove('active'); b.setAttribute('aria-pressed','false'); } catch(_){} });
+        const bubAct = document.querySelectorAll('.ai-bubble.ai-tools-open');
+        bubAct.forEach(bu => { try { bu.classList.remove('ai-tools-open'); } catch(_){} });
+      } catch(_){ }
       try { __gmAiHydrateAttachmentsFromCache(); } catch (eHyd0) {}
       const list = document.getElementById('aiChatInner') || document.getElementById('aiChatList');
       if (!list) return;
@@ -14354,7 +14428,7 @@ flex-shrink:0;cursor:pointer;
         }
       }
 
-      try { if (window.__gmAiDebug) console.log('[TRACE] renderChat: messages', Array.isArray(__gmAiChatMessages) ? __gmAiChatMessages.length : 0); } catch (eR1) {}
+      try { /* debug log removed: renderChat messages */ } catch (eR1) {}
       const prevCache = Array.isArray(list.__gmAiMsgCache) ? list.__gmAiMsgCache : [];
       const nextCache = [];
       const children = Array.from(list.children || []);
@@ -14422,7 +14496,17 @@ flex-shrink:0;cursor:pointer;
               try { if (__gmAiDebug) { __gmDbg('render user atts', { idx, total, shown: end, hasAttachments: attachments.length, hasMeta: meta.length }); } } catch (eDbgRA0) {}
               const tiles1 = base.slice(0, end).map((a, aiIdx) => {
                 const k = __gmAiAttachmentKind(a);
-                const imgSrc = (k === 'image') ? (a && (a.data_url || a.url) || '') : '';
+                // 不再使用 data:image base64，优先 url；否则由 path 走统一 /api/raw_file 接口
+                let imgSrc = '';
+                if (k === 'image') {
+                  const u = (a && a.url) ? String(a.url) : '';
+                  const p = (a && a.path) ? String(a.path).replace(/\\/g, '/') : '';
+                  if (u && !/^data:/i.test(u)) {
+                    imgSrc = u;
+                  } else if (p) {
+                    imgSrc = '/api/raw_file?path=' + encodeURIComponent(p);
+                  }
+                }
                 const hasImg = Boolean(imgSrc);
                 const clickable = `data-action=\"aiChatOpenPreview\" data-msg-idx=\"${idx}\" data-att-idx=\"${aiIdx}\" onclick=\"__gmAiOnPreviewClick(event,this)\" role=\"button\" tabindex=\"0\" style=\"cursor:pointer;pointer-events:auto;position:relative;z-index:2;\"`;
                 try { if (__gmAiDebug) { __gmDbg('render att tile', { msgIdx: idx, attIdx: aiIdx, kind: k, hasImg, imgSrc: imgSrc ? (imgSrc.slice(0,60)+'...') : '', from: attachments.length ? 'attachments' : '_attMeta' }); } } catch(eDbgRA1) {}
@@ -14450,8 +14534,22 @@ flex-shrink:0;cursor:pointer;
             }
           }
           
-          node.innerHTML = `<div class="ai-meta">${esc(isUser ? '你' : 'AI')}</div><div class="ai-bubble${userLoading ? ' user-loading' : ''}${isPending ? ' pending' : ''}"><div class="ai-msg-actions"><button title="删除" data-action="aiDeleteMsg" data-idx="${idx}">×</button></div>${attachmentsHtml}<div class="ai-md">${isPending ? esc(content) : aiRenderMarkdown(content)}</div></div>`;
+          // 仅当存在非 attachments 的工具调用时显示按钮；若当前没有，则回退到相邻消息
+          let trCurr = (m && Array.isArray(m.tool_receipts)) ? m.tool_receipts : [];
+          
+          let trPrev = [];
+          try { if (idx > 0 && __gmAiChatMessages && Array.isArray(__gmAiChatMessages[idx-1] && __gmAiChatMessages[idx-1].tool_receipts)) { trPrev = __gmAiChatMessages[idx-1].tool_receipts; } } catch(_){ }
+          let trNext = [];
+          try { if (__gmAiChatMessages && Array.isArray(__gmAiChatMessages[idx+1] && __gmAiChatMessages[idx+1].tool_receipts)) { trNext = __gmAiChatMessages[idx+1].tool_receipts; } } catch(_){ }
+          const effective = ([]).concat(trCurr || [], trPrev || [], trNext || []).filter(r => String(r && r.type || '') !== 'attachments');
+          const hasRealTools = (effective.length > 0);
+          try { if (__gmAiDebug) { __gmDbg('tool-btn check', { idx, isUser, trCurrLen: (trCurr||[]).length, trPrevLen: (trPrev||[]).length, trNextLen: (trNext||[]).length, effectiveLen: effective.length, hasRealTools }); } } catch(_){ }
+          const toolBtn = hasRealTools
+            ? `<button title="工具摘要" data-action="aiShowToolSummary" data-idx="${idx}">☰</button>`
+            : '';
+          node.innerHTML = `<div class="ai-meta">${esc(isUser ? '你' : 'AI')}</div><div class="ai-bubble${userLoading ? ' user-loading' : ''}${isPending ? ' pending' : ''}"><div class="ai-msg-actions">${toolBtn}<button title="删除" data-action="aiDeleteMsg" data-idx="${idx}">×</button></div>${attachmentsHtml}<div class="ai-md">${isPending ? esc(content) : aiRenderMarkdown(content)}</div></div>`;
           try { __gmAiEnhanceCodeBlocks(node); } catch (eEnh) {}
+          
         }
       }
 
@@ -14491,6 +14589,7 @@ flex-shrink:0;cursor:pointer;
                   return o;
                 });
                 if (metaOut.length) item._attMeta = metaOut;
+              } else if (role === 'assistant') {
               }
               return item;
             } catch (e1) {
@@ -14649,6 +14748,78 @@ flex-shrink:0;cursor:pointer;
     } catch (e) {}
   }
 
+  window.aiShowToolSummary = async function (e, el){
+    try{
+      const idx = parseInt(String(el && el.getAttribute('data-idx') || ''), 10);
+      if (!Number.isFinite(idx)) { return; }
+      const m = (__gmAiChatMessages && __gmAiChatMessages[idx]) || null;
+      if (!m) { return; }
+      let tr = Array.isArray(m.tool_receipts) ? m.tool_receipts : [];
+      if ((!tr || !tr.length) && __gmAiChatMessages && idx > 0) {
+        const mp = __gmAiChatMessages[idx-1] || null;
+        if (mp && Array.isArray(mp.tool_receipts)) tr = mp.tool_receipts;
+      }
+      
+      if (!tr || !tr.length) { return; }
+      { // Inline tool summary render inside bubble (markdown)
+        const items = (tr || []).filter(r => String(r && r.type || '') !== 'attachments');
+        if (!items.length) { return; }
+        const chat = document.getElementById('aiChatInner') || document.getElementById('aiChatList') || document.getElementById('aiChatView') || document.body;
+        let bubble = el && el.closest ? el.closest('.ai-bubble') : null;
+        if (!bubble && chat) { try { const btn = chat.querySelector(`button[data-idx="${idx}"]`); bubble = btn && btn.closest ? btn.closest('.ai-bubble') : null; } catch(_){ bubble = null; } }
+        if (!bubble) { return; }
+        let holder = bubble.querySelector('.ai-tool-inline');
+        if (holder && holder.__open) {
+          try { holder.remove(); } catch(_){ try{ bubble.removeChild(holder); }catch(__){} }
+          try{ if(el && el.classList){ el.classList.remove('active'); el.setAttribute('aria-pressed','false'); } }catch(_){ }
+          try{ if(bubble && bubble.classList){ bubble.classList.remove('ai-tools-open'); } }catch(_){ }
+          return;
+        }
+        if (!holder) { holder = document.createElement('div'); holder.className = 'ai-tool-inline ai-md'; holder.style.marginTop = '8px'; holder.style.borderTop = '1px solid var(--border)'; holder.style.paddingTop = '8px'; } else { holder.innerHTML = ''; }
+        const mdLines = [];
+        for (let i = 0; i < items.length; i++){
+          const r = items[i] || {};
+          const t = String(r.type || '');
+          const ok = !!r.ok;
+          const status = ok ? '🟢 OK' : '🔴 FAIL';
+          const msg = String(r.msg || '');
+          const req = (r && typeof r.request === 'object' && r.request) ? r.request : {};
+          const dat = (r && typeof r.data === 'object' && r.data) ? r.data : {};
+          let reqStr = ''; let resStr = '';
+          try { reqStr = JSON.stringify(req, null, 2); } catch(_) { reqStr = String(req||''); }
+          try { resStr = JSON.stringify(dat, null, 2); } catch(_) { resStr = String(dat||''); }
+          mdLines.push(`<details><summary>${status} ${t}</summary>`,'','Request','', '```json', reqStr || '{}', '```','');
+          if (ok) { mdLines.push('Result','', '```json', resStr || '{}', '```'); }
+          else { mdLines.push('Error',''); if (msg) { mdLines.push('````', msg, '````'); } else { mdLines.push('```json', resStr || '{}', '```'); } }
+          mdLines.push('','</details>','');
+        }
+        const md = mdLines.join('\n');
+        try { const html = aiRenderMarkdown(md); holder.innerHTML = html; } catch(_){ holder.textContent = md; }
+      try { __gmAiEnhanceCodeBlocks(holder); } catch(_){ }
+        try {
+          const pres = holder.querySelectorAll('pre');
+          pres.forEach(p => {
+            p.style.overflowX = 'auto';
+            p.style.whiteSpace = 'pre';
+            p.style.wordBreak = 'normal';
+          });
+          const codes = holder.querySelectorAll('pre > code');
+          codes.forEach(c => {
+            c.style.whiteSpace = 'pre';
+            c.style.wordBreak = 'normal';
+          });
+        } catch(_){ }
+        const mdEl = bubble.querySelector('.ai-md');
+        if (mdEl && mdEl.nextSibling) bubble.insertBefore(holder, mdEl.nextSibling); else bubble.appendChild(holder);
+        holder.__open = true;
+        try{ if(el && el.classList){ el.classList.add('active'); el.setAttribute('aria-pressed','true'); } }catch(_){ }
+        try{ if(bubble && bubble.classList){ bubble.classList.add('ai-tools-open'); } }catch(_){ }
+        return;
+      }
+      // legacy floating panel logic fully removed
+    }catch(err){ }
+  };
+
   async function aiUndoLastTurn() {
     try {
       // If currently waiting for a response, stop waiting first; then undo that active turn.
@@ -14720,6 +14891,17 @@ flex-shrink:0;cursor:pointer;
           }
         } catch (e0) {}
         const lastUserText = String(msgs[lastUser] && msgs[lastUser].content || '');
+        // 恢复上一轮用户附件到待发送区（未失效者）
+        try {
+          const prevUser = msgs[lastUser];
+          const att = (prevUser && Array.isArray(prevUser.attachments)) ? prevUser.attachments : (Array.isArray(prevUser && prevUser._attMeta) ? prevUser._attMeta : []);
+          const valid = (att || []).filter(a => a && (a.path || a.url || (typeof a.text==='string' && a.text)) ).map(a => ({ name: a.name||'file', mime: a.mime||'', size: a.size||0, path: a.path||'', url: a.url||'', text: a.text }));
+          if (valid.length) {
+            const pend = Array.isArray(__gmAiPendingAttachments) ? __gmAiPendingAttachments : [];
+            __gmAiPendingAttachments = pend.concat(valid);
+            try { __gmAiRenderAttachList(); } catch(_){ }
+          }
+        } catch(_){ }
         msgs.splice(lastUser);
         __gmAiRenderChat();
         await __gmAiSaveHistoryNow();
@@ -14916,7 +15098,7 @@ flex-shrink:0;cursor:pointer;
       if (!msg) return false;
       const base0 = (Array.isArray(msg.attachments) && msg.attachments.length ? msg.attachments : (Array.isArray(msg._attMeta) ? msg._attMeta : []));
       let a = base0[ai]; if (!a) return false;
-      try { if (window.__gmAiDebug) { (window.__gmDbg?__gmDbg:console.log)('click preview start (inline)', { msgIdx: mi, attIdx: ai, url: a && a.url, data_url: a && a.data_url, hasText: !!(a && typeof a.text==='string' && a.text), hasUndo: !!(msg && msg.undo_gid) }); } } catch(_){ }
+      try { if (window.__gmAiDebug && window.__gmDbg) { __gmDbg('click preview start (inline)', { msgIdx: mi, attIdx: ai, url: a && a.url, data_url: a && a.data_url, hasText: !!(a && typeof a.text==='string' && a.text), hasUndo: !!(msg && msg.undo_gid) }); } } catch(_){ }
       const hasUrl = !!(a && (a.url || a.data_url) || (a && typeof a.text === 'string' && a.text));
       if (!hasUrl) {
         try {
@@ -14964,7 +15146,7 @@ flex-shrink:0;cursor:pointer;
           }
         } catch(_){ }
       }
-      try { if (window.__gmAiDebug) { (window.__gmDbg?__gmDbg:console.log)('click preview resolved (inline)', { msgIdx: mi, attIdx: ai, url: a && a.url, data_url: a && a.data_url, hasText: !!(a && typeof a.text==='string' && a.text) }); } } catch(_){ }
+      try { if (window.__gmAiDebug && window.__gmDbg) { __gmDbg('click preview resolved (inline)', { msgIdx: mi, attIdx: ai, url: a && a.url, data_url: a && a.data_url, hasText: !!(a && typeof a.text==='string' && a.text) }); } } catch(_){ }
       __gmAiOpenUnifiedPreviewForMessage(mi, ai);
       return false;
     }catch(_){ return false; }
@@ -16047,6 +16229,8 @@ flex-shrink:0;cursor:pointer;
       if (s) s.style.display = 'none';
       const btn = document.getElementById('aiPlusBtn');
       if (btn) btn.textContent = '×';
+      // 先从后端刷新配置，确保列表展示的 model 与磁盘一致
+      try { await loadAiConfig(); } catch (eCfg) {}
       __gmAiRenderProfileList();
 
       // Backfill limits from hivo_ai_config if not present
@@ -16290,7 +16474,7 @@ flex-shrink:0;cursor:pointer;
       __gmAiPendingAttachments = (Array.isArray(__gmAiPendingAttachments) ? __gmAiPendingAttachments : []).concat(arr);
     } catch (e) {}
     try { __gmAiRenderAttachList(); } catch (e) {}
-    try { __gmAiUpdateUploadLimitHint(); } catch (e) {}
+    
     try {
       const needUp = (arr || []).filter(a => a && typeof a === 'object' && String(a.data_url||'').startsWith('data:') && !String(a.url||'').trim());
       if (needUp.length) {
@@ -16321,15 +16505,7 @@ flex-shrink:0;cursor:pointer;
     } catch (e) {}
   }
 
-  function __gmProfileSupportsVisionFromConfig() {
-    try {
-      const pid = String(__gmAiSelectedProfileId || __gmAiConfig.active_profile_id || '').trim();
-      const profs = Array.isArray(__gmAiConfig && __gmAiConfig.profiles) ? __gmAiConfig.profiles : [];
-      const p = profs.find(x => x && String(x.id||'') === pid) || null;
-      if (!p) return false;
-      return Boolean(p.supports_vision);
-    } catch (e) { return false; }
-  }
+  
 
   async function __gmCompressImageToDataUrl(file, maxBytes) {
     return await new Promise((resolve) => {
@@ -16476,7 +16652,7 @@ flex-shrink:0;cursor:pointer;
 
       try { __gmAiBindSearchEnabledToggle(); } catch (eB0) {}
 
-      try { __gmAiUpdateUploadLimitHint(); } catch (eLH) {}
+      
       __gmAiSetMeta('已加载本地配置');
       toast('✓ AI 配置已加载', 'ok');
     } catch (e) {
@@ -16707,8 +16883,13 @@ flex-shrink:0;cursor:pointer;
       try { __gmAiRefreshSendCounter(); } catch (eC0) {}
       return;
     }
-    POST('/api/ai_sessions', { profile_id: pid, action: 'set_active', session_id: sid }).catch(()=>{});
-    loadAiChatHistory(pid, sid).then(()=>__gmAiRefreshSendCounter()).catch(()=>{});
+    POST('/api/ai_sessions', { profile_id: pid, action: 'set_active', session_id: sid })
+      .then(() => loadAiChatHistory(pid, sid))
+      .then(() => __gmAiRefreshSendCounter())
+      .catch(() => {
+        // Fallback: if set_active fails, still try to load
+        loadAiChatHistory(pid, sid).then(()=>__gmAiRefreshSendCounter()).catch(()=>{});
+      });
   }
 
   function onAiHistoryChipDelete(ev, sessionId) {
@@ -16837,14 +17018,24 @@ flex-shrink:0;cursor:pointer;
     const res = await GET(url);
     if (res && res.ok) {
       if (Array.isArray(res.sessions)) __gmAiSessions = res.sessions;
-      if (res.active_session_id) {
+      if (sid) {
+        const targetSid = sid;
+        const oldSid = String(__gmAiActiveSessionId || '');
+        try { if (__gmAiDebug) { __gmDbg('history sid (forced by arg)', { oldSid, targetSid }); } } catch (eDbgHS) {}
+        if (targetSid && oldSid && targetSid !== oldSid) {
+          try { __gmAiSaveSessionDraft(oldSid); } catch (eSv0) {}
+          try { __gmAiMigrateAttCaches(oldSid, targetSid); } catch (eMg) {}
+          try { __gmAiPendingAttachments = []; __gmAiRenderAttachList(); } catch (eClr1) {}
+        }
+        __gmAiActiveSessionId = targetSid;
+        try { __gmAiLoadSessionDraft(targetSid); } catch (eLd0) {}
+      } else if (res.active_session_id) {
         const newSid = String(res.active_session_id || '');
         const oldSid = String(__gmAiActiveSessionId || '');
         try { if (__gmAiDebug) { __gmDbg('history sid', { oldSid, newSid, lastSendSid: __gmAiLastSendSessionId }); } } catch (eDbgHS) {}
         if (newSid && oldSid && newSid !== oldSid) {
           try { __gmAiSaveSessionDraft(oldSid); } catch (eSv0) {}
           try { __gmAiMigrateAttCaches(oldSid, newSid); } catch (eMg) {}
-          // Bind pending attachments to session: clear UI list when session actually changes
           try { __gmAiPendingAttachments = []; __gmAiRenderAttachList(); } catch (eClr1) {}
         } else if (newSid && !oldSid && __gmAiLastSendSessionId && __gmAiLastSendSessionId !== newSid) {
           try { __gmAiSaveSessionDraft(__gmAiLastSendSessionId); } catch (eSv1) {}
@@ -24953,7 +25144,7 @@ flex-shrink:0;cursor:pointer;
           }
           try { __gmAiLoadCapabilitiesOnce(false).catch(()=>{}); } catch (e0cap) {}
           showAiChatPanel();
-          try { __gmAiUpdateUploadLimitHint(); } catch (eLH2) {}
+          
         } catch (e) {}
       }
     }
@@ -25771,24 +25962,11 @@ flex-shrink:0;cursor:pointer;
       const tgtBase = (Array.isArray(m.attachments) && m.attachments.length ? m.attachments : (Array.isArray(m._attMeta) ? m._attMeta : []));
       const tgt = (tgtBase && tgtBase[tgtIdx]) || null;
       const tgtMime = String(tgt && tgt.mime || '');
-
-      // If clicking an image attachment: use global image list (AI markdown images + sent attachments) for counting
-      if (tgt && tgtMime.startsWith('image/')){
-        const imgs = __gmUnifiedImageList();
-        const u = __gmSafeMediaUrl(String(tgt.url || tgt.data_url || ''));
-        let start = 0;
-        if (u){
-          for (let i=0;i<imgs.length;i++){
-            if (__gmSafeMediaUrl(imgs[i].url||'') === u){ start = i; break; }
-          }
-        }
-        __gmAiOpenUnifiedPreview(imgs, start);
-        return;
-      }
-
-      // Otherwise (text/file), keep original mixed list behavior for rich preview
+      // 统一处理：无论点击图片还是文本/文件，都生成混合列表，保证计数与切换一致
       const all = Array.isArray(__gmAiChatMessages) ? __gmAiChatMessages : [];
-      const list = [];
+      const listMd = [];
+      const listAtt = [];
+      const seenImg = new Set();
       const same = (x,y)=>{
         try{
           if (!x||!y) return false;
@@ -25805,11 +25983,26 @@ flex-shrink:0;cursor:pointer;
           if (!a) continue;
           const mime = String(a.mime||'');
           const url = String(a.url || a.data_url || '');
-          if (mime.startsWith('image/') && url){ list.push({ kind:'image', url, name:a.name||'file', mime, __src:a }); continue; }
-          if (typeof a.text === 'string' && a.text){ list.push({ kind:'text', text:String(a.text||''), name:a.name||'file', mime: mime||'text/plain', __src:a }); continue; }
-          if (url){ list.push({ kind:'file', url, name:a.name||'file', mime, __src:a }); }
+          if (mime.startsWith('image/') && url){
+            const su = __gmSafeMediaUrl(url);
+            if (su && !seenImg.has(su)) { seenImg.add(su); listAtt.push({ kind:'image', url: su, name:a.name||'file', mime, __src:a }); }
+            continue;
+          }
+          if (typeof a.text === 'string' && a.text){ listAtt.push({ kind:'text', text:String(a.text||''), name:a.name||'file', mime: mime||'text/plain', __src:a }); continue; }
+          if (url){ listAtt.push({ kind:'file', url, name:a.name||'file', mime, __src:a }); }
         }
       }
+      // 收集正文图片（避免与附件重复），并放在前面
+      try{
+        const mdImgs = __gmAiCollectMdImages();
+        for (const it of (mdImgs||[])){
+          const u = __gmSafeMediaUrl(it && it.url || '');
+          if (!u || seenImg.has(u)) continue;
+          seenImg.add(u);
+          listMd.push({ kind:'image', url:u, name: it.name||'image', mime: it.mime||'image/*' });
+        }
+      }catch(_){ }
+      const list = listMd.concat(listAtt);
       let start = 0;
       if (tgt){
         const n = list.length;
@@ -25860,7 +26053,33 @@ flex-shrink:0;cursor:pointer;
 
   function __gmAiOpenUnifiedPreviewForMdImage(src){
     try{
-      const list = __gmUnifiedImageList();
+      // 统一到混合列表：优先正文图片（保证点击的图片靠前）+ 附件（图片/文本/文件）
+      const md = __gmAiCollectMdImages();
+      const atts = __gmAiCollectAllSentAttachments();
+      const list = [];
+      const seenImg = new Set();
+      const pushItem = (it) => {
+        try{
+          if (!it) return;
+          if (it.kind === 'image'){
+            const u = __gmSafeMediaUrl(it.url||'');
+            if (!u || seenImg.has(u)) return;
+            seenImg.add(u);
+            list.push({ kind:'image', url:u, name: it.name||'image', mime: it.mime||'image/*' });
+            return;
+          }
+          if (it.kind === 'text'){
+            list.push({ kind:'text', text:String(it.text||''), name: it.name||'file', mime: it.mime||'text/plain' });
+            return;
+          }
+          // file or others with url
+          const u2 = __gmSafeMediaUrl(it.url||'');
+          list.push({ kind:'file', url:u2, name: it.name||'file', mime: it.mime||'' });
+        }catch(_){ }
+      };
+      // 顺序：先正文图片，后附件
+      for (const it of (md||[])) pushItem(it);
+      for (const it of (atts||[])) pushItem(it);
       const safe = __gmSafeMediaUrl(src);
       let start = 0;
       if (safe){
@@ -26108,9 +26327,6 @@ flex-shrink:0;cursor:pointer;
       const u = String(url || '').trim();
       if (!u) return '';
       if (/^https?:\/\//i.test(u)) return u;
-      if (/^data:image\/(png|jpe?g|gif|webp|bmp|svg\+xml);base64,/i.test(u)) return u;
-      if (/^data:audio\/(mpeg|mp3|wav|ogg|aac|mp4|webm|x-wav|flac);base64,/i.test(u)) return u;
-      if (/^data:video\/(mp4|webm|ogg|quicktime);base64,/i.test(u)) return u;
       if (u.startsWith('/api/')) return u; // allow any API-served attachment URLs
       if (u.startsWith('./') || u.startsWith('../') || (!u.startsWith('/') && !/^[a-zA-Z]+:/i.test(u))) {
         const mapped = __gmMediaUrlFromMaybePath(u);
@@ -26128,7 +26344,6 @@ flex-shrink:0;cursor:pointer;
       if (!s) return '';
       if (s.startsWith('<') && s.endsWith('>')) s = s.slice(1, -1).trim();
       if (/^https?:\/\//i.test(s)) return s;
-      if (/^data:image\//i.test(s)) return s;
       if (s.startsWith('/api/raw_file?path=')) return s;
       if (s.startsWith('file://')) s = s.slice(7);
       if (s.startsWith('@')) s = s.slice(1);
@@ -26724,7 +26939,7 @@ flex-shrink:0;cursor:pointer;
   try {
     if (!window.__gmGlobalClickDbgBoundV2) {
       window.__gmGlobalClickDbgBoundV2 = true;
-      const logFn = (...args)=>{ try{ if (window.__gmAiDebug) (window.__gmDbg?__gmDbg:console.log)(...args); }catch(_){ try{ if (window.__gmAiDebug) console.log(...args);}catch(__){} } };
+      const logFn = (...args)=>{ /* debug log removed */ };
       window.addEventListener('click', (e)=>{
         const el = e.target && e.target.closest ? e.target.closest('[data-action]') : null;
         const act = el ? String(el.getAttribute('data-action')||'') : '';
