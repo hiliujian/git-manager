@@ -9,9 +9,6 @@
     "signature": "tool_types",
     "escalation_limit": 2
   },
-  "status_events": {
-    "enabled": true
-  },
   "status_messages": {
     "sending": "发送中...",
     "thinking": "思考中...",
@@ -44,7 +41,11 @@
   "limits": {
     "ai_max_input_tokens": 24000,
     "ai_max_output_tokens": 2048,
-    "max_post_body_bytes": 10485760
+    "max_post_body_bytes": 10485760,
+    "media_base64_max_bytes": 2097152,
+    "ocr_text_max_chars": 4000,
+    "tool_receipt_request_max": 2000,
+    "tool_receipt_data_max": 4000
   },
   "agent": {
     "mode": "hivo_agent",
@@ -89,7 +90,7 @@
       "name": "moonshotai/kimi-k2.5",
       "base_url": "https://integrate.api.nvidia.com/v1",
       "api_key": "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",
-      "model": "moonshotai/kimi-k2.6",
+      "model": "meta/llama-3.2-11b-vision-instruct",
       "supports_vision": false
     },
     {

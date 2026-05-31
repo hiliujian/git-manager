@@ -14453,7 +14453,7 @@ flex-shrink:0;cursor:pointer;
         const isUser = role === 'user';
         const isPending = Boolean(m && m.pending);
         const userLoading = Boolean(isUser && lastIsPendingAssistant && idx === lastUserIdx);
-        const attShownSig = isUser ? (Number(m && m._attShown) || 0) : 0;
+        const attShownSig = (Number(m && m._attShown) || 0);
         const baseForSig = attachments.length ? attachments : metaArr0;
         const attNamesSig = baseForSig && baseForSig.length
           ? baseForSig.map(a => String(a && a.name || '')).join('|').slice(0, 200)
@@ -14514,9 +14514,10 @@ flex-shrink:0;cursor:pointer;
                   ? `<img src=\"${esc(imgSrc)}\" alt=\"\" style=\"width:100%;height:100%;object-fit:cover;display:block;border-radius:4px;\" />`
                   : `<div style=\"width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:var(--text2);\">${__gmAiAttachmentIcon(k)}</div>`;
                 const nm = String(a && a.name || '').trim();
+                const titleText = nm || String((a && (a.url || a.path)) || '').trim();
                 const cap = nm || (hasImg ? '' : '资源已失效');
                 const capHtml = cap ? `<div style=\"margin-top:2px;font-size:11px;color:var(--text2);width:40px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;\">${esc(cap)}</div>` : '';
-                return `<span ${clickable} style=\"display:inline-block;width:auto;vertical-align:top;margin-right:6px;margin-bottom:6px;\">`
+                return `<span ${clickable} title=\"${esc(titleText)}\" style=\"display:inline-block;width:auto;vertical-align:top;margin-right:6px;margin-bottom:6px;\">`
                   + `<span style=\"display:inline-block;width:40px;height:40px;border-radius:4px;overflow:hidden;background:rgba(0,0,0,0.05);vertical-align:top;\">${inner}</span>`
                   + `${capHtml}`
                   + `</span>`;
@@ -14531,6 +14532,55 @@ flex-shrink:0;cursor:pointer;
               const tiles = tiles1 + moreTile;
               attachmentsHtml = tiles ? `<div style=\"margin-bottom:8px;display:flex;flex-wrap:wrap;\">${tiles}</div>` : '';
               try { if (__gmAiDebug) { __gmDbg('render att', { idx, total, end, hasMore, rem }); } } catch (eDbgRA) {}
+            }
+          } else {
+            // Assistant attachments: paginate like user, with +N tile and hover title
+            const metaA = Array.isArray(m && m._attMeta) ? m._attMeta : [];
+            const baseA = attachments.length ? attachments : metaA;
+            if (baseA && baseA.length) {
+              const totalA = baseA.length;
+              let shownA = 0;
+              try {
+                const msgA = (__gmAiChatMessages && __gmAiChatMessages[idx]) || null;
+                const prevA = Number(msgA && msgA._attShown);
+                shownA = Number.isFinite(prevA) && prevA > 0 ? prevA : (totalA > 5 ? 5 : totalA);
+                if (msgA) msgA._attShown = shownA;
+              } catch (_eShownA) { shownA = totalA > 5 ? 5 : totalA; }
+
+              const endA = Math.min(shownA, totalA);
+              const tilesA = baseA.slice(0, endA).map((a, aiIdx) => {
+                const k = __gmAiAttachmentKind(a);
+                let imgSrc = '';
+                if (k === 'image') {
+                  const u = (a && a.url) ? String(a.url) : '';
+                  const p = (a && a.path) ? String(a.path).replace(/\\/g, '/') : '';
+                  if (u && !/^data:/i.test(u)) {
+                    imgSrc = u;
+                  } else if (p) {
+                    imgSrc = '/api/raw_file?path=' + encodeURIComponent(p);
+                  }
+                }
+                const hasImg = Boolean(imgSrc);
+                const clickable = `data-action="aiChatOpenPreview" data-msg-idx="${idx}" data-att-idx="${aiIdx}" onclick="__gmAiOnPreviewClick(event,this)" role="button" tabindex="0" style="cursor:pointer;pointer-events:auto;position:relative;z-index:2;"`;
+                const inner = hasImg
+                  ? `<img src="${esc(imgSrc)}" alt="" style="width:100%;height:100%;object-fit:cover;display:block;border-radius:4px;" />`
+                  : `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:var(--text2);">${__gmAiAttachmentIcon(k)}</div>`;
+                const nm = String(a && a.name || '').trim();
+                const titleText = nm || String((a && (a.url || a.path)) || '').trim();
+                const cap = nm || (hasImg ? '' : '资源已失效');
+                const capHtml = cap ? `<div style=\"margin-top:2px;font-size:11px;color:var(--text2);width:40px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;\">${esc(cap)}</div>` : '';
+                return `<span ${clickable} title=\"${esc(titleText)}\" style=\"display:inline-block;width:auto;vertical-align:top;margin-right:6px;margin-bottom:6px;\">`
+                  + `<span style=\"display:inline-block;width:40px;height:40px;border-radius:4px;overflow:hidden;background:rgba(0,0,0,0.05);vertical-align:top;\">${inner}</span>`
+                  + `${capHtml}`
+                  + `</span>`;
+              }).join('');
+              const hasMoreA = endA < totalA;
+              const remA = Math.max(0, totalA - endA);
+              const moreTileA = hasMoreA
+                ? `<span data-action=\"aiMoreAtt\" data-idx=\"${idx}\" title=\"展开更多\" style=\"display:inline-block;width:40px;height:40px;border-radius:4px;overflow:hidden;margin-right:4px;margin-bottom:6px;background:rgba(0,0,0,0.05);vertical-align:top;cursor:pointer;\"><span style=\"width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:var(--text2);font-weight:800;\">＋${remA}</span></span>`
+                : '';
+              const tilesWrapA = tilesA + moreTileA;
+              attachmentsHtml = tilesWrapA ? `<div style=\"margin-bottom:8px;display:flex;flex-wrap:wrap;\">${tilesWrapA}</div>` : '';
             }
           }
           

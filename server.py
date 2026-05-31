@@ -2215,7 +2215,30 @@ def _hivo_parse_context_refs_structured(context_refs: list, per_file_chars: int 
                 return True, "", {"file": {"file_name": bn, "file_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "sheets": [], "note": "xlsx_parser_unavailable"}}
             return True, "", {"file": {"file_name": bn, "file_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "sheets": sheets}}
 
-            
+        # Legacy Office: DOC (binary)
+        if is_doc:
+            try:
+                size0 = int(os.path.getsize(full) if os.path.exists(full) else 0)
+            except Exception:
+                size0 = 0
+            return True, "", {"file": {"file_name": bn, "file_type": "application/msword", "file_size": size0, "note": "legacy_office_doc_unparsed"}}
+
+        # Legacy Office: XLS (binary)
+        if is_xls:
+            try:
+                size0 = int(os.path.getsize(full) if os.path.exists(full) else 0)
+            except Exception:
+                size0 = 0
+            return True, "", {"file": {"file_name": bn, "file_type": "application/vnd.ms-excel", "file_size": size0, "sheets": [], "note": "legacy_office_xls_unparsed"}}
+
+        # Legacy Office: PPT (binary)
+        if is_ppt:
+            try:
+                size0 = int(os.path.getsize(full) if os.path.exists(full) else 0)
+            except Exception:
+                size0 = 0
+            return True, "", {"file": {"file_name": bn, "file_type": "application/vnd.ms-powerpoint", "file_size": size0, "slides": [], "note": "legacy_office_ppt_unparsed"}}
+
         if is_pptx:
             slides = []
             ok = False
@@ -7337,7 +7360,8 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
             full = _safe_repo_abspath(rp)
         # 可观测性（已按需禁用详细日志）
         if not (full and os.path.exists(full)) or os.path.isdir(full):
-            return False, "文件不存在", {"path": rp}
+            bn0 = os.path.basename(str(rp).replace("\\", "/"))
+            return False, "文件不存在", {"file": {"file_name": bn0}}
         # 判定媒体 or 文本
         try:
             mime0, _enc0 = mimetypes.guess_type(full)
@@ -7350,9 +7374,13 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
         is_docx = (mime_s == "application/vnd.openxmlformats-officedocument.wordprocessingml.document" or ext_s == ".docx")
         is_xlsx = (mime_s == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" or ext_s == ".xlsx")
         is_pptx = (mime_s == "application/vnd.openxmlformats-officedocument.presentationml.presentation" or ext_s == ".pptx")
+        # Legacy MS Office formats
+        is_doc = (mime_s == "application/msword" or ext_s == ".doc")
+        is_xls = (mime_s == "application/vnd.ms-excel" or ext_s == ".xls")
+        is_ppt = (mime_s == "application/vnd.ms-powerpoint" or ext_s == ".ppt")
         is_zip = (mime_s in ("application/zip", "application/x-zip-compressed") or ext_s == ".zip")
         is_media = False
-        if not (is_pdf or is_docx or is_xlsx or is_pptx or is_zip):
+        if not (is_pdf or is_docx or is_xlsx or is_pptx or is_doc or is_xls or is_ppt or is_zip):
             if mime0 and (mime_s.startswith("image/") or mime_s.startswith("audio/") or mime_s.startswith("video/")):
                 is_media = True
             else:
@@ -7443,6 +7471,7 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
                         "file_name": bn,
                         "file_type": ftype,
                         "file_size": size0,
+                        "mime_type": ftype,
                         "image_data": b64,
                         "width": int(width),
                         "height": int(height),
@@ -7451,17 +7480,14 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
                     }
                 }
             else:
-                # 非图片媒体：若为音频/视频，返回 data_url；否则（未知二进制）仅返回元数据
+                # 非图片媒体：对音频/视频暂不实现解析，返回受支持标记
                 if ftype.startswith("audio/") or ftype.startswith("video/"):
-                    data_url = f"data:{ftype};base64,{b64}" if b64 else ""
                     return True, "", {
                         "file": {
                             "file_name": bn,
                             "file_type": ftype,
-                            "file_size": size0,
-                            "data_url": data_url,
-                            "truncated": bool(truncated) and (not downscaled),
-                            "max_bytes": int(max_bytes),
+                            "size": size0,
+                            "supported": False,
                         }
                     }
                 else:
@@ -7552,7 +7578,8 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
             rp_norm = str(rp or "").replace("\\", "/")
             content, encoding = get_file_content(rp_norm, return_encoding=True)
             if content is None:
-                return False, "无法读取文件内容", {"path": rp}
+                bn2 = os.path.basename(str(rp).replace("\\", "/"))
+                return False, "无法读取文件内容", {"file": {"file_name": bn2}}
             ftype_txt = None
             try:
                 ftype_txt, _ = mimetypes.guess_type(bn)
