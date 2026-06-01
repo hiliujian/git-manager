@@ -3306,7 +3306,7 @@ flex-shrink:0;cursor:pointer;
     <div id="stagedDesc" style="font-size:12px;color:var(--text3);margin-top:-6px;margin-bottom:10px;"></div>
     <div id="stagedList" style="max-height:420px;overflow:auto;border:1px solid var(--border);border-radius:8px;background:var(--bg2);"></div>
     <div class="modal-btns" style="margin-top:12px;flex-wrap:wrap">
-      <button class="btn" id="stagedUnstageAllBtn" data-action="unstageAllStagedFromPanel">全部恢复</button>
+      <button class="btn blue" id="stagedUnstageAllBtn" data-action="unstageAllStagedFromPanel">全部恢复</button>
       <button class="btn red" id="stagedDiscardAllBtn" data-action="discardAllStagedFromPanel">全部丢弃</button>
       <div style="flex:1"></div>
       <button class="btn" data-action="closeModal" data-modal="stagedModal">关闭</button>
@@ -3622,7 +3622,7 @@ flex-shrink:0;cursor:pointer;
       <span style="color:var(--text3);flex:0 0 auto">(stash)</span>
     </div>
   </div>
-  <button class="btn" style="padding:2px 10px" data-action="popOneStashFromPanel" data-idx="${idx}" data-ref="${ref}">恢复</button>
+  <button class="btn blue" style="padding:2px 10px" data-action="popOneStashFromPanel" data-idx="${idx}" data-ref="${ref}">恢复</button>
   <button class="btn red" style="padding:2px 10px" data-action="dropOneStashFromPanel" data-idx="${idx}" data-ref="${ref}">丢弃</button>
 </div>`;
       }
@@ -3642,7 +3642,7 @@ flex-shrink:0;cursor:pointer;
       <span style="color:var(--text3);flex:0 0 auto">${stTxt}</span>
     </div>
   </div>
-  <button class="btn" style="padding:2px 10px" data-action="unstageOneStagedFromPanel" data-idx="${idx}">恢复</button>
+  <button class="btn blue" style="padding:2px 10px" data-action="unstageOneStagedFromPanel" data-idx="${idx}">恢复</button>
   <button class="btn red" style="padding:2px 10px" data-action="discardOneStagedFromPanel" data-idx="${idx}">丢弃</button>
 </div>`;
     }).join('');
