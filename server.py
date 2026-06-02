@@ -4886,6 +4886,12 @@ def _hivo_ai_clean_messages(messages: list, limit: int):
             continue
         item = {"role": role, "content": content}
         if role == "user":
+            try:
+                mid = str(m.get("id") or "").strip()
+                if mid:
+                    item["id"] = mid
+            except Exception:
+                pass
             ug = str(m.get("undo_gid") or "").strip()
             if ug:
                 item["undo_gid"] = ug
@@ -4911,6 +4917,12 @@ def _hivo_ai_clean_messages(messages: list, limit: int):
             except Exception:
                 pass
         elif role == "assistant":
+            try:
+                mid = str(m.get("id") or "").strip()
+                if mid:
+                    item["id"] = mid
+            except Exception:
+                pass
             # 保留 tool_receipts（含 request/data），过滤 attachments，做长度截断
             try:
                 tr = m.get("tool_receipts")
@@ -4951,6 +4963,85 @@ def _hivo_ai_clean_messages(messages: list, limit: int):
                         })
                     if out:
                         item["tool_receipts"] = out
+            except Exception:
+                pass
+            # stage/can_continue 信息
+            try:
+                st = str(m.get("stage") or "").strip()
+                if st:
+                    item["stage"] = st
+                item["can_continue"] = bool(m.get("can_continue", False))
+            except Exception:
+                pass
+            # 持久化最小化 _attMeta（渲染附件缩略图）与 __continue_snapshot（用于 Continue 恢复）
+            try:
+                meta_in = m.get("_attMeta")
+                if isinstance(meta_in, list) and meta_in:
+                    meta_out = []
+                    for a in meta_in:
+                        if not isinstance(a, dict):
+                            continue
+                        o = {
+                            "name": str(a.get("name") or "file"),
+                            "mime": str(a.get("mime") or ""),
+                            "size": int(a.get("size") or 0),
+                        }
+                        u = str(a.get("url") or "").strip()
+                        if u:
+                            o["url"] = u
+                        pth = str(a.get("path") or "").strip()
+                        if pth:
+                            o["path"] = pth.replace("\\", "/")
+                        meta_out.append(o)
+                    if meta_out:
+                        item["_attMeta"] = meta_out
+            except Exception:
+                pass
+            try:
+                snap = m.get("__continue_snapshot")
+                if isinstance(snap, dict) and isinstance(snap.get("body"), dict):
+                    b = snap["body"]
+                    body = {
+                        "profile_id": str(b.get("profile_id") or ""),
+                        "session_id": str(b.get("session_id") or ""),
+                        "user_text": str(b.get("user_text") or ""),
+                        "messages": b.get("messages") if isinstance(b.get("messages"), list) else [],
+                        "dyn_context": str(b.get("dyn_context") or ""),
+                        "context_refs": b.get("context_refs") if isinstance(b.get("context_refs"), list) else [],
+                        "undo_gid": str(b.get("undo_gid") or ""),
+                        "attachments": [
+                            {
+                                "name": str(a.get("name") or "file"),
+                                "mime": str(a.get("mime") or ""),
+                                "size": int(a.get("size") or 0),
+                                **({"url": str(a.get("url") or "")} if str(a.get("url") or "").strip() else {}),
+                                **({"path": str(a.get("path") or "").replace("\\", "/")} if str(a.get("path") or "").strip() else {}),
+                            }
+                            for a in (b.get("attachments") if isinstance(b.get("attachments"), list) else [])
+                            if isinstance(a, dict)
+                        ],
+                        "env_observation": str(b.get("env_observation") or ""),
+                    }
+                    meta_snap = []
+                    try:
+                        for a in (snap.get("_attMeta") if isinstance(snap.get("_attMeta"), list) else []):
+                            if not isinstance(a, dict):
+                                continue
+                            o = {
+                                "name": str(a.get("name") or "file"),
+                                "mime": str(a.get("mime") or ""),
+                                "size": int(a.get("size") or 0),
+                            }
+                            u = str(a.get("url") or "").strip()
+                            if u:
+                                o["url"] = u
+                            pth = str(a.get("path") or "").strip()
+                            if pth:
+                                o["path"] = pth.replace("\\", "/")
+                            meta_snap.append(o)
+                    except Exception:
+                        meta_snap = []
+                    item["__continue_snapshot"] = {"body": body, "_attMeta": meta_snap}
             except Exception:
                 pass
         cleaned.append(item)
@@ -5314,7 +5405,7 @@ def load_ai_chat_history(profile_id: str, limit: int = 40, session_id: str | Non
     node = _hivo_ai_ensure_profile_node(data, pid)
     sid = str(session_id or "").strip() or str(node.get("active_session_id") or "").strip()
     if not sid:
-        return []
+        return [], None
 
     for s in (node.get("sessions") or []):
         if not isinstance(s, dict):
@@ -5323,8 +5414,9 @@ def load_ai_chat_history(profile_id: str, limit: int = 40, session_id: str | Non
             continue
         arr = s.get("messages")
         if not isinstance(arr, list):
-            return []
+            return [], None
         out = []
+        last_assistant = None
         for m in arr[-max(1, int(limit)):]:
             if not isinstance(m, dict):
                 continue
@@ -5332,9 +5424,14 @@ def load_ai_chat_history(profile_id: str, limit: int = 40, session_id: str | Non
             content = str(m.get("content") or "")
             if role not in ("user", "assistant", "system"):
                 continue
-            if not content:
+            # Skip empty content except we still allow tracking for last assistant (for session-level continue)
+            if not content and role != "assistant":
                 continue
             item = {"role": role, "content": content}
+            # Preserve common identifiers when present
+            mid = str(m.get("id") or "").strip()
+            if mid:
+                item["id"] = mid
             if role == "user":
                 ug = str(m.get("undo_gid") or "").strip()
                 if ug:
@@ -5360,14 +5457,53 @@ def load_ai_chat_history(profile_id: str, limit: int = 40, session_id: str | Non
                             item["_attMeta"] = meta_out
                     except Exception:
                         pass
+            elif role == "assistant":
+                # Preserve light assistant fields for compatibility only
+                stage = m.get("stage")
+                if isinstance(stage, str) and stage:
+                    item["stage"] = stage
+                ug = str(m.get("undo_gid") or "").strip()
+                if ug:
+                    item["undo_gid"] = ug
+                # Track for session-level continue computation
+                last_assistant = m
             out.append(item)
-        return out
-    return []
+        # Derive session-level continue strictly from last assistant
+        cont_obj = None
+        try:
+            if isinstance(last_assistant, dict):
+                stage = str(last_assistant.get("stage") or "").strip()
+                can_c = bool(last_assistant.get("can_continue"))
+                snap = last_assistant.get("__continue_snapshot") if isinstance(last_assistant.get("__continue_snapshot"), dict) else None
+                if snap and (can_c or stage in ("error", "aborted")):
+                    cont_obj = {
+                        "message_id": str(last_assistant.get("id") or ""),
+                        "status": ("active" if can_c else ("error" if stage == "error" else "aborted")),
+                        "snapshot": snap,
+                        "updated_at": time.time(),
+                    }
+        except Exception:
+            cont_obj = None
+        return out, cont_obj
+    return [], None
 
 
 def save_ai_chat_history(profile_id: str, messages: list, limit: int = 80, session_id: str | None = None):
     pid = _AI_GLOBAL_PROFILE_ID
-    cleaned = _hivo_ai_clean_messages(messages, limit)
+    # Strip any continue-related fields before persisting (runtime-only)
+    def _strip_continue_fields(arr: list):
+        out = []
+        for m in arr or []:
+            if not isinstance(m, dict):
+                continue
+            mm = dict(m)
+            mm.pop("can_continue", None)
+            mm.pop("can_continue_reason", None)
+            mm.pop("__continue_snapshot", None)
+            out.append(mm)
+        return out
+
+    cleaned = _hivo_ai_clean_messages(_strip_continue_fields(messages), limit)
 
     data = _hivo_ai_load_history_data()
     node = _hivo_ai_ensure_profile_node(data, pid)
@@ -5423,24 +5559,12 @@ def load_hivo_ai_config():
         data = _hivo_load_cfg()
         if not isinstance(data, dict):
             data = {}
-        if "profiles" not in data or not isinstance(data.get("profiles"), list):
+        # Strict new-structure requirements
+        if not isinstance(data.get("profiles"), list):
             data["profiles"] = []
-        if "active_profile_id" not in data:
-            data["active_profile_id"] = ""
-        if "features" not in data or not isinstance(data.get("features"), dict):
+        if not isinstance(data.get("features"), dict):
             data["features"] = {"web_search_enabled": False, "ai_stream": True}
-        # Default: enable streaming when possible.
-        if "ai_stream" not in data.get("features"):
-            data["features"]["ai_stream"] = True
-
-        # Backward compatible top-level switch: {"stream": true/false}
-        # If present, map into features.ai_stream.
-        if "stream" in data and "ai_stream" in data.get("features"):
-            try:
-                data["features"]["ai_stream"] = bool(data.get("stream"))
-            except Exception:
-                pass
-        if "web_search" not in data or not isinstance(data.get("web_search"), dict):
+        if not isinstance(data.get("web_search"), dict):
             data["web_search"] = {"active_profile_id": "", "profiles": []}
 
         # Normalize active_profile_id to a valid profile id when possible.
@@ -8342,7 +8466,7 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
     return False, f"unsupported tool: {t}", {}
 
 
-def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str, history_messages: list | None = None, dyn_context: str = "", undo_gid: str = "", attachments: list | None = None):
+def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str, history_messages: list | None = None, dyn_context: str = "", undo_gid: str = "", attachments: list | None = None, resume: dict | None = None):
     cfg = _hivo_load_cfg()
     agent_conf = _hivo_agent_conf(cfg)
     mem_conf = _hivo_mem_conf(cfg)
@@ -8675,6 +8799,19 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
     )
     sys0 = {"role": "system", "content": sys_text}
     msgs = [sys0]
+    # One-shot resume guidance (runtime-only): when client hints a resume from last assistant error/aborted
+    try:
+        r = resume if isinstance(resume, dict) else None
+        r_reason = str((r or {}).get("reason") or "").strip().lower()
+        r_mid = str((r or {}).get("from_message_id") or "").strip()
+        if r and r_mid and r_reason in ("error", "aborted"):
+            guide = (
+                "【续跑提示】检测到上轮中断（" + ("错误" if r_reason == "error" else "已中止") + 
+                "）。请从中断点继续，避免重复已完成步骤；如需引用上轮结论或回执，请先简述已完成内容再继续。"
+            )
+            msgs.append({"role": "system", "content": guide})
+    except Exception:
+        pass
     msgs.append({"role": "system", "content": tool_examples})
     if long_summary:
         msgs.append({"role": "system", "content": long_summary})
@@ -10447,7 +10584,8 @@ class Handler(BaseHTTPRequestHandler):
                 limit = 40
             logger.info(f"处理 /api/ai_chat_history GET 请求 (profile_id={pid or ''}, session_id={sid or ''}, limit={limit})")
             with ai_history_lock:
-                hist = load_ai_chat_history(pid, limit=limit, session_id=sid)
+                hist_pack = load_ai_chat_history(pid, limit=limit, session_id=sid)
+                hist = hist_pack[0]
                 info = list_ai_sessions(pid) if pid else {"active_session_id": "", "sessions": []}
             self.send_json({"ok": True, "messages": hist, "active_session_id": info.get("active_session_id"), "sessions": info.get("sessions")})
 
@@ -11505,6 +11643,7 @@ class Handler(BaseHTTPRequestHandler):
                 req_undo_gid = data.get("undo_gid") if isinstance(data, dict) else None
                 env_obs = data.get("env_observation") if isinstance(data, dict) else None
                 attachments = data.get("attachments") if isinstance(data, dict) else None
+                resume = data.get("resume") if isinstance(data, dict) else None
                 try:
                     env_obs_s = str(env_obs or "").strip()
                 except Exception:
@@ -11570,6 +11709,7 @@ class Handler(BaseHTTPRequestHandler):
                             dyn_context=str(dyn_ctx or ""),
                             undo_gid=str(req_undo_gid or "").strip(),
                             attachments=attachments if isinstance(attachments, list) else None,
+                            resume=resume if isinstance(resume, dict) else None,
                         )
                         try:
                             pid_s = str(pid or "").strip()

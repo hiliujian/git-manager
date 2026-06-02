@@ -74,7 +74,7 @@
       "name": "qwen/qwen3.5-397b-a17b",
       "base_url": "https://integrate.api.nvidia.com/v1",
       "api_key": "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",
-      "model": "qwen/qwen3.5-397b-a17b",
+      "model": "qwen/qwen3.5-397b-a17b1",
       "supports_vision": false
     },
     {
@@ -110,7 +110,7 @@
       "supports_vision": false
     }
   ],
-  "active_profile_id": "19e6d6b69b2cc3bc51586a948",
+  "active_profile_id": "19dafba43ea4ee677b56d8cc8",
   "web_search": {
     "active_profile_id": "default",
     "profiles": [

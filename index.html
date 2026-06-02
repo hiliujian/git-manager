@@ -29,7 +29,6 @@
     }
 
   
-  
     @keyframes gmSpin{0%{transform:rotate(0)}100%{transform:rotate(360deg)}}
     /* Per-file upload progress overlay */
     .ai-attach-card{position:relative}
@@ -397,8 +396,8 @@
               try { __gmDbg('hydrate content-key miss', { key: k.slice(0, 120), hasKey: Object.prototype.hasOwnProperty.call(map2||{}, k) }); } catch (eDbg2m) {}
             }
           }
-          // final fallback: ordered recent meta queue (best-effort)
-          if (!Array.isArray(m._attMeta) || !m._attMeta.length) {
+          // final fallback: ordered recent meta queue (best-effort) — do NOT apply to user messages to avoid carryover
+          if ((!Array.isArray(m._attMeta) || !m._attMeta.length) && String(m.role||'') !== 'user') {
             const metaQ = __gmAiShiftRecentMeta(__gmAiActiveSessionId);
             if (Array.isArray(metaQ) && metaQ.length) {
               m._attMeta = metaQ.map(a => {
@@ -2066,6 +2065,8 @@ flex-shrink:0;cursor:pointer;
     .ai-send-btn svg{display:block;}
     .ai-send-btn:hover{opacity:0.9;transform:translateY(-1px);}
     .ai-send-btn:active{transform:translateY(0);}
+    .ai-send-btn.is-cancelling svg{animation:gm-rot 0.9s linear infinite;}
+    @keyframes gm-rot{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
 
     .ai-continue-btn{display:none;align-items:center;justify-content:center;gap:6px;
       padding:6px 10px;border-radius:6px;font-size:12px;font-weight:600;
@@ -2167,10 +2168,10 @@ flex-shrink:0;cursor:pointer;
     .ai-model-mi{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:10px;
       color:var(--text);cursor:pointer;font-size:12px;border:1px solid transparent;}
     .ai-model-mi:hover{background:var(--bg4);border-color:var(--border);}
-    .ai-model-mi.active{background:rgba(110,168,254,0.12);border-color:rgba(110,168,254,0.28);}
-    .ai-model-mi.active:hover{background:var(--bg4);border-color:var(--border);}
-    [data-theme="light"] .ai-model-mi.active{background:rgba(76,166,255,0.10);border-color:rgba(76,166,255,0.20);}
-    [data-theme="light"] .ai-model-mi.active:hover{background:var(--bg4);border-color:var(--border);}
+    .ai-model-mi.active, .ai-model-mi.selected{background:rgba(110,168,254,0.12);border-color:rgba(110,168,254,0.28);}
+    .ai-model-mi.active:hover, .ai-model-mi.selected:hover{background:var(--bg4);border-color:var(--border);}
+    [data-theme="light"] .ai-model-mi.active, [data-theme="light"] .ai-model-mi.selected{background:rgba(76,166,255,0.10);border-color:rgba(76,166,255,0.20);}
+    [data-theme="light"] .ai-model-mi.active:hover, [data-theme="light"] .ai-model-mi.selected:hover{background:var(--bg4);border-color:var(--border);}
     .ai-model-mi .nm{font-weight:500;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
     .ai-model-mi .sub{display:none;}
     .ai-model-sep{height:1px;background:rgba(255,255,255,0.08);margin:6px 6px;}
@@ -3100,7 +3101,6 @@ flex-shrink:0;cursor:pointer;
               <div class="ai-composer">
                 <span class="ai-composer-counter" id="aiSendCounter" title="UndoSteps/Turns">0/0</span>
                 <textarea id="aiChatInput" class="ai-input" placeholder="Ask Hivo anything..."></textarea>
-                <button class="ai-continue-btn" id="aiContinueBtn" data-action="aiContinue" title="继续执行">Continue</button>
                 <button class="ai-send-btn" data-action="sendAiChat">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <line x1="22" y1="2" x2="11" y2="13"></line>
@@ -3985,10 +3985,7 @@ flex-shrink:0;cursor:pointer;
       __gmAiChatMessages = [];
     }
 
-    try {
-      __gmAiNextSendIsContinue = false;
-      __gmAiSetContinueState(false, '');
-    } catch (e) {}
+    try { __gmAiRenderContinueFromMessages(); } catch (e) {}
 
     try {
       __gmAiSessions = [];
@@ -4940,12 +4937,44 @@ flex-shrink:0;cursor:pointer;
 
   function sendAiChat() {
     try {
+      if (__gmAiIsCancelling) { try { toast('正在取消上次任务，请稍候…', 'warn'); } catch(_) {} return; }
       if (__gmAiIsResponding) {
         __gmAiStopResponding();
         return;
       }
+      try { __gmAiSetContinueState(false, 'new_send'); } catch(_) {}
       __gmAiSendAgentNow();
     } catch (e) {}
+  }
+
+  function aiContinue() {
+    try {
+      if (__gmAiIsResponding) return; // ignore while running
+      const can = __gmAiContinueState && __gmAiContinueState.on;
+      if (!can) { try { toast('无可继续的任务', 'warn'); } catch(_) {} return; }
+      // Reuse last user message text if available
+      const msgs = Array.isArray(__gmAiChatMessages) ? __gmAiChatMessages : [];
+      let lastUser = '';
+      let lastAssist = null;
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        const m = msgs[i];
+        if (!lastUser && m && String(m.role||'') === 'user' && String(m.content||'')) { lastUser = String(m.content); }
+        if (!lastAssist && m && String(m.role||'') === 'assistant') { lastAssist = m; }
+        if (lastUser && lastAssist) break;
+      }
+      // set one-shot resume hint
+      try {
+        const st = lastAssist && String(lastAssist.stage || '').trim();
+        const eligible = (st === 'error' || st === 'aborted');
+        const fromId = lastAssist && String(lastAssist.id || '');
+        const reason = eligible ? (String(__gmAiContinueState && __gmAiContinueState.reason || st || '')) : '';
+        const runId = String(window.__gmAiActiveRunId || '');
+        window.__gmAiResumeHint = { on: !!eligible, from_message_id: fromId || '', reason: reason || '', run_id: runId };
+      } catch(_) {}
+      try { const ta = document.getElementById('aiChatInput'); if (ta) ta.value = lastUser || ''; } catch(_) {}
+      __gmAiSetContinueState(false, 'consume');
+      sendAiChat();
+    } catch (_) {}
   }
 
   function __gmAiNormalizePendingStatusText(text) {
@@ -5036,11 +5065,8 @@ flex-shrink:0;cursor:pointer;
       return;
     }
 
-    const isContinueSend = Boolean(__gmAiNextSendIsContinue);
-    __gmAiNextSendIsContinue = false;
-    if (!isContinueSend) {
-      try { __gmAiSetContinueState(false, ''); } catch (eCs0) {}
-    }
+    // Disable runtime-continue when starting a new turn
+    try { __gmAiSetContinueState(false, 'sending'); } catch(_) {}
 
     const okSess = await __gmAiEnsurePersistentSessionBeforeSend(pid);
     if (!okSess) return;
@@ -5082,6 +5108,7 @@ flex-shrink:0;cursor:pointer;
         }
         // Update caches with URLs now that we have them
         try { __gmAiPutAttCache(__gmAiActiveSessionId, turnUndoGid, attachmentsBackup); } catch (eAttCUp) {}
+        
       } catch (eUp) {}
       const _attMeta = attsToSave.map((a, i) => {
         const base = attachmentsBackup[i] || a || {};
@@ -5091,42 +5118,68 @@ flex-shrink:0;cursor:pointer;
       });
       try { __gmAiPutAttCacheByContent(__gmAiActiveSessionId, 'user', u, _attMeta); } catch (eAttC2) {}
       try { __gmAiPutFullAttByContent(__gmAiActiveSessionId, 'user', u, attachmentsBackup.length ? attachmentsBackup : attsToSave); } catch (eFullC) {}
-      try { __gmAiPushRecentMeta(__gmAiActiveSessionId, _attMeta); } catch (eAttC3) {}
-      __gmAiChatMessages.push({ role: 'user', content: u, attachments: attsToSave, _attMeta, undo_gid: turnUndoGid });
+      const msgIdU = 'u-' + rid0;
+      __gmAiChatMessages.push({ id: msgIdU, role: 'user', content: u, attachments: attsToSave, _attMeta, undo_gid: turnUndoGid });
     } catch (eU0) {
-      __gmAiChatMessages.push({ role: 'user', content: sendText, undo_gid: turnUndoGid });
+      const msgIdU = 'u-' + rid0;
+      __gmAiChatMessages.push({ id: msgIdU, role: 'user', content: sendText, undo_gid: turnUndoGid });
     }
     // one bubble: pending assistant content will be updated via websocket
-    const pending = { role: 'assistant', content: '发送中...', pending: true, stage: 'sending' };
+    const msgIdA = 'a-' + rid0;
+    const pending = { id: msgIdA, role: 'assistant', content: '发送中...', pending: true, stage: 'sending' };
     __gmAiChatMessages.push(pending);
     __gmAiRenderChat();
     try { __gmAiRefreshSendCounter(); } catch (eC0) {}
 
     __gmAiIsResponding = true;
     try { __gmAiSetSendButtonState(true); } catch (eB0) {}
+
+    // Build messages and create a minimal snapshot BEFORE any awaits to avoid race with user cancel
+    const messagesForSend = __gmAiBuildMessagesForSend(__gmAiChatMessages);
+    const reqBody0 = {
+      profile_id: pid,
+      session_id: __gmAiActiveSessionId,
+      user_text: sendText,
+      messages: messagesForSend,
+      dyn_context: '',
+      context_refs: [],
+      undo_gid: turnUndoGid,
+      attachments: attachmentsBackup,
+      env_observation: '',
+    };
+    // Attach resume hint if present (runtime only; not persisted). No implicit inference.
+    try {
+      let rh = (window.__gmAiResumeHint && typeof window.__gmAiResumeHint === 'object') ? window.__gmAiResumeHint : null;
+      if (rh && rh.on) {
+        reqBody0.resume = { from_message_id: String(rh.from_message_id||''), reason: String(rh.reason||''), run_id: String(rh.run_id||'') };
+        window.__gmAiResumeHint = { on: false, from_message_id: '', reason: '', run_id: '' };
+      }
+    } catch(_) {}
+    try {
+      const _attMetaSnap = Array.isArray(__gmAiPendingAttachments) ? __gmAiPendingAttachments.map((a) => {
+        const o = { name: String(a && a.name || 'file'), mime: String(a && a.mime || ''), size: Number(a && a.size || 0) };
+        if (a && a.url) o.url = String(a.url);
+        if (!o.url && a && a.path) o.path = String(a.path).replace(/\\/g, '/');
+        return o;
+      }) : (_attMeta || []);
+      pending._attMeta = Array.isArray(_attMeta) ? _attMeta : _attMetaSnap;
+    } catch (eSnap0) {}
+
+    // Persist history after snapshot exists
     try { await __gmAiSaveHistoryNow(); } catch (e0) {}
 
+    // Now compute dynamic context (await) and enrich the snapshot body as available
     const ctxPkg = await __gmBuildAiSystemContext(sendText);
-    const dynCtx = (ctxPkg && typeof ctxPkg.dyn_context === 'string') ? String(ctxPkg.dyn_context || '') : '';
-    const ctxRefs = (ctxPkg && Array.isArray(ctxPkg.context_refs)) ? ctxPkg.context_refs : [];
-
-    const messagesForSend = __gmAiBuildMessagesForSend(__gmAiChatMessages);
-    
-    
+    try {
+      const dynCtx = (ctxPkg && typeof ctxPkg.dyn_context === 'string') ? String(ctxPkg.dyn_context || '') : '';
+      const ctxRefs = (ctxPkg && Array.isArray(ctxPkg.context_refs)) ? ctxPkg.context_refs : [];
+      reqBody0.dyn_context = dynCtx;
+      reqBody0.context_refs = ctxRefs;
+    } catch(_) {}
 
     const res = await api('/api/hivo_agent', {
       method: 'POST',
-      body: JSON.stringify({
-        profile_id: pid,
-        session_id: __gmAiActiveSessionId,
-        user_text: sendText,
-        messages: messagesForSend,
-        dyn_context: dynCtx,
-        context_refs: ctxRefs,
-        undo_gid: turnUndoGid,
-        attachments: attachmentsBackup,
-        env_observation: '',
-      }),
+      body: JSON.stringify(reqBody0),
     });
 
     if (!res || !res.run_id) {
@@ -5140,8 +5193,9 @@ flex-shrink:0;cursor:pointer;
       __gmAiIsResponding = false;
       try { __gmAiSetSendButtonState(false); } catch (eB2) {}
       __gmAiActiveTurnUndoGroupId = '';
-      try { __gmAiSetContinueState(true, 'error'); } catch (eCt0) {}
+      try { __gmAiRenderContinueFromMessages(); } catch (eCt0) {}
       __gmToastApiError('对话失败', res, msg);
+      try { await __gmAiSaveHistoryNow(); } catch (eSave0) {}
       return;
     }
     if (res.ok === false) {
@@ -5163,14 +5217,33 @@ flex-shrink:0;cursor:pointer;
       __gmAiIsResponding = false;
       try { __gmAiSetSendButtonState(false); } catch (eB2) {}
       __gmAiActiveTurnUndoGroupId = '';
-      try { __gmAiSetContinueState(true, 'error'); } catch (eCt1) {}
+      try { __gmAiRenderContinueFromMessages(); } catch (eCt1) {}
       __gmToastApiError('对话失败', res, msg);
+      try { await __gmAiSaveHistoryNow(); } catch (eSave1) {}
       return;
     }
 
     // tag pending bubble with run_id so websocket can update it
     pending.run_id = String(res.run_id || '');
     window.__gmAiActiveRunId = String(res.run_id || '');
+    // If user pressed cancel before run_id was known, honor it now (keep cancelling UI until backend confirms)
+    try {
+      const pidMsg = String(pending && pending.id || '');
+      const needPreCancel = pidMsg && __gmAiPendingCancelMsgIds && __gmAiPendingCancelMsgIds.has(pidMsg);
+      if (needPreCancel) {
+        try { __gmAiPendingCancelMsgIds.delete(pidMsg); } catch(_) {}
+        try { __gmAiCancelledRunIds.add(pending.run_id); } catch(_) {}
+        try { POST('/api/hivo_agent_cancel', { run_id: pending.run_id }).catch(()=>{}); } catch(_) {}
+        pending.pending = true;
+        pending.stage = 'cancelling';
+        pending.content = '已请求取消（后台将尽快中止）';
+        __gmAiIsResponding = true;
+        try { __gmAiSetSendButtonCancelling(true); } catch(_) {}
+        __gmAiRenderChat();
+        try { __gmAiRefreshSendCounter(); } catch(_) {}
+        return;
+      }
+    } catch(_){ }
     pending.content = '思考中...';
     pending.stage = 'thinking';
     try {
@@ -5622,7 +5695,6 @@ flex-shrink:0;cursor:pointer;
           if (act === 'softResetCommitFromHistory') { e.preventDefault(); softResetCommitFromHistory(); return; }
 
           if (act === 'newAiSession') { e.preventDefault(); newAiSession(); return; }
-          if (act === 'aiContinue') { e.preventDefault(); aiContinue(); return; }
           if (act === 'sendAiChat') { e.preventDefault(); sendAiChat(); return; }
           if (act === 'aiAddContext') { e.preventDefault(); aiAddContext(); return; }
           if (act === 'aiPickAttachments') { e.preventDefault(); aiPickAttachments(); return; }
@@ -5718,6 +5790,7 @@ flex-shrink:0;cursor:pointer;
           if (act === 'showAiConfigPanel') { e.preventDefault(); showAiConfigPanel(); return; }
           if (act === 'showAiSearchPanel') { e.preventDefault(); showAiSearchPanel(); return; }
           if (act === 'showAiChatPanel') { e.preventDefault(); showAiChatPanel(); return; }
+          if (act === 'aiContinue') { e.preventDefault(); try { aiContinue(); } catch(_){} return; }
 
           if (act === 'selectAiProfile') { e.preventDefault(); selectAiProfile(String(el.getAttribute('data-id') || '')); return; }
           if (act === 'editAiSearchProfile') { e.preventDefault(); editAiSearchProfile(String(el.getAttribute('data-id') || '')); return; }
@@ -13362,7 +13435,6 @@ flex-shrink:0;cursor:pointer;
           try {
             if (connectingWs !== ws) return;
             if (connectingWs && connectingWs.readyState === WebSocket.CONNECTING) {
-              console.warn('WebSocket 连接超时，强制关闭并重连');
               try { connectingWs.close(); } catch (e0) {}
               wsConnected = false;
               wsConnecting = false;
@@ -13426,9 +13498,7 @@ flex-shrink:0;cursor:pointer;
             url: String(WS_URL || ''),
           };
         } catch (eLC0) {}
-        try {
-          console.warn('WebSocket 关闭', window.__gmWsLastClose);
-        } catch (eLC1) {}
+        try { /* removed debug log: WebSocket closed */ } catch (eLC1) {}
         try {
           if (wsPingTimer) {
             clearInterval(wsPingTimer);
@@ -13447,7 +13517,7 @@ flex-shrink:0;cursor:pointer;
               }
               __gmAiIsResponding = false;
               try { __gmAiSetSendButtonState(false); } catch (eB3) {}
-              try { __gmAiSetContinueState(true, 'ws_closed'); } catch (eC0) {}
+              try { __gmAiRenderContinueFromMessages(); } catch (eC0) {}
               try { __gmAiRenderChat(); } catch (eR0) {}
               try { __gmAiSaveHistoryNow(); } catch (eH0) {}
             }
@@ -13497,11 +13567,19 @@ flex-shrink:0;cursor:pointer;
               break;
             }
           } catch (eARs0) {}
+          const __isCancelledRun = (()=>{ try { return __gmAiCancelledRunIds && __gmAiCancelledRunIds.has(runId); } catch(_) { return false; } })();
           let applied = false;
           for (let i = __gmAiChatMessages.length - 1; i >= 0; i--) {
             const m = __gmAiChatMessages[i];
-            if (m && m.role === 'assistant' && m.pending && String(m.run_id || '') === runId) {
+            if (m && m.role === 'assistant' && String(m.run_id || '') === runId) {
               const stage = String(data.stage || '');
+              // If user cancelled this run, ignore non-terminal status to avoid jumping back to running state
+              if (__isCancelledRun) {
+                const term = ['cancelled','canceled','aborted','stopped','terminated','done','error'];
+                const running = ['queued','queue','starting','started','executing','running','processing','thinking','streaming','sending','cancelling'];
+                const isTerminal = term.includes(stage) || (stage && !running.includes(stage));
+                if (!isTerminal) { applied = true; break; }
+              }
               m.stage = stage;
               const msg = String(data.message || '');
               // If streaming already started for this message, do NOT overwrite its content with status text.
@@ -13510,6 +13588,33 @@ flex-shrink:0;cursor:pointer;
               }
               __gmAiRenderChat();
               try { __gmAiRefreshSendCounter(); } catch (eC2) {}
+              // If backend reports a terminal state, finalize UI even if no final event will be sent
+              try {
+                const term = ['cancelled','canceled','aborted','stopped','terminated','done','error'];
+                const running = ['queued','queue','starting','started','executing','running','processing','thinking','streaming','sending','cancelling'];
+                const isTerminal = term.includes(stage) || (stage && !running.includes(stage));
+                if (isTerminal) {
+                  m.pending = false;
+                  try { m.stream_started = false; } catch(_) {}
+                  if (stage === 'error') {
+                    m.stage = 'error';
+                    if (!m.content) m.content = '对话失败';
+                  } else if (stage === 'cancelled' || stage === 'canceled' || stage === 'aborted' || stage === 'stopped' || stage === 'terminated') {
+                    m.stage = 'aborted';
+                    if (!m.content) m.content = '已请求取消（后台将尽快中止）';
+                  } else {
+                    m.stage = 'done';
+                  }
+                  __gmAiIsResponding = false;
+                  try { __gmAiSetSendButtonCancelling(false); } catch(_) {}
+                  try { __gmAiSetSendButtonState(false); } catch(_) {}
+                  try { if (String(window.__gmAiActiveRunId || '') === runId) window.__gmAiActiveRunId = ''; } catch(_) {}
+                  __gmAiActiveTurnUndoGroupId = '';
+                  try { __gmAiRenderContinueFromMessages(); } catch(_) {}
+                  try { __gmAiSaveHistoryNow(); } catch(_) {}
+                  try { if (__gmAiCancelledRunIds && __gmAiCancelledRunIds.delete) __gmAiCancelledRunIds.delete(runId); } catch(_) {}
+                }
+              } catch (eTerm) {}
               applied = true;
               break;
             }
@@ -13520,6 +13625,25 @@ flex-shrink:0;cursor:pointer;
                 __gmAiRunStatusCache.set(runId, { stage: String(data.stage || ''), message: String(data.message || '') });
               }
             } catch (eC0) {}
+            // Fallback: if message was already marked non-pending locally after user cancel,
+            // still treat terminal statuses as finalization for active run to clear UI state.
+            try {
+              const stage = String(data.stage || '');
+              const term = ['cancelled','canceled','aborted','stopped','terminated','done','error'];
+              const running = ['queued','queue','starting','started','executing','running','processing','thinking','streaming','sending','cancelling'];
+              const isTerminal = term.includes(stage) || (stage && !running.includes(stage));
+              const activeRid = String(window.__gmAiActiveRunId || '').trim();
+              if (isTerminal && activeRid && activeRid === runId) {
+                __gmAiIsResponding = false;
+                try { __gmAiSetSendButtonCancelling(false); } catch(_) {}
+                try { __gmAiSetSendButtonState(false); } catch(_) {}
+                try { if (__gmAiRunStatusCache && __gmAiRunStatusCache.delete) __gmAiRunStatusCache.delete(runId); } catch(_) {}
+                try { if (String(window.__gmAiActiveRunId || '') === runId) window.__gmAiActiveRunId = ''; } catch(_) {}
+                __gmAiActiveTurnUndoGroupId = '';
+                try { __gmAiRenderContinueFromMessages(); } catch(_) {}
+                try { __gmAiSaveHistoryNow(); } catch(_) {}
+              }
+            } catch (eFb) {}
           }
         } catch (eS) {}
         break;
@@ -13534,6 +13658,8 @@ flex-shrink:0;cursor:pointer;
               break;
             }
           } catch (eARd0) {}
+          // If user cancelled this run, ignore further deltas entirely
+          try { if (__gmAiCancelledRunIds && __gmAiCancelledRunIds.has(runId)) { break; } } catch(_) {}
           const delta = String(data.delta || '');
           if (!delta) break;
           for (let i = __gmAiChatMessages.length - 1; i >= 0; i--) {
@@ -13566,34 +13692,49 @@ flex-shrink:0;cursor:pointer;
               break;
             }
           } catch (eAR0) {}
+          const __isCancelledRunF = (()=>{ try { return __gmAiCancelledRunIds && __gmAiCancelledRunIds.has(runId); } catch(_) { return false; } })();
           for (let i = __gmAiChatMessages.length - 1; i >= 0; i--) {
             const m = __gmAiChatMessages[i];
-            if (m && m.role === 'assistant' && m.pending && String(m.run_id || '') === runId) {
+            if (m && m.role === 'assistant' && String(m.run_id || '') === runId) {
               m.pending = false;
-              m.stage = (data.ok === false) ? 'error' : 'done';
-              m.content = String(data.content || '');
+              if (__isCancelledRunF) {
+                m.stage = 'aborted';
+                try { m.stream_started = false; } catch(_) {}
+                if (!m.content) m.content = '已请求取消（后台将尽快中止）';
+                try { /* removed debug log: ignore final after cancel */ } catch(_) {}
+              } else {
+                m.stage = (data.ok === false) ? 'error' : 'done';
+                try { m.stream_started = false; } catch(_) {}
+                m.content = String(data.content || '');
+              }
               try { if (Array.isArray(data.tool_receipts)) m.tool_receipts = data.tool_receipts; } catch(_){ }
-              try { __gmAiSaveHistoryNow(); } catch(_){ }
               __gmAiRenderChat();
               try { __gmAiRefreshSendCounter(); } catch (eC3) {}
               __gmAiIsResponding = false;
               try { __gmAiSetSendButtonState(false); } catch (eB3) {}
               try { if (String(window.__gmAiActiveRunId || '') === runId) window.__gmAiActiveRunId = ''; } catch (eAR1) {}
               __gmAiActiveTurnUndoGroupId = '';
+              try { __gmAiSetSendButtonCancelling(false); } catch(_) {}
+              // Now that backend has finalized this run, evaluate Continue visibility
               try {
-                if (data && (data.can_continue === true || data.continue === true)) {
-                  const rr = String(data.continue_reason || data.reason || '');
-                  __gmAiSetContinueState(true, rr || 'server');
-                }
-              } catch (eCt) {}
+                // Runtime-only: determine continue eligibility from final stage
+                try {
+                  const st = String(m && m.stage || '');
+                  // continue feature disabled
+                } catch(_) {}
+                __gmAiRenderContinueFromMessages();
+              } catch (eCt) { __gmAiRenderContinueFromMessages(); }
               try {
-                if (data && data.ok === false) {
-                  __gmAiSetContinueState(true, 'error');
+                if (!__isCancelledRunF && data && data.ok === false) {
+                  __gmAiRenderContinueFromMessages();
                 }
               } catch (eCt2) {}
               try {
                 if (__gmAiRunStatusCache && __gmAiRunStatusCache.delete) __gmAiRunStatusCache.delete(runId);
               } catch (eC1) {}
+              // Persist history after final flags are set
+              try { __gmAiSaveHistoryNow(); } catch(_){ }
+              try { if (__gmAiCancelledRunIds && __gmAiCancelledRunIds.delete) __gmAiCancelledRunIds.delete(runId); } catch(_) {}
               break;
             }
           }
@@ -13986,6 +14127,9 @@ flex-shrink:0;cursor:pointer;
   let __gmAiActiveTurnUndoGroupId = '';
   let __gmAiRunStatusCache = new Map();
   let __gmAiPendingAttachments = [];
+  let __gmAiIsCancelling = false;
+  let __gmAiCancelledRunIds = new Set();
+  let __gmAiCancelWatchTimer = 0;
   let __gmAiCapabilitiesText = '';
   let __gmAiCapabilitiesSpec = null;
   let __gmAiSessions = [];
@@ -14006,9 +14150,13 @@ flex-shrink:0;cursor:pointer;
   let __gmAiIsResponding = false;
   let __gmAiLastUndoSteps = 0;
   let __gmAiUndoStatsReqSeq = 0;
-  let __gmAiContinueState = { on: false, reason: '' };
-  let __gmAiNextSendIsContinue = false;
   let __gmAiDraftPersistTimer = 0;
+  // Runtime-only Continue state (not persisted)
+  let __gmAiContinueState = { on: false, reason: '' };
+  // One-shot resume hint for next request (runtime only; not persisted)
+  window.__gmAiResumeHint = (window.__gmAiResumeHint && typeof window.__gmAiResumeHint === 'object')
+    ? window.__gmAiResumeHint
+    : { on: false, from_message_id: '', reason: '', run_id: '' };
   // In-memory per-session drafts (not persisted): { [sessionId]: { text: string, atts: array } }
   window.__gmAiSessionDrafts = window.__gmAiSessionDrafts && typeof window.__gmAiSessionDrafts === 'object' ? window.__gmAiSessionDrafts : {};
 
@@ -14076,118 +14224,52 @@ flex-shrink:0;cursor:pointer;
     } catch (e) {}
   }
 
-  function __gmAiContinueStorageKey(profileId, sessionId) {
-    try {
-      let repoKey = '';
-      try {
-        const el0 = document.getElementById('repoLabel');
-        repoKey = String((el0 && (el0.getAttribute('data-repo') || el0.textContent)) || '').trim();
-      } catch (eR0) { repoKey = ''; }
-      const pid = String(profileId || '').trim();
-      const sid = String(sessionId || '').trim();
-      if (!pid || !sid || !repoKey) return '';
-      return `gm_ai_continue_state:${encodeURIComponent(repoKey)}:${pid}:${sid}`;
-    } catch (e) {
-      return '';
-    }
-  }
+  
 
-  function __gmAiPersistContinueState() {
+  function __gmAiEnsureContinueButton() {
     try {
-      const pid = String(__gmAiSelectedProfileId || __gmAiConfig.active_profile_id || '').trim();
-      const sid = String(__gmAiActiveSessionId || '').trim();
-      const k = __gmAiContinueStorageKey(pid, sid);
-      if (!k) return;
-      const payload = {
-        on: Boolean(__gmAiContinueState && __gmAiContinueState.on),
-        reason: String((__gmAiContinueState && __gmAiContinueState.reason) || ''),
-      };
-      localStorage.setItem(k, JSON.stringify(payload));
-    } catch (e) {}
-  }
-
-  function __gmAiClearPersistedContinueState(profileId, sessionId) {
-    try {
-      const pid = String(profileId || __gmAiSelectedProfileId || __gmAiConfig.active_profile_id || '').trim();
-      const sid = String(sessionId || __gmAiActiveSessionId || '').trim();
-      const k = __gmAiContinueStorageKey(pid, sid);
-      if (k) {
-        localStorage.removeItem(k);
-        return;
+      const composer = document.querySelector('.ai-composer');
+      if (!composer) return null;
+      let btn = composer.querySelector('.ai-continue-btn');
+      if (!btn) {
+        btn = document.createElement('button');
+        btn.className = 'ai-continue-btn';
+        btn.setAttribute('data-action', 'aiContinue');
+        btn.setAttribute('title', 'Continue');
+        btn.setAttribute('aria-label', 'Continue');
+        // Icon: arrow-right inside a circle (resume/continue semantics, not retry or play)
+        btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 12h8"/><path d="M13 9l3 3-3 3"/></svg>';
+        const sendBtn = composer.querySelector('.ai-send-btn');
+        if (sendBtn && sendBtn.parentNode === composer) composer.insertBefore(btn, sendBtn);
+        else composer.appendChild(btn);
       }
-      // Legacy key (without repo dimension)
-      if (pid && sid) {
-        try { localStorage.removeItem(`gm_ai_continue_state:${pid}:${sid}`); } catch (e2) {}
-      }
-    } catch (e) {}
-  }
-
-  function __gmAiRestoreContinueStateForActiveSession() {
-    try {
-      const pid = String(__gmAiSelectedProfileId || __gmAiConfig.active_profile_id || '').trim();
-      const sid = String(__gmAiActiveSessionId || '').trim();
-      const k = __gmAiContinueStorageKey(pid, sid);
-      if (!k) return;
-      const raw = localStorage.getItem(k);
-      if (!raw) return;
-      const obj = JSON.parse(raw || '{}') || {};
-      const on = Boolean(obj.on);
-      const reason = String(obj.reason || '');
-      if (!on) return;
-      const msgs = Array.isArray(__gmAiChatMessages) ? __gmAiChatMessages : [];
-      if (!msgs.length) return;
-      __gmAiSetContinueState(true, reason);
-    } catch (e) {}
+      return btn;
+    } catch (e) { return null; }
   }
 
   function __gmAiSetContinueState(on, reason) {
     try {
-      __gmAiContinueState = { on: Boolean(on), reason: String(reason || '') };
-      const btn = document.getElementById('aiContinueBtn');
+      __gmAiContinueState = { on: !!on, reason: String(reason || '') };
+      const btn = __gmAiEnsureContinueButton();
       if (!btn) return;
-      if (__gmAiContinueState.on) btn.classList.add('is-show');
-      else btn.classList.remove('is-show');
-      try {
-        if (__gmAiContinueState.on) __gmAiPersistContinueState();
-        else __gmAiClearPersistedContinueState();
-      } catch (e2) {}
+      if (__gmAiContinueState.on) btn.classList.add('is-show'); else btn.classList.remove('is-show');
     } catch (e) {}
   }
 
-  function __gmAiRevalidateContinueStateForActiveSession() {
+  function __gmAiRenderContinueFromMessages() {
     try {
-      if (__gmAiIsResponding) {
-        __gmAiSetContinueState(false, '');
-        return;
-      }
+      // Determine eligibility from last assistant message only (runtime-only)
+      let can = false; let reason = '';
       const msgs = Array.isArray(__gmAiChatMessages) ? __gmAiChatMessages : [];
-      let lastA = null;
       for (let i = msgs.length - 1; i >= 0; i--) {
         const m = msgs[i];
-        if (m && String(m.role || '') === 'assistant') { lastA = m; break; }
+        if (!m || String(m.role||'') !== 'assistant') continue;
+        const st = String(m.stage || '').trim();
+        if (st === 'error') { can = true; reason = 'error'; break; }
+        if (st === 'aborted') { can = true; reason = 'aborted'; break; }
+        break;
       }
-
-      // If the assistant message that implied a continue no longer exists, drop stale UI state.
-      const lastStage = String(lastA && lastA.stage || '');
-      const needContinueCtx = !!(lastA && !lastA.pending && lastStage === 'error');
-      if (!needContinueCtx && __gmAiContinueState && __gmAiContinueState.on) {
-        __gmAiSetContinueState(false, '');
-      }
-    } catch (e) {}
-  }
-
-  function aiContinue() {
-    try {
-      if (__gmAiIsResponding) return;
-      try { __gmAiSetContinueState(false, ''); } catch (e0) {}
-      __gmAiNextSendIsContinue = true;
-      const ta = document.getElementById('aiChatInput');
-      if (ta) {
-        ta.value = '继续';
-        try { __gmAiSchedulePersistDraft(); } catch (e0s) {}
-        try { ta.focus(); } catch (e0) {}
-      }
-      sendAiChat();
+      __gmAiSetContinueState(can, reason || (can ? 'available' : 'disabled'));
     } catch (e) {}
   }
 
@@ -14196,13 +14278,39 @@ flex-shrink:0;cursor:pointer;
       const btn = document.querySelector('.ai-send-btn');
       if (!btn) return;
       if (isResponding) {
+        btn.classList.remove('is-cancelling');
+        try { btn.disabled = false; } catch(_) {}
+        __gmAiIsCancelling = false;
         btn.classList.add('is-stop');
         btn.title = '暂停';
         btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
       } else {
         btn.classList.remove('is-stop');
+        btn.classList.remove('is-cancelling');
+        try { btn.disabled = false; } catch(_) {}
+        __gmAiIsCancelling = false;
         btn.title = '发送';
         btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>';
+      }
+    } catch (e) {}
+  }
+
+  function __gmAiSetSendButtonCancelling(on) {
+    try {
+      const btn = document.querySelector('.ai-send-btn');
+      if (!btn) return;
+      if (on) {
+        __gmAiIsCancelling = true;
+        btn.classList.add('is-cancelling');
+        try { btn.disabled = true; } catch(_) {}
+        btn.title = '取消中...';
+        // icon-only spinner (CSS animated)
+        btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-label="取消中"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3" opacity="0.25"/><path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>';
+      } else {
+        btn.classList.remove('is-cancelling');
+        try { btn.disabled = false; } catch(_) {}
+        __gmAiIsCancelling = false;
+        __gmAiSetSendButtonState(false);
       }
     } catch (e) {}
   }
@@ -14210,29 +14318,49 @@ flex-shrink:0;cursor:pointer;
   function __gmAiStopResponding() {
     try {
       if (!__gmAiIsResponding) return;
-      __gmAiIsResponding = false;
-      try { __gmAiSetSendButtonState(false); } catch (e0) {}
+      // Enter cancelling UI; keep responding=true until backend terminal event
+      __gmAiIsResponding = true;
+      try { __gmAiSetSendButtonCancelling(true); } catch (e0) {}
 
       try {
-        const rid = String(window.__gmAiActiveRunId || '').trim();
+        let rid = String(window.__gmAiActiveRunId || '').trim();
+        if (!rid) {
+          try {
+            const msgs = Array.isArray(__gmAiChatMessages) ? __gmAiChatMessages : [];
+            let queuedForMsg = false;
+            for (let i = msgs.length - 1; i >= 0; i--) {
+              const m = msgs[i];
+              if (!m || String(m.role||'') !== 'assistant') continue;
+              if (String(m.run_id||'').trim()) { rid = String(m.run_id).trim(); break; }
+              if (m.pending && m.id) {
+                try { __gmAiPendingCancelMsgIds.add(String(m.id)); queuedForMsg = true; } catch(_) {}
+                try { m.stage = 'cancelling'; m.content = '已请求取消（后台将尽快中止）'; } catch(_) {}
+                break;
+              }
+            }
+            if (queuedForMsg) { /* removed debug log: queued pre-run cancel */ }
+          } catch(_) {}
+        }
         if (rid) {
           POST('/api/hivo_agent_cancel', { run_id: rid }).catch(()=>{});
           try { if (__gmAiRunStatusCache && __gmAiRunStatusCache.delete) __gmAiRunStatusCache.delete(rid); } catch (eC1) {}
+          try { __gmAiCancelledRunIds.add(rid); } catch (eMark) {}
+          try { /* removed debug log: requested cancel for run */ } catch(_) {}
+          // Reflect cancelling state on last pending assistant
+          try {
+            const msgs = Array.isArray(__gmAiChatMessages) ? __gmAiChatMessages : [];
+            for (let i = msgs.length - 1; i >= 0; i--) {
+              const m = msgs[i];
+              if (m && String(m.role||'')==='assistant' && m.pending) { m.stage='cancelling'; m.content='已请求取消（后台将尽快中止）'; break; }
+            }
+          } catch(_){ }
+        } else {
+          try { /* removed debug log: cancel requested but no run_id */ } catch(_) {}
         }
       } catch (eC0) {}
-      try { window.__gmAiActiveRunId = ''; } catch (eAR0) {}
-      try {
-        const msgs = Array.isArray(__gmAiChatMessages) ? __gmAiChatMessages : [];
-        const last = msgs.length ? msgs[msgs.length - 1] : null;
-        if (last && String(last.role || '') === 'assistant' && last.pending) {
-          last.pending = false;
-          last.stage = 'error';
-          last.content = '已请求取消（后台将尽快中止）。';
-          __gmAiRenderChat();
-        }
-      } catch (e1) {}
-      try { __gmAiSetContinueState(true, 'aborted'); } catch (eC0) {}
-      try { toast('已请求取消', 'ok'); } catch (e2) {}
+      // Do not finalize or clear activeRunId here; wait for backend terminal event
+      // continue feature removed
+      try { __gmAiRenderChat(); } catch(_){ }
     } catch (e) {}
   }
 
@@ -14262,6 +14390,9 @@ flex-shrink:0;cursor:pointer;
   let __gmAiMentionIndex = 0;
   let __gmAiMentionQuery = '';
   let __gmAiMentionAnchor = null;
+
+  // Queue of assistant message IDs that user requested to cancel before run_id is known
+  let __gmAiPendingCancelMsgIds = new Set();
   let __gmAiMentionReqId = 0;
 
   function __gmAiEnsureModelMenu() {
@@ -14625,6 +14756,7 @@ flex-shrink:0;cursor:pointer;
             try {
               const role = String(m && m.role || '');
               const item = { role, content: String(m && m.content || '') };
+              try { if (m && m.id) item.id = String(m.id); } catch(_) {}
               const ug = String(m && (m.undo_gid || m.undoGid) || '').trim();
               if (ug) item.undo_gid = ug;
               if (role === 'user') {
@@ -14640,6 +14772,18 @@ flex-shrink:0;cursor:pointer;
                 });
                 if (metaOut.length) item._attMeta = metaOut;
               } else if (role === 'assistant') {
+                const metaA = Array.isArray(m && m._attMeta) ? m._attMeta : [];
+                if (metaA.length) item._attMeta = metaA.map(a => ({
+                  name: String(a && a.name || 'file'),
+                  mime: String(a && a.mime || ''),
+                  size: Number(a && a.size || 0),
+                  ...(a && a.url ? { url: String(a.url) } : {}),
+                  ...(a && a.path ? { path: String(String(a.path).replace(/\\/g,'/')) } : {}),
+                }));
+                try {
+                  const st = String(m && m.stage || '');
+                  if (st) item.stage = st;
+                } catch(_) {}
               }
               return item;
             } catch (e1) {
@@ -14778,7 +14922,7 @@ flex-shrink:0;cursor:pointer;
       }
 
       __gmAiRenderChat();
-      try { __gmAiRevalidateContinueStateForActiveSession(); } catch (eC1) {}
+      try { __gmAiRenderContinueFromMessages(); } catch (eC1) {}
       try { await __gmAiSaveHistoryNow(); } catch (eS0) {}
       try { await __gmAiRefreshSendCounter(); } catch (eC2) {}
 
@@ -14879,10 +15023,7 @@ flex-shrink:0;cursor:pointer;
         }
       } catch (eS0) {}
 
-      try {
-        window.__gmAiActiveRunId = '';
-        __gmAiNextSendIsContinue = false;
-      } catch (eS1) {}
+      try { window.__gmAiActiveRunId = ''; } catch (eS1) {}
 
       if (!Array.isArray(__gmAiChatMessages) || !__gmAiChatMessages.length) return;
       const msgs = __gmAiChatMessages;
@@ -14932,8 +15073,7 @@ flex-shrink:0;cursor:pointer;
         if (!sid) undoOk = true;
       }
       if (undoOk || undoNoop) {
-        try { __gmAiSetContinueState(false, ''); } catch (eC0) {}
-        try { __gmAiClearPersistedContinueState(); } catch (eC1) {}
+        try { __gmAiRenderContinueFromMessages(); } catch (eC0) {}
         try {
           const next = msgs[lastUser + 1] || null;
           if (next && String(next.role || '') === 'assistant' && next.pending) {
@@ -16376,6 +16516,7 @@ flex-shrink:0;cursor:pointer;
   function aiChatInputKeydown(e) {
     try {
       if (!e) return;
+      if (__gmAiIsCancelling) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); } return; }
       if (__gmAiMentionActive) {
         if (e.key === 'ArrowDown') {
           e.preventDefault();
@@ -16466,6 +16607,7 @@ flex-shrink:0;cursor:pointer;
   }
 
   async function __gmAiAddFiles(files) {
+    if (__gmAiIsCancelling) { try { toast('正在取消上次任务，暂不可添加附件', 'warn'); } catch(_) {} return; }
     const arr = [];
     try {
       for (const f of (files || [])) {
@@ -16598,6 +16740,7 @@ flex-shrink:0;cursor:pointer;
 
   function aiPickAttachments() {
     try {
+      if (__gmAiIsCancelling) { try { toast('正在取消上次任务，暂不可添加附件', 'warn'); } catch(_) {} return; }
       const inp = document.getElementById('aiAttachInput');
       if (inp) inp.click();
     } catch (e) {}
@@ -16923,8 +17066,10 @@ flex-shrink:0;cursor:pointer;
     showAiChatPanel();
     try { __gmAiSaveSessionDraft(__gmAiActiveSessionId); } catch (e0d) {}
     __gmAiActiveSessionId = sid;
+    try { window.__gmAiActiveRunId = ''; } catch(_) {}
+    try { __gmAiSetSendButtonCancelling(false); } catch(_) {}
     __gmAiRenderHistoryChips();
-    try { __gmAiSetContinueState(false, ''); } catch (eCS0) {}
+    try { __gmAiRenderContinueFromMessages(); } catch (eCS0) {}
     try { __gmAiLoadSessionDraft(sid); } catch (eLd) {}
     if (sid.startsWith(__gmAiEphemeralSessionPrefix)) {
       __gmAiChatMessages = [];
@@ -16957,13 +17102,13 @@ flex-shrink:0;cursor:pointer;
         if (!pick) {
           __gmAiChatMessages = [];
           __gmAiRenderChat();
-          try { __gmAiSetContinueState(false, ''); } catch (eCS0) {}
+          try { __gmAiRenderContinueFromMessages(); } catch (eCS0) {}
           try { __gmAiRefreshSendCounter(); } catch (eC0) {}
         } else {
           if (pick.startsWith(__gmAiEphemeralSessionPrefix)) {
             __gmAiChatMessages = [];
             __gmAiRenderChat();
-            try { __gmAiSetContinueState(false, ''); } catch (eCS0) {}
+            try { __gmAiRenderContinueFromMessages(); } catch (eCS0) {}
             try { __gmAiRefreshSendCounter(); } catch (eC0) {}
           } else {
             POST('/api/ai_sessions', { profile_id: pid, action: 'set_active', session_id: pick }).catch(()=>{});
@@ -16983,8 +17128,7 @@ flex-shrink:0;cursor:pointer;
           // Proactively drop any stale Continue state when active session becomes empty/default
           if (!__gmAiActiveSessionId) {
             window.__gmAiActiveRunId = '';
-            __gmAiSetContinueState(false, '');
-            __gmAiClearPersistedContinueState(pid, '');
+            __gmAiRenderContinueFromMessages();
           }
         } catch (eClr) {}
         loadAiChatHistory(pid, __gmAiActiveSessionId).catch(()=>{});
@@ -17011,7 +17155,7 @@ flex-shrink:0;cursor:pointer;
     __gmAiRenderChat();
     try { __gmAiLastUndoSteps = 0; } catch (eU0) {}
     try { __gmAiRefreshSendCounter(); } catch (eC0) {}
-    try { __gmAiSetContinueState(false, ''); } catch (eCS0) {}
+    try { __gmAiRenderContinueFromMessages(); } catch (eCS0) {}
     try {
       const ta = document.getElementById('aiChatInput');
       if (ta) ta.value = '';
@@ -17031,7 +17175,7 @@ flex-shrink:0;cursor:pointer;
       __gmAiSessions = Array.isArray(res.sessions) ? res.sessions : [];
       __gmAiActiveSessionId = String(res.active_session_id || res.session_id || '');
       __gmAiRenderHistoryChips();
-      try { __gmAiSetContinueState(false, ''); } catch (eCS0) {}
+      try { __gmAiRenderContinueFromMessages(); } catch (eCS0) {}
       try {
         const ta = document.getElementById('aiChatInput');
         if (ta) ta.value = '';
@@ -17049,11 +17193,14 @@ flex-shrink:0;cursor:pointer;
     const o = (opts && typeof opts === 'object') ? opts : {};
     const restoreDraft = (o.restoreDraft === undefined) ? true : Boolean(o.restoreDraft);
     const restoreContinue = (o.restoreContinue === undefined) ? true : Boolean(o.restoreContinue);
+    // Switching or reloading a session should clear any stale cancelling/active-run UI state
+    try { window.__gmAiActiveRunId = ''; } catch(_) {}
+    try { __gmAiSetSendButtonCancelling(false); } catch(_) {}
     if (!pid) {
       __gmAiChatMessages = [];
       __gmAiRenderChat();
       if (restoreContinue) {
-        try { __gmAiSetContinueState(false, ''); } catch (eCS0) {}
+        try { __gmAiRenderContinueFromMessages(); } catch (eCS0) {}
       }
       if (restoreDraft) {
         try {
@@ -17098,12 +17245,28 @@ flex-shrink:0;cursor:pointer;
       __gmAiRenderHistoryChips();
       if (Array.isArray(res.messages)) {
         __gmAiChatMessages = res.messages;
+        // Normalize assistant fields to preserve Continue after session switch
+        try {
+          for (let i = 0; i < __gmAiChatMessages.length; i++) {
+            const m = __gmAiChatMessages[i];
+            if (!m || String(m.role||'') !== 'assistant') continue;
+            // Default stage to done if missing
+            try { if (!m.stage) m.stage = 'done'; } catch(_){ }
+          }
+        } catch(_){ }
         try { __gmAiHydrateAttachmentsFromCache(); } catch (eHyd) {}
         __gmAiRenderChat();
+        try {
+          const msgs0 = Array.isArray(__gmAiChatMessages) ? __gmAiChatMessages : [];
+          let lastA = null;
+          for (let i = msgs0.length - 1; i >= 0; i--) { const m = msgs0[i]; if (m && String(m.role||'')==='assistant') { lastA = m; break; } }
+        } catch (eHydSnap) {}
+        // After messages are fully rendered and any snapshot hydrated, recompute Continue visibility deterministically
+        try { __gmAiRenderContinueFromMessages(); } catch (eCS1) {}
       }
     }
     if (restoreContinue) {
-      try { __gmAiRestoreContinueStateForActiveSession(); } catch (eCR) {}
+      try { __gmAiRenderContinueFromMessages(); } catch (eCR) {}
     }
     if (restoreDraft) {
       try { __gmAiRestoreDraftForActiveSession(); } catch (eDR) {}
