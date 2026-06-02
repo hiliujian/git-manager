@@ -6795,123 +6795,141 @@ def _ai_trim_messages_to_budget(messages: list, max_total_tokens: int, reserve_o
         if max_total <= 0:
             return [m for m in messages if isinstance(m, dict)]
 
-        arr0 = [m for m in messages if isinstance(m, dict)]
-        if not arr0:
+        arr = [m for m in messages if isinstance(m, dict)]
+        if not arr:
             return []
 
-        sys_msgs = [m for m in arr0 if str(m.get("role") or "") == "system"]
-        rest0 = [m for m in arr0 if str(m.get("role") or "") != "system"]
-
-        out = sys_msgs + rest0
-        if _ai_estimate_messages_tokens(out) + reserve <= max_total:
-            return out
-
-        min_keep = len(sys_msgs) + 1
-
-        def truncate_system_messages():
-            if len(sys_msgs) <= 1:
+        def is_dup(a, b):
+            if not a or not b:
                 return False
-            changed = False
-            for i in range(1, len(sys_msgs)):
-                m = out[i]
-                if not isinstance(m.get("content"), str):
-                    continue
-                cur_t = _ai_estimate_text_tokens(m.get("content"))
-                if cur_t <= 0:
-                    continue
-                keep_t = max(32, int(cur_t * 0.6))
-                m2 = dict(m)
-                m2["content"] = _ai_truncate_text_to_tokens(m.get("content"), keep_t)
-                out[i] = m2
-                changed = True
-                if _ai_estimate_messages_tokens(out) + reserve <= max_total:
-                    return True
-            return changed
-
-        def total_ok():
-            return (_ai_estimate_messages_tokens(out) + reserve) <= max_total
-
-        def truncate_long_message(prefer_role: str):
-            best_i = -1
-            best_t = 0
-            for i in range(len(sys_msgs), len(out)):
-                m = out[i]
-                if str(m.get("role") or "") != prefer_role:
-                    continue
-                if not isinstance(m.get("content"), str):
-                    continue
-                ct = _ai_estimate_text_tokens(m.get("content"))
-                if ct > best_t:
-                    best_t = ct
-                    best_i = i
-            if best_i < 0:
+            if str(a.get("role") or "") != str(b.get("role") or ""):
                 return False
-            m = out[best_i]
-            cur_t = _ai_estimate_text_tokens(m.get("content"))
-            if cur_t <= 0:
+            ca = str(a.get("content") or "").strip()
+            cb = str(b.get("content") or "").strip()
+            if not ca or not cb:
                 return False
-            keep_t = max(32, int(cur_t * 0.7))
-            m2 = dict(m)
-            m2["content"] = _ai_truncate_text_to_tokens(m.get("content"), keep_t)
-            out[best_i] = m2
-            return True
-
-        def drop_earliest_assistant():
-            for i in range(len(sys_msgs), len(out)):
-                if str(out[i].get("role") or "") == "assistant":
-                    del out[i]
-                    return True
+            if ca == cb:
+                return True
+            if len(ca) > 20 and len(cb) > 20 and ca[:80] == cb[:80]:
+                return True
             return False
 
-        def drop_earliest_turn():
-            i = len(sys_msgs)
-            while i < len(out):
-                if str(out[i].get("role") or "") == "user":
-                    if i + 1 < len(out) and str(out[i + 1].get("role") or "") == "assistant":
-                        del out[i:i + 2]
-                        return True
-                    del out[i]
-                    return True
-                i += 1
-            return False
-
-        def truncate_earliest_user():
-            for i in range(len(sys_msgs), len(out)):
-                if str(out[i].get("role") or "") == "user":
-                    m = out[i]
-                    if not isinstance(m.get("content"), str):
-                        return False
-                    cur_t = _ai_estimate_text_tokens(m.get("content"))
-                    if cur_t <= 0:
-                        return False
-                    keep_t = max(32, int(cur_t * 0.6))
-                    m2 = dict(m)
-                    m2["content"] = _ai_truncate_text_to_tokens(m.get("content"), keep_t)
-                    out[i] = m2
-                    return True
-            return False
-
-        guard = 0
-        while (not total_ok()) and guard < 200:
-            guard += 1
-            if truncate_system_messages():
+        cleaned = []
+        last = None
+        for m in arr:
+            r = str(m.get("role") or "")
+            c = m.get("content")
+            if r not in ("system", "user", "assistant"):
                 continue
-            if len(out) <= min_keep:
+            if not isinstance(c, str) or not c.strip():
+                continue
+            if is_dup(last, m):
+                continue
+            if r == "assistant" and c.strip() in ("对话内容过长，已超过限制",):
+                continue
+            cleaned.append(m)
+            last = m
+
+        sys_msgs = [m for m in cleaned if str(m.get("role") or "") == "system"]
+        non_sys = [m for m in cleaned if str(m.get("role") or "") != "system"]
+
+        sys_text = "\n\n".join([str(m.get("content") or "").strip() for m in sys_msgs if isinstance(m.get("content"), str)])
+        base = []
+        if sys_text:
+            base.append({"role": "system", "content": sys_text})
+
+        def total_tokens(msgs):
+            return _ai_estimate_messages_tokens(msgs)
+
+        budget = max_total - reserve
+        if total_tokens(base + non_sys) <= budget:
+            return base + non_sys
+
+        turns = []
+        i = 0
+        while i < len(non_sys):
+            if str(non_sys[i].get("role") or "") == "user":
+                if i + 1 < len(non_sys) and str(non_sys[i + 1].get("role") or "") == "assistant":
+                    turns.append((non_sys[i], non_sys[i + 1]))
+                    i += 2
+                    continue
+                else:
+                    turns.append((non_sys[i],))
+            else:
+                turns.append((non_sys[i],))
+            i += 1
+
+        recent = []
+        used = total_tokens(base)
+        for t in reversed(turns):
+            cand = list(t) + recent
+            if used + total_tokens(cand) <= budget:
+                recent = cand
+                used = used + total_tokens(t)
+            else:
                 break
-            if truncate_long_message("assistant"):
-                continue
-            if truncate_long_message("user"):
-                continue
-            if drop_earliest_assistant() and len(out) >= min_keep:
-                continue
-            if drop_earliest_turn() and len(out) >= min_keep:
-                continue
-            if truncate_earliest_user():
-                continue
-            break
 
-        if total_ok():
-            return out
+        older_count = len(non_sys) - len(recent)
+        if older_count > 0:
+            parts = []
+            keep_n = max(0, min(6, older_count))
+            for m in non_sys[:older_count]:
+                role = str(m.get("role") or "")
+                txt = str(m.get("content") or "")
+                if role == "user":
+                    parts.append("U:" + txt[:160])
+                elif role == "assistant":
+                    parts.append("A:" + txt[:220])
+                else:
+                    parts.append(txt[:120])
+            summary_blob = "\n".join(parts[:keep_n])
+            sum_allow = max(64, int(budget * 0.25))
+            summary_txt = _ai_truncate_text_to_tokens(summary_blob, sum_allow)
+            summary_msg = {"role": "system", "content": "历史摘要：\n" + summary_txt}
+            composed = base + [summary_msg] + recent
+        else:
+            composed = base + recent
+
+        if total_tokens(composed) <= budget:
+            return composed
+
+        if base:
+            sys_allow = max(32, int(budget * 0.25))
+            base = [{"role": "system", "content": _ai_truncate_text_to_tokens(base[0].get("content"), sys_allow)}]
+        else:
+            base = []
+
+        if older_count > 0:
+            sum_allow2 = max(32, int(budget * 0.2))
+            composed = base + [{"role": "system", "content": _ai_truncate_text_to_tokens("历史摘要：\n" + summary_txt, sum_allow2)}] + recent
+        else:
+            composed = base + recent
+
+        while total_tokens(composed) > budget and len(recent) > 1:
+            recent = recent[1:]
+            if older_count > 0:
+                composed = base + [{"role": "system", "content": _ai_truncate_text_to_tokens("历史摘要：\n" + summary_txt, sum_allow2)}] + recent
+            else:
+                composed = base + recent
+
+        if total_tokens(composed) <= budget:
+            return composed
+
+        first_sys = base[0] if base else None
+        last_user = None
+        for m in reversed(non_sys):
+            if str(m.get("role") or "") == "user":
+                last_user = m
+                break
+        final_out = []
+        if first_sys and isinstance(first_sys.get("content"), str):
+            sys_allow3 = max(24, int(budget * 0.3))
+            final_out.append({"role": "system", "content": _ai_truncate_text_to_tokens(first_sys.get("content"), sys_allow3)})
+        if last_user and isinstance(last_user.get("content"), str):
+            remain3 = max(24, budget - _ai_estimate_messages_tokens(final_out) - 8)
+            final_out.append({"role": "user", "content": _ai_truncate_text_to_tokens(last_user.get("content"), remain3)})
+        if final_out:
+            return final_out
         return None
     except Exception:
         return messages if isinstance(messages, list) else []
@@ -6948,7 +6966,32 @@ def ai_chat(messages: list, temperature: float | None = None, profile_id: str | 
 
     msgs2 = _ai_trim_messages_to_budget(messages, max_total_tokens=max_input_tokens, reserve_output_tokens=max_output_tokens)
     if msgs2 is None:
-        return False, "对话内容过长，已超过限制", None
+        # Construct a minimal viable context instead of returning an error
+        try:
+            budget = max(128, int(max_input_tokens or 0) - int(max_output_tokens or 0))
+        except Exception:
+            budget = 512
+        budget = max(128, budget)
+        sys_txt = ""
+        last_user = None
+        for m in messages:
+            if str(m.get("role") or "") == "system" and isinstance(m.get("content"), str):
+                if sys_txt:
+                    sys_txt += "\n\n" + m.get("content")
+                else:
+                    sys_txt = m.get("content")
+        for m in reversed(messages):
+            if str(m.get("role") or "") == "user" and isinstance(m.get("content"), str) and m.get("content").strip():
+                last_user = m
+                break
+        out = []
+        if sys_txt:
+            sys_allow = max(32, int(budget * 0.3))
+            out.append({"role": "system", "content": _ai_truncate_text_to_tokens(sys_txt, sys_allow)})
+        if last_user:
+            remain = max(32, budget - _ai_estimate_messages_tokens(out) - 8)
+            out.append({"role": "user", "content": _ai_truncate_text_to_tokens(last_user.get("content"), remain)})
+        msgs2 = out if out else []
     if not msgs2:
         return False, "messages 为空", None
 
