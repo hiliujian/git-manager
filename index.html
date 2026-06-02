@@ -177,7 +177,7 @@
     } catch (e) {
       try { const box = document.getElementById('aiUploadProg'); if (box) box.style.display='none'; } catch (e2) {}
       return { ok: false, items: [] };
-    }
+    } finally { __gmRevertBusy = false; try { const btn = document.getElementById('revertFileConfirmBtn'); if (btn) { btn.disabled = false; btn.classList.remove('disabled'); } } catch(e) {} }
   }
 
   
@@ -14814,6 +14814,8 @@ flex-shrink:0;cursor:pointer;
       } else {
         toast('保存会话失败（连接异常）', 'err');
       }
+      __gmRevertBusy = false;
+      try { const btn = document.getElementById('revertAllOkBtn'); if (btn) { btn.disabled = false; btn.classList.remove('disabled'); } } catch(e) {}
     }
   }
 
@@ -17845,6 +17847,7 @@ flex-shrink:0;cursor:pointer;
       return;
     }
     if (act === 'revert_file') {
+      if (__gmRevertBusy) { return; }
       const ok = await showConfirm({
         title: '确认撤回（整文件）',
         message: `将工作区文件撤回到 HEAD 版本：\n\n${path}\n\n此操作会覆盖当前工作区内容，是否继续？`,
@@ -17852,6 +17855,7 @@ flex-shrink:0;cursor:pointer;
         danger: true,
       });
       if (!ok) return;
+      __gmRevertBusy = true;
       const res = await POST('/api/revert_file', { path, status });
       if (res && res.ok) {
         toast('✓ 撤回成功', 'ok');
@@ -17860,6 +17864,7 @@ flex-shrink:0;cursor:pointer;
         __gmToastApiError('撤回失败', res, (res && (res.msg || res.error)) || '撤回失败');
         await refresh();
       }
+      __gmRevertBusy = false;
       return;
     }
     if (act === 'delete_file') {
@@ -18078,6 +18083,9 @@ flex-shrink:0;cursor:pointer;
     return api(p + sep + '_ts=' + Date.now());
   };
   const POST = (p,b,opts={})=> api(p, Object.assign({method:'POST', body: JSON.stringify(b)}, (opts || {})));
+
+  // Global flag: prevent concurrent revert/undo requests from UI
+  let __gmRevertBusy = false;
 
   const __gmGETCancelable = (key, p) => {
     const sep = p.includes('?') ? '&' : '?';
@@ -22846,11 +22854,14 @@ flex-shrink:0;cursor:pointer;
         } catch (e) {}
         return true;
       } else {
+        try { window.__lastSaveRetryAfter = Number(res && res.retry_after); } catch (e) { window.__lastSaveRetryAfter = null; }
         __gmToastApiError('保存失败', res, (res && (res.msg || res.error)) ? (res.msg || res.error) : '保存失败');
+        try { window.__dirtyEdits = true; } catch (e) {}
         return false;
       }
     } catch (error) {
       __gmToastApiError('保存失败', null, error.message);
+      try { window.__lastSaveRetryAfter = null; window.__dirtyEdits = true; } catch (e) {}
       return false;
     } finally {
       window.__saveFileInFlight = false;
@@ -23785,7 +23796,8 @@ flex-shrink:0;cursor:pointer;
   };
 
   // 真正的实时撤回 - 立即删除，后台保存，实时更新统计
-  async function revertLineInstantly(filepath, hunkIdx, lineIdx, status) {
+  async function revertLineInstantly(filepath, hunkIdx, lineIdx, status, fallbackSig) {
+    if (__gmRevertBusy) { toast('正在撤回，请稍候…', 'warn'); return; }
     // 检查未跟踪文件（U类型）
     if (status === 'U') {
       const ok = await showConfirm({
@@ -23860,8 +23872,35 @@ flex-shrink:0;cursor:pointer;
     }
 
     if (!line) {
-      __gmToastError('撤回失败', '无法找到该行');
-      revertLineBusyByPath.set(filepath, false);
+      // 局部索引已失效，走后端按签名匹配，避免前端报“无法找到该行”
+      const sig = (fallbackSig && typeof fallbackSig === 'object') ? fallbackSig : null;
+      if (!sig) {
+        __gmToastError('撤回失败', '无法找到该行');
+        revertLineBusyByPath.set(filepath, false);
+        return;
+      }
+
+      // 后端撤回（无乐观更新），完成后整体刷新
+      try {
+        const res = await POST('/api/revert_line', {
+          path: filepath,
+          hunk_index: hunkIdx,
+          line_index: Math.max(0, Number(lineIdx) || 0),
+          signature: sig,
+          status,
+          ctx: (diffMode === 'unified' || diffMode === 'split') ? changeViewCtx : 5
+        });
+        if (!res || !res.ok) {
+          __gmToastApiError('撤回失败', res, (res && (res.msg || res.error)) ? (res.msg || res.error) : '失败');
+        } else {
+          toast('✓ 已撤回', 'ok');
+        }
+      } catch (e) {
+        __gmToastApiError('撤回失败', null, (e && e.message) ? e.message : '网络错误');
+      } finally {
+        try { await refreshCurrentDiffNoFlicker(filepath, status); } catch (e2) { try { await refresh(); } catch (e3) {} }
+        revertLineBusyByPath.set(filepath, false);
+      }
       return;
     }
 
@@ -23954,23 +23993,13 @@ flex-shrink:0;cursor:pointer;
               window.__dirtyEdits = false;
               return;
             }
-            try {
-              curHunks = originalHunks;
-              files = originalFiles;
-              curFileContent = originalContent;
-              commitLinesSelectedByPath.set(filepath, new Set(originalSelectedKeys));
-              commitLinesInitByPath.set(filepath, true);
-            } catch (e2) {}
-            try {
-              if (curFile !== null && files[curFile]) {
-                const f = files[curFile];
-                const changeLocations = buildChangeLocationsFromHunks(curHunks);
-                renderDiffWithFullContext(f, curHunks, false, changeLocations);
-              }
-              renderFileList();
-              updateStats();
-            } catch (e2) {}
-            __gmToastError('保存失败', '已回滚撤回操作');
+            // 保存失败（可能因频率限制等），不回滚UI，改为调度延迟重试
+            try { window.__dirtyEdits = true; } catch (e) {}
+            const delay = Number(window.__lastSaveRetryAfter || 0);
+            const ms = Number.isFinite(delay) && delay > 0 ? (delay * 1000 + 200) : 3000;
+            try { clearTimeout(window.__autoSaveTimer); } catch (e) {}
+            window.__autoSaveTimer = setTimeout(() => { try { saveFile(); } catch (e) {} }, ms);
+            toast('保存排队中…', 'info');
           } catch (e) {
             console.error('撤回后立即保存失败:', e);
           }
@@ -24009,13 +24038,14 @@ flex-shrink:0;cursor:pointer;
     }
 
     // 6. 后台静默保存（不阻塞UI，不显示loading）
+    if (__gmRevertBusy) { return; }
     setTimeout(async () => {
       try {
         const res = await POST('/api/revert_line', {
           path: filepath,
           hunk_index: hunkIdx,
           line_index: lineIdx,
-          signature: {
+          signature: (fallbackSig && typeof fallbackSig === 'object') ? fallbackSig : {
             type: line.type,
             new: line.new,
             old: line.old,
@@ -24129,6 +24159,7 @@ flex-shrink:0;cursor:pointer;
 
   // 真正的实时多行撤回 - 立即删除多行，后台保存，实时更新统计
   async function revertMultiLinesInstantly(filepath, hunkIdx, startLineIdx, endLineIdx, status) {
+    if (__gmRevertBusy) { toast('正在撤回，请稍候…', 'warn'); return; }
     // 检查未跟踪文件（U类型）
     if (status === 'U') {
       const ok = await showConfirm({
@@ -24326,23 +24357,13 @@ flex-shrink:0;cursor:pointer;
               window.__dirtyEdits = false;
               return;
             }
-            try {
-              curHunks = originalHunks;
-              files = originalFiles;
-              curFileContent = originalContent;
-              commitLinesSelectedByPath.set(filepath, new Set(originalSelectedKeys));
-              commitLinesInitByPath.set(filepath, true);
-            } catch (e2) {}
-            try {
-              if (curFile !== null && files[curFile]) {
-                const f = files[curFile];
-                const changeLocations = buildChangeLocationsFromHunks(curHunks);
-                renderDiffWithFullContext(f, curHunks, false, changeLocations);
-              }
-              renderFileList();
-              updateStats();
-            } catch (e2) {}
-            __gmToastError('保存失败', '已回滚块撤回操作');
+            // 保存失败（可能因频率限制等），不回滚UI，改为调度延迟重试
+            try { window.__dirtyEdits = true; } catch (e) {}
+            const delay = Number(window.__lastSaveRetryAfter || 0);
+            const ms = Number.isFinite(delay) && delay > 0 ? (delay * 1000 + 200) : 3000;
+            try { clearTimeout(window.__autoSaveTimer); } catch (e) {}
+            window.__autoSaveTimer = setTimeout(() => { try { saveFile(); } catch (e) {} }, ms);
+            toast('保存排队中…', 'info');
           } catch (e) {
             console.error('块撤回后立即保存失败:', e);
           }
@@ -24380,6 +24401,7 @@ flex-shrink:0;cursor:pointer;
     }
 
     // 6. 后台静默保存（不阻塞UI，不显示loading）
+    if (__gmRevertBusy) { return; }
     setTimeout(async () => {
       try {
         const res = await POST('/api/revert_multi_lines', {
@@ -24492,6 +24514,7 @@ flex-shrink:0;cursor:pointer;
 
   // 真正的实时撤回代码块 - 立即删除，后台保存，实时更新统计
   async function revertHunkInstantly(filepath, hunkIdx, status) {
+    if (__gmRevertBusy) { toast('正在撤回，请稍候…', 'warn'); return; }
     // 禁用自动刷新diff，避免撤回后被WebSocket推送打断
     disableAutoRefreshDiff(8000);
 
@@ -24573,21 +24596,13 @@ flex-shrink:0;cursor:pointer;
           try {
             const ok = await saveFile();
             if (!ok) {
-              try {
-                curHunks = originalHunks;
-                files = originalFiles;
-                curFileContent = originalContent;
-              } catch (e2) {}
-              try {
-                if (curFile !== null && files[curFile]) {
-                  const f = files[curFile];
-                  const changeLocations = buildChangeLocationsFromHunks(curHunks);
-                  renderDiffWithFullContext(f, curHunks, false, changeLocations);
-                }
-                renderFileList();
-                updateStats();
-              } catch (e2) {}
-              __gmToastError('保存失败', '已回滚代码块撤回操作');
+              // 不回滚UI，改为调度延迟重试
+              try { window.__dirtyEdits = true; } catch (e) {}
+              const delay = Number(window.__lastSaveRetryAfter || 0);
+              const ms = Number.isFinite(delay) && delay > 0 ? (delay * 1000 + 200) : 3000;
+              try { clearTimeout(window.__autoSaveTimer); } catch (e) {}
+              window.__autoSaveTimer = setTimeout(() => { try { saveFile(); } catch (e) {} }, ms);
+              toast('保存排队中…', 'info');
               return;
             }
             window.__dirtyEdits = false;
@@ -24637,6 +24652,7 @@ flex-shrink:0;cursor:pointer;
     }
 
     // 7. 后台静默保存
+    if (__gmRevertBusy) { return; }
     setTimeout(async () => {
       try {
         const res = await POST('/api/revert_hunk', {
@@ -24733,8 +24749,26 @@ flex-shrink:0;cursor:pointer;
 
   // 兼容旧的弹窗式撤回（用于整个文件）
   function askRevertLine(filepath, hunkIdx, lineIdx, status) {
-    // 直接调用实时撤回，无需弹窗确认
-    revertLineInstantly(filepath, hunkIdx, lineIdx, status);
+    // 直接调用实时撤回，无需弹窗确认；尽量提供签名，便于后端在索引失效时匹配
+    let sig = null;
+    try {
+      const h = (Array.isArray(curHunks) ? curHunks[hunkIdx] : null);
+      const l = (h && Array.isArray(h.lines)) ? h.lines[lineIdx] : null;
+      if (l) {
+        sig = { type: l.type, new: l.new, old: l.old, text: l.text, old_text: l.old_text };
+      } else {
+        // 退化：尝试从 DOM 读取文本和类型
+        const host = document.getElementById('diffView');
+        const node = host ? host.querySelector(`.dl[data-hunk="${hunkIdx}"][data-line="${lineIdx}"]`) : null;
+        if (node) {
+          const type = (node.classList && (node.classList.contains('added') ? 'added' : (node.classList.contains('removed') ? 'removed' : (node.classList.contains('modified') ? 'modified' : 'context')))) || '';
+          const lc = node.querySelector ? (node.querySelector('.lc') || node) : node;
+          const text = lc ? (lc.textContent || '') : '';
+          sig = { type, text };
+        }
+      }
+    } catch (e) { sig = null; }
+    revertLineInstantly(filepath, hunkIdx, lineIdx, status, sig);
   }
 
   // 多行撤回 - 撤回连续的相同类型操作
@@ -24772,6 +24806,7 @@ flex-shrink:0;cursor:pointer;
   }
 
   async function doRevertFile() {
+    if (__gmRevertBusy) return;
     closeModal('revertFileModal');
     if (curFile === null) return;
 
@@ -24784,7 +24819,9 @@ flex-shrink:0;cursor:pointer;
 
     const f = files[curFile];
     const undoSnap = await snapshotWorkingFile(f.path);
+    try { const btn = document.getElementById('revertFileConfirmBtn'); if (btn) { btn.disabled = true; btn.classList.add('disabled'); } } catch(e) {}
     try {
+      __gmRevertBusy = true;
       const res = await POST('/api/revert_file', {path:f.path, status:f.status});
       if (res.ok) {
         toast(`✓ 已撤回 ${f.path}`,'ok');
@@ -24821,10 +24858,14 @@ flex-shrink:0;cursor:pointer;
           }
         }, 0);
       }
+    } finally {
+      __gmRevertBusy = false;
+      try { const btn = document.getElementById('revertFileConfirmBtn'); if (btn) { btn.disabled = false; btn.classList.remove('disabled'); } } catch(e) {}
     }
   }
 
   async function doRevertAll() {
+    if (__gmRevertBusy) return;
     closeModal('revertAllModal');
 
     // 禁用自动刷新diff，避免撤回后被WebSocket推送打断
@@ -24865,6 +24906,8 @@ flex-shrink:0;cursor:pointer;
     }
 
     try {
+      try { const btn = document.getElementById('revertAllOkBtn'); if (btn) { btn.disabled = true; btn.classList.add('disabled'); } } catch(e) {}
+      __gmRevertBusy = true;
       const res = await POST('/api/revert_all', isPartial ? {paths: selectedPaths} : {});
       if (res.ok) {
         toast(isPartial ? '✓ 已撤回所选文件修改' : '✓ 已撤回所有修改','ok');
@@ -24886,6 +24929,8 @@ flex-shrink:0;cursor:pointer;
       __gmToastApiError('撤回失败', null, error.message);
       await refresh();
     } finally {
+      __gmRevertBusy = false;
+      try { const btn = document.getElementById('revertAllOkBtn'); if (btn) { btn.disabled = false; btn.classList.remove('disabled'); } } catch(e) {}
       // Ensure UI and auto-refresh state are restored even if refresh or some files failed.
       try { shouldAutoRefreshDiff = true; } catch (e) {}
       try { updateStats(); } catch (e) {}

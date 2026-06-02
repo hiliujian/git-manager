@@ -428,6 +428,8 @@ _hivo_agent_run_state: dict = {}  # run_id -> {session_id:str, started_at:float,
 _hivo_agent_session_active: dict = {}  # session_id -> run_id
 _hivo_agent_run_proc: dict = {}  # run_id -> subprocess.Popen
 undo_lock = threading.Lock()
+# Serialize revert/undo apply operations to prevent race conditions on rapid consecutive actions
+_apply_revert_lock = threading.Lock()
 _undo_groups = {}  # group_id -> list[entry]
 _undo_group_order = []  # stack of group_id in commit order
 last_file_state = None  # 上次的文件状态（用于检测变化）
@@ -10822,10 +10824,11 @@ class Handler(BaseHTTPRequestHandler):
                 fp  = data.get("path", "")
                 idx = data.get("hunk_index", -1)
                 st  = data.get("status", "M")
-                ok, msg = revert_hunk(fp, int(idx), st)
-                if ok:
-                    invalidate_changed_files_cache()
-                    notify_files_updated()
+                with _apply_revert_lock:
+                    ok, msg = revert_hunk(fp, int(idx), st)
+                    if ok:
+                        invalidate_changed_files_cache()
+                        notify_files_updated()
                 self.send_json({"ok": ok, "msg": msg})
 
             elif p == "/api/revert_line":
@@ -10838,10 +10841,11 @@ class Handler(BaseHTTPRequestHandler):
                 st  = data.get("status", "M")
                 ctx = data.get("ctx", 5)
                 sig = data.get("signature")
-                ok, msg = revert_line(fp, int(h_idx), int(l_idx), st, ctx, sig)
-                if ok:
-                    invalidate_changed_files_cache()
-                    notify_files_updated()
+                with _apply_revert_lock:
+                    ok, msg = revert_line(fp, int(h_idx), int(l_idx), st, ctx, sig)
+                    if ok:
+                        invalidate_changed_files_cache()
+                        notify_files_updated()
                 self.send_json({"ok": ok, "msg": msg})
             
             elif p == "/api/revert_multi_lines":
@@ -10854,10 +10858,11 @@ class Handler(BaseHTTPRequestHandler):
                 end_l_idx = data.get("end_line_index", -1)
                 st  = data.get("status", "M")
                 ctx = data.get("ctx", 5)
-                ok, msg = revert_multi_lines(fp, int(h_idx), int(start_l_idx), int(end_l_idx), st, ctx)
-                if ok:
-                    invalidate_changed_files_cache()
-                    notify_files_updated()
+                with _apply_revert_lock:
+                    ok, msg = revert_multi_lines(fp, int(h_idx), int(start_l_idx), int(end_l_idx), st, ctx)
+                    if ok:
+                        invalidate_changed_files_cache()
+                        notify_files_updated()
                 self.send_json({"ok": ok, "msg": msg})
             
             elif p == "/api/file_content":
@@ -11384,7 +11389,8 @@ class Handler(BaseHTTPRequestHandler):
                     else:
                         self.send_json({"ok": False, "msg": "无可撤销操作", "noop": True, "applied": False}, 400)
                     return
-                ok, msg = _undo_apply_actions(actions)
+                with _apply_revert_lock:
+                    ok, msg = _undo_apply_actions(actions)
                 if not ok:
                     self.send_json({"ok": False, "msg": msg or "撤销失败", "group_id": gid}, 500)
                     return
