@@ -36,9 +36,7 @@
     .ai-attach-progress.show{display:flex}
     .ai-attach-progress .ring{width:38px;height:38px;border-radius:999px;border:3px solid rgba(255,255,255,.35);border-top-color:#fff;animation:gmSpin 0.9s linear infinite;margin-right:10px}
     .ai-attach-progress .pct{color:#fff;font-weight:800;font-size:12px}
-
-    /* removed old lightbox CSS */
-
+    
   </style>
   <script>
   async function __gmAiEnsureAttachmentUrls(atts) {
@@ -7581,7 +7579,7 @@ flex-shrink:0;cursor:pointer;
       // Not readable or not exists
       return { path, exists: false, content: '' };
     } catch (e) {
-      console.warn('snapshotWorkingFile failed:', e);
+      console.warn('[GM] 工作区快照失败', e);
       return null;
     }
   }
@@ -8820,7 +8818,7 @@ flex-shrink:0;cursor:pointer;
             return true;
           }
         } catch (e2) {
-          console.error('Copy event error:', e2);
+          console.error('[GM] 复制事件错误', e2);
           return false;
         }
       };
@@ -12899,7 +12897,7 @@ flex-shrink:0;cursor:pointer;
       toast('✓ 已撤销撤回', 'ok');
       await refresh();
     } catch (e) {
-      console.error('undoLastRevert failed:', e);
+      console.error('[GM] 撤销撤回失败', e);
       __gmToastApiError('撤销失败', null, e.message);
       await refresh();
     } finally {
@@ -15012,7 +15010,7 @@ flex-shrink:0;cursor:pointer;
         try{ if(bubble && bubble.classList){ bubble.classList.add('ai-tools-open'); } }catch(_){ }
         return;
       }
-      // legacy floating panel logic fully removed
+      
     }catch(err){ }
   };
 
@@ -22828,6 +22826,7 @@ flex-shrink:0;cursor:pointer;
         try {
           const ctxParam = (diffMode === 'unified' || diffMode === 'split') ? `&ctx=${encodeURIComponent(changeViewCtx)}` : '';
           const st = (files[curFile] && files[curFile].status !== undefined) ? files[curFile].status : f.status;
+          const prevHunksSnapshot = (Array.isArray(curHunks) ? JSON.parse(JSON.stringify(curHunks)) : []);
           const diffRes = await GET(`/api/diff?path=${encodeURIComponent(f.path)}&status=${st}${ctxParam}`);
           if (!(diffRes && diffRes.error)) {
             curHunks = (diffRes && diffRes.hunks) ? diffRes.hunks : [];
@@ -22849,7 +22848,44 @@ flex-shrink:0;cursor:pointer;
             } catch (e) {}
             updateStats();
             renderFileList();
-            // Do NOT call refreshCurrentDiffNoFlicker here — it re-renders the DOM and loses caret.
+            try {
+              const countChanged = (prev, now) => {
+                try {
+                  const c = (arr) => (arr || []).reduce((sum, h) => sum + ((h && h.lines) ? h.lines.filter(l => l && (l.type==='added'||l.type==='removed'||l.type==='modified')).length : 0), 0);
+                  return c(prev) !== c(now);
+                } catch (e) { return false; }
+              };
+              const lengthChanged = (prev, now) => {
+                try { return (prev||[]).length !== (now||[]).length; } catch (e) { return false; }
+              };
+              const sig = (arr) => {
+                try {
+                  const maxH = 50, maxL = 200; // 轻量签名，避免重开销
+                  let out = '';
+                  for (let hi = 0; hi < Math.min(maxH, (arr||[]).length); hi++) {
+                    const h = arr[hi];
+                    const lines = (h && h.lines) ? h.lines : [];
+                    out += `H${hi}#${lines.length}|`;
+                    for (let li = 0; li < Math.min(maxL, lines.length); li++) {
+                      const l = lines[li];
+                      if (!l) continue;
+                      const t = l.type || '';
+                      const x = (l.text !== undefined) ? l.text : (l.old_text !== undefined ? l.old_text : '');
+                      // 仅对文本取前后各16字符做签名，权衡体积/敏感度
+                      const xs = String(x||'');
+                      const head = xs.slice(0,16);
+                      const tail = xs.slice(-16);
+                      out += `${hi}:${li}:${t}:${head}:${tail}|`;
+                    }
+                  }
+                  return out;
+                } catch (e) { return ''; }
+              };
+              const changed = countChanged(prevHunksSnapshot, curHunks) || lengthChanged(prevHunksSnapshot, curHunks) || (sig(prevHunksSnapshot) !== sig(curHunks));
+              if (changed) {
+                await refreshCurrentDiffNoFlicker(f.path, st);
+              }
+            } catch (e) {}
           }
         } catch (e) {}
         return true;
@@ -24001,7 +24037,7 @@ flex-shrink:0;cursor:pointer;
             window.__autoSaveTimer = setTimeout(() => { try { saveFile(); } catch (e) {} }, ms);
             toast('保存排队中…', 'info');
           } catch (e) {
-            console.error('撤回后立即保存失败:', e);
+            console.error('[GM] 撤回: 立即保存失败', e);
           }
         })();
       } catch (e) {}
@@ -24058,7 +24094,7 @@ flex-shrink:0;cursor:pointer;
 
         if (!res.ok) {
           // 保存失败，静默回滚
-          console.warn('撤回失败，回滚UI:', res.msg || res.error);
+          console.warn('[GM] 撤回: 接口失败，已本地回退', res && (res.msg || res.error));
 
           // 恢复数据
           curHunks = originalHunks;
@@ -24365,7 +24401,7 @@ flex-shrink:0;cursor:pointer;
             window.__autoSaveTimer = setTimeout(() => { try { saveFile(); } catch (e) {} }, ms);
             toast('保存排队中…', 'info');
           } catch (e) {
-            console.error('块撤回后立即保存失败:', e);
+            console.error('[GM] 撤回-多行: 立即保存失败', e);
           }
         })();
       } catch (e) {}
@@ -24415,7 +24451,7 @@ flex-shrink:0;cursor:pointer;
 
         if (!res.ok) {
           // 保存失败，静默回滚
-          console.warn('多行撤回失败，回滚UI:', res.msg || res.error);
+          console.warn('[GM] 撤回-多行: 接口失败，已本地回退', res && (res.msg || res.error));
 
           // 恢复数据
           curHunks = originalHunks;
@@ -24616,7 +24652,7 @@ flex-shrink:0;cursor:pointer;
               await refreshCurrentDiffNoFlicker(filepath, status);
             } catch (e2) {}
           } catch (e) {
-            console.error('代码块撤回后立即保存失败:', e);
+            console.error('[GM] 撤回-代码块: 立即保存失败', e);
           }
         })();
       } catch (e) {}
