@@ -4390,6 +4390,40 @@ def restore_workspace_to_commit(commit: str):
     return True, ""
 
 
+def revert_commit(commit: str):
+    if not REPO_PATH:
+        return False, "未打开仓库", ""
+
+    commit = (commit or "").strip()
+    if not commit:
+        return False, "缺少 hash", ""
+
+    # 要求工作区干净，避免 Revert 过程中出现混乱
+    out, err, code = run_git(["status", "--porcelain=v1"])
+    if code != 0:
+        return False, (err or "无法检测工作区状态"), ""
+    if (out or "").strip():
+        return False, "工作区有未提交更改，请先提交/撤回/暂存（stash）后再执行 Revert", ""
+
+    # 解析为完整提交哈希
+    full_out, full_err, full_code = run_git(["rev-parse", commit])
+    if full_code != 0:
+        return False, (full_err or "无法解析提交哈希"), ""
+    full = (full_out or "").strip()
+
+    # 执行 Revert，自动使用提交消息
+    _, rerr, rcode = run_git(["revert", "--no-edit", full], timeout=600)
+    if rcode != 0:
+        # 尝试中止以恢复现场
+        run_git(["revert", "--abort"], timeout=120)
+        return False, (rerr or "Revert 失败"), ""
+
+    # 返回新的 HEAD
+    head_out, head_err, head_code = run_git(["rev-parse", "HEAD"]) 
+    new_head = (head_out or "").strip() if head_code == 0 else ""
+    return True, "", new_head
+
+
 def _git_apply_reverse_patch(patch_text: str):
     if not patch_text:
         return False, "空 patch"
@@ -11933,6 +11967,34 @@ class Handler(BaseHTTPRequestHandler):
                     "hash": full_hash[:7] if full_hash else "",
                 })
 
+            elif p == "/api/revert_commit_force":
+                logger.info("处理 /api/revert_commit_force 请求 (丢弃本地修改后 Revert)")
+                if not self._require_repo():
+                    return
+                commit = (data.get("hash") or "").strip()
+                if not commit:
+                    self.send_json({"error":"缺少 hash"}, 400)
+                    return
+                # 丢弃本地未提交修改
+                _, rh_err, rh_code = run_git(["reset", "--hard", "HEAD"], timeout=120)
+                if rh_code != 0:
+                    self.send_json({"ok": False, "error": rh_err or "reset --hard 失败"}, 400)
+                    return
+                run_git(["clean", "-fd"], timeout=120)
+                # 执行 Revert
+                ok, msg, full_hash = revert_commit(commit)
+                try:
+                    invalidate_changed_files_cache()
+                    notify_files_updated()
+                except Exception as e:
+                    logger.debug(f"Exception ignored: {e}")
+                self.send_json({
+                    "ok": ok,
+                    "msg": msg,
+                    "full_hash": full_hash,
+                    "hash": full_hash[:7] if full_hash else "",
+                })
+
             elif p == "/api/soft_reset_commit":
                 logger.info("处理 /api/soft_reset_commit 请求")
                 if not self._require_repo():
@@ -12644,6 +12706,30 @@ class Handler(BaseHTTPRequestHandler):
                     "message": "成功恢复暂存的修改",
                     "output": (pop_out or "").strip()
                 })
+
+            elif p == "/api/stash_push":
+                logger.info("处理 /api/stash_push 请求 (仅暂存修改)")
+                if not self._require_repo():
+                    return
+
+                status_out, status_err, status_code = run_git(["status", "--porcelain=v1"], timeout=30)
+                if status_code != 0:
+                    self.send_json({"ok": False, "error": status_err or "无法检测工作区状态"}, 400)
+                    return
+                if not (status_out or "").strip():
+                    self.send_json({"ok": True, "stashed": False, "message": "无本地修改，无需暂存"})
+                    return
+
+                out, err, code = run_git(["stash", "push", "-u", "-m", "Auto stash"], timeout=60)
+                if code != 0:
+                    self.send_json({"ok": False, "error": err or out or "git stash 失败", "output": (out or "").strip()}, 400)
+                    return
+                try:
+                    invalidate_changed_files_cache()
+                    notify_files_updated()
+                except Exception as e:
+                    logger.debug(f"Exception ignored: {e}")
+                self.send_json({"ok": True, "stashed": True, "output": (out or "").strip()})
 
             elif p == "/api/stash_drop":
                 logger.info("处理 /api/stash_drop 请求 (丢弃 stash 条目)")

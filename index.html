@@ -27,8 +27,7 @@
       --on-accent: #000000;
       --gm-ai-pulse-dur: 1.9s;
     }
-
-  
+ 
     @keyframes gmSpin{0%{transform:rotate(0)}100%{transform:rotate(360deg)}}
     /* Per-file upload progress overlay */
     .ai-attach-card{position:relative}
@@ -25293,12 +25292,217 @@ flex-shrink:0;cursor:pointer;
           await refreshCommitActionButtonsForHash(fullHash);
         }
       } else {
-        __gmToastApiError('Revert 失败', res, (res && (res.msg || res.error)) ? (res.msg || res.error) : '未知错误');
+        const msg = (res && (res.msg || res.error)) ? (res.msg || res.error) : '';
+        // 当工作区不干净时，提供直接提交并继续 Revert 的交互
+        if (msg && msg.includes('工作区有未提交更改')) {
+          const choice = await showRevertLocalChangesDialog();
+          if (choice === 'commit') {
+            const ok = await commitAllAndRetryRevert(fullHash);
+            if (ok) return; // 流程在函数内已完成刷新与跳转
+          } else if (choice === 'stash') {
+            const ok = await stashAndRetryRevert(fullHash);
+            if (ok) return; // 流程在函数内已完成刷新与跳转
+          } else if (choice === 'force') {
+            const confirmForce = await showConfirm({
+              title: '确认强制 Revert？',
+              message: '将丢弃所有本地未提交修改，然后执行 Revert。此操作不可恢复。',
+              okText: '确认丢弃并 Revert',
+              cancelText: '取消'
+            });
+            if (confirmForce) {
+              toast('丢弃本地修改并 Revert 中...','warn');
+              const fres = await POST('/api/revert_commit_force', { hash: fullHash });
+              if (fres && fres.ok) {
+                toast('✓ Revert 完成','ok');
+                await refresh();
+                const newHash = (fres.full_hash || fres.hash || '').trim();
+                activateRightTab('log');
+                if (newHash) await openCommit(newHash); else await refreshCommitActionButtonsForHash(fullHash);
+                return;
+              }
+              __gmToastApiError('Revert 失败', fres, (fres && (fres.msg || fres.error)) ? (fres.msg || fres.error) : '未知错误');
+              await refresh();
+              await refreshCommitActionButtonsForHash(fullHash);
+              return;
+            }
+          }
+          // 取消或提交失败则回退到常规错误提示
+        }
+        __gmToastApiError('Revert 失败', res, msg || '未知错误');
         await refresh();
         await refreshCommitActionButtonsForHash(fullHash);
       }
     } finally {
       setButtonBusy(rb, false);
+    }
+  }
+
+  async function showRevertLocalChangesDialog() {
+    return new Promise((resolve) => {
+      const overlay = document.createElement('div');
+      overlay.className = 'overlay show';
+      overlay.style.zIndex = '10000';
+
+      const dialog = document.createElement('div');
+      dialog.className = 'confirm-dlg';
+      dialog.style.maxWidth = '560px';
+      dialog.style.position = 'relative';
+      dialog.style.zIndex = '10001';
+      dialog.innerHTML = `
+        <div class="confirm-title" style="color: var(--warn);">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 8px;">
+            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+            <line x1="12" y1="9" x2="12" y2="13"/>
+            <line x1="12" y1="17" x2="12.01" y2="17"/>
+          </svg>
+          检测到本地未提交的修改
+        </div>
+        <div class="confirm-msg" style="margin-bottom: 20px; line-height: 1.6;">
+          <p style="margin-top: 4px;">需要先处理本地修改后才能执行 Revert。</p>
+          <p style="margin-top: 8px; margin-bottom: 8px; font-weight: 500;">请选择处理方式：</p>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px;">
+          <button class="choice-btn commit-choice" style="padding: 12px; border: 1px solid var(--accent); background: var(--bg3); color: var(--text); border-radius: 6px; cursor: pointer; text-align: left; transition: all 0.2s;">
+            <div style="font-weight: 600; margin-bottom: 4px;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                <polyline points="20 6 9 17 4 12"/>
+              </svg>
+              提交后继续 Revert
+            </div>
+            <div style="font-size: 11px; color: var(--text2); margin-left: 22px;">将所有本地修改提交到版本库，然后继续执行 Revert。</div>
+          </button>
+          <button class="choice-btn stash-choice" style="padding: 12px; border: 1px solid var(--accent2); background: var(--bg3); color: var(--text); border-radius: 6px; cursor: pointer; text-align: left; transition: all 0.2s;">
+            <div style="font-weight: 600; margin-bottom: 4px;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+              </svg>
+              暂存后继续 Revert
+            </div>
+            <div style="font-size: 11px; color: var(--text2); margin-left: 22px;">将本地修改保存到 stash（不提交），然后继续执行 Revert。之后可选择是否恢复修改。</div>
+          </button>
+          <button class="choice-btn force-choice" style="padding: 12px; border: 1px solid var(--danger); background: var(--bg3); color: var(--text); border-radius: 6px; cursor: pointer; text-align: left; transition: all 0.2s;">
+            <div style="font-weight: 600; margin-bottom: 4px; color: var(--danger);">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                <polyline points="20 6 9 17 4 12"/>
+              </svg>
+              强制 Revert（丢弃本地修改）
+            </div>
+            <div style="font-size: 11px; color: var(--text2); margin-left: 22px;">直接丢弃本地未提交修改，然后执行 Revert。此操作不可恢复，请谨慎选择。</div>
+          </button>
+        </div>
+        <div class="confirm-btns">
+          <button class="btn cancel-choice" style="flex: 1;">取消</button>
+        </div>
+      `;
+
+      overlay.appendChild(dialog);
+      document.body.appendChild(overlay);
+
+      // 悬停效果
+      dialog.querySelectorAll('.choice-btn').forEach(btn => {
+        btn.addEventListener('mouseenter', () => {
+          btn.style.background = 'var(--bg4)';
+          btn.style.transform = 'translateY(-1px)';
+          btn.style.boxShadow = '0 4px 12px rgba(0,0,0,0.15)';
+        });
+        btn.addEventListener('mouseleave', () => {
+          btn.style.background = 'var(--bg3)';
+          btn.style.transform = 'translateY(0)';
+          btn.style.boxShadow = 'none';
+        });
+      });
+
+      const cleanup = () => { overlay.remove(); };
+      dialog.querySelector('.commit-choice').addEventListener('click', () => { cleanup(); resolve('commit'); });
+      dialog.querySelector('.stash-choice').addEventListener('click', () => { cleanup(); resolve('stash'); });
+      dialog.querySelector('.force-choice').addEventListener('click', () => { cleanup(); resolve('force'); });
+      dialog.querySelector('.cancel-choice').addEventListener('click', () => { cleanup(); resolve('cancel'); });
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) { cleanup(); resolve('cancel'); }});
+    });
+  }
+
+  async function commitAllAndRetryRevert(fullHash) {
+    try {
+      const message = await showCommitMessageDialog('提交以继续 Revert');
+      if (!message) return false;
+
+      // 获取所有有变更的文件并提交
+      const list = await GET('/api/files');
+      const fs = (list && Array.isArray(list.files)) ? list.files : [];
+      const paths = fs.map(x => x && x.path).filter(Boolean);
+      if (!paths.length) {
+        __gmToastError('提交失败', '没有可提交的文件');
+        return false;
+      }
+
+      toast('提交中...','warn');
+      const cres = await POST('/api/commit', { message, files: paths });
+      if (!(cres && cres.ok)) {
+        __gmToastApiError('提交失败', cres, (cres && (cres.error || cres.msg)) ? (cres.error || cres.msg) : '提交失败');
+        return false;
+      }
+
+      // 提交成功后，自动重试 Revert
+      toast('继续执行 Revert...','warn');
+      const rres = await POST('/api/revert_commit', { hash: fullHash });
+      if (rres && rres.ok) {
+        toast('✓ Revert 完成','ok');
+        await refresh();
+        const newHash = (rres.full_hash || rres.hash || '').trim();
+        activateRightTab('log');
+        if (newHash) await openCommit(newHash); else await refreshCommitActionButtonsForHash(fullHash);
+        return true;
+      }
+      __gmToastApiError('Revert 失败', rres, (rres && (rres.msg || rres.error)) ? (rres.msg || rres.error) : '未知错误');
+      await refresh();
+      await refreshCommitActionButtonsForHash(fullHash);
+      return false;
+    } catch (e) {
+      const msg = '操作失败：' + (e && e.message ? e.message : String(e || '未知错误'));
+      __gmToastApiError('操作失败', null, msg);
+      return false;
+    }
+  }
+
+  async function stashAndRetryRevert(fullHash) {
+    try {
+      toast('暂存中...','warn');
+      const sres = await POST('/api/stash_push', {});
+      if (!(sres && sres.ok)) {
+        __gmToastApiError('暂存失败', sres, (sres && (sres.error || sres.msg)) ? (sres.error || sres.msg) : '暂存失败');
+        return false;
+      }
+      // 继续 Revert
+      toast('继续执行 Revert...','warn');
+      const rres = await POST('/api/revert_commit', { hash: fullHash });
+      if (rres && rres.ok) {
+        toast('✓ Revert 完成','ok');
+        await refresh();
+        const newHash = (rres.full_hash || rres.hash || '').trim();
+        activateRightTab('log');
+        if (newHash) await openCommit(newHash); else await refreshCommitActionButtonsForHash(fullHash);
+        const shouldPop = await showConfirm({
+          title: '是否恢复暂存的修改？',
+          message: '已完成 Revert。是否恢复刚才暂存的本地修改？',
+          okText: '恢复修改',
+          cancelText: '暂不恢复'
+        });
+        if (shouldPop) {
+          toast('恢复暂存中...','warn');
+          const popRes = await POST('/api/stash_pop', {});
+          if (popRes && popRes.ok) toast('✓ 已恢复修改','ok');
+          else __gmToastApiError('恢复修改失败', popRes, (popRes && (popRes.error || popRes.msg || popRes.message)) ? (popRes.error || popRes.msg || popRes.message) : '恢复修改失败');
+        }
+        return true;
+      }
+      __gmToastApiError('Revert 失败', rres, (rres && (rres.msg || rres.error)) ? (rres.msg || rres.error) : '未知错误');
+      await refresh();
+      await refreshCommitActionButtonsForHash(fullHash);
+      return false;
+    } catch (e) {
+      const msg = '操作失败：' + (e && e.message ? e.message : String(e || '未知错误'));
+      __gmToastApiError('操作失败', null, msg);
+      return false;
     }
   }
 
