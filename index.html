@@ -1494,6 +1494,10 @@
       position:relative;
       overflow:hidden;
     }
+    .show-blame .plain-editor-gutter{ width:260px; min-width:260px; }
+    .plain-editor-gutter .n{ position:relative; }
+    .plain-editor-gutter .n .b{ position:absolute; left:56px; right:6px; top:0; height:18px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:left; color:var(--text2); }
+    [data-theme="light"] .plain-editor-gutter .n .b{ color:#6b7280; }
     
     @keyframes hintBounce{
       0%{transform:scale(0.8);opacity:0;}
@@ -2605,6 +2609,10 @@ flex-shrink:0;cursor:pointer;
     .lc{padding:0 8px;white-space:pre;flex:1;min-width:0;overflow:visible;line-height:20px;user-select:text;cursor:default;}
     .lc::selection{background:rgba(110,180,247,.25);}
     .lc *::selection{background:rgba(110,180,247,.25);}
+    .lb{display:inline-block;width:100px;flex:0 0 100px;margin-left:6px;color:var(--text2);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+    /* 当存在作者信息时，分隔线移到作者右侧 */
+    .dl.has-lb .ln{border-right:none}
+    .dl.has-lb .lb{border-right:1px solid var(--border);padding-right:6px;margin-right:0}
     
     /* 确保原始版本窗口也有选中高亮效果 */
     .sp-readonly .lc::selection{background:rgba(110,180,247,.35) !important;}
@@ -5896,16 +5904,18 @@ flex-shrink:0;cursor:pointer;
               if (window.__plainEditorFilename && document.getElementById('plainEditorTextarea')) return;
             } catch (e0) {}
             try {
-              const masterOn = !!window.__gmFoldUiEnabled && !!window.__gmRevertBlockHintEnabled;
+              const masterOn = !!window.__gmFoldUiEnabled && !!window.__gmRevertBlockHintEnabled && !!window.__gmBlameEnabled;
               const next = !masterOn;
               window.__gmFoldUiEnabled = next;
               window.__gmRevertBlockHintEnabled = next;
+              try { window.__gmBlameEnabled = !!next; } catch (eB0) {}
               try { localStorage.setItem('gm_fold_ui_enabled', window.__gmFoldUiEnabled ? '1' : '0'); } catch (e3) {}
               try { localStorage.setItem('gm_revert_block_hint_enabled', window.__gmRevertBlockHintEnabled ? '1' : '0'); } catch (e3r) {}
+              try { localStorage.setItem('gm_blame_enabled', window.__gmBlameEnabled ? '1' : '0'); } catch (e3b) {}
               try {
                 const btn = document.getElementById('codeFoldBtn');
                 if (btn && btn.classList) {
-                  if (window.__gmFoldUiEnabled || window.__gmRevertBlockHintEnabled) btn.classList.add('on');
+                  if (window.__gmFoldUiEnabled || window.__gmRevertBlockHintEnabled || window.__gmBlameEnabled) btn.classList.add('on');
                   else btn.classList.remove('on');
                 }
               } catch (e4) {}
@@ -5956,6 +5966,23 @@ flex-shrink:0;cursor:pointer;
                 }
               }
             } catch (e0) {}
+
+            // Sync blame UI after master toggle
+            try {
+              if (window.__plainEditorFilename && typeof window.__gmPlainRenderGutter === 'function') {
+                const cont = document.querySelector('.plain-editor-container');
+                if (cont) cont.classList.toggle('show-blame', !!window.__gmBlameEnabled);
+                try { window.__gmPlainRenderGutter(); } catch(eRg) {}
+              } else {
+                if (curFile !== null && files && files[curFile]) {
+                  const f = files[curFile];
+                  try { window.__gmBlameCache = window.__gmBlameCache || new Map(); } catch(e4){}
+                  try { window.__gmBlameCache.delete && window.__gmBlameCache.delete(f.path); } catch(e5){}
+                  const changeLocations = buildChangeLocationsFromHunks(curHunks || []);
+                  renderDiffWithFullContext(f, curHunks || [], false, changeLocations);
+                }
+              }
+            } catch (eB) {}
             return;
           }
 
@@ -8330,21 +8357,23 @@ flex-shrink:0;cursor:pointer;
               menu = document.createElement('div');
               menu.id = 'gmEnhanceMenu';
               menu.className = 'gm-enhance-menu';
-              menu.innerHTML = `<div class="gm-enhance-item"><input type="checkbox" id="gmEnhanceFold"><span>行号折叠</span></div><div class="gm-enhance-item"><input type="checkbox" id="gmEnhanceRevertHint"><span>块撤回提示</span></div>`;
+              menu.innerHTML = `<div class="gm-enhance-item"><input type="checkbox" id="gmEnhanceFold"><span>行号折叠</span></div><div class="gm-enhance-item"><input type="checkbox" id="gmEnhanceRevertHint"><span>块撤回提示</span></div><div class=\"gm-enhance-item\"><input type=\"checkbox\" id=\"gmEnhanceBlame\"><span>作者标注</span></div>`;
               document.body.appendChild(menu);
 
               const foldCb = menu.querySelector('#gmEnhanceFold');
               const hintCb = menu.querySelector('#gmEnhanceRevertHint');
+              const blameCb = menu.querySelector('#gmEnhanceBlame');
 
               const syncChecks = () => {
                 try { if (foldCb) foldCb.checked = !!window.__gmFoldUiEnabled; } catch (e) {}
                 try { if (hintCb) hintCb.checked = !!window.__gmRevertBlockHintEnabled; } catch (e) {}
+                try { if (blameCb) blameCb.checked = !!window.__gmBlameEnabled; } catch (e) {}
               };
 
               const applyBtnState = () => {
                 try {
                   if (!btn || !btn.classList) return;
-                  if (window.__gmFoldUiEnabled || window.__gmRevertBlockHintEnabled) btn.classList.add('on');
+                  if (window.__gmFoldUiEnabled || window.__gmRevertBlockHintEnabled || window.__gmBlameEnabled) btn.classList.add('on');
                   else btn.classList.remove('on');
                 } catch (e) {}
               };
@@ -8421,6 +8450,41 @@ flex-shrink:0;cursor:pointer;
                 }, true);
               }
 
+              if (blameCb) {
+                try {
+                  const v = localStorage.getItem('gm_blame_enabled');
+                  const init = (v && String(v).toLowerCase() !== '0' && String(v).toLowerCase() !== 'false' && String(v).toLowerCase() !== 'off');
+                  window.__gmBlameEnabled = !!init;
+                } catch (e) { window.__gmBlameEnabled = false; }
+                blameCb.addEventListener('change', async (e) => {
+                  try { e.stopPropagation(); } catch (e2) {}
+                  try {
+                    window.__gmBlameEnabled = !!blameCb.checked;
+                    try { localStorage.setItem('gm_blame_enabled', window.__gmBlameEnabled ? '1' : '0'); } catch (e3) {}
+                    applyBtnState();
+                    // If editor mode is open, refresh gutter; else rerender diff
+                    try {
+                      if (window.__plainEditorFilename && typeof window.__gmPlainRenderGutter === 'function') {
+                        if (document.querySelector('.plain-editor-container')) {
+                          document.querySelector('.plain-editor-container').classList.toggle('show-blame', !!window.__gmBlameEnabled);
+                        }
+                        await window.__gmPlainRenderGutter();
+                      } else {
+                        // trigger load blame (async) and rerender current diff
+                        if (curFile !== null && files && files[curFile]) {
+                          const f = files[curFile];
+                          try { window.__gmBlameCache = window.__gmBlameCache || new Map(); } catch(e4){}
+                          try { window.__gmBlameCache.delete && window.__gmBlameCache.delete(f.path); } catch(e5){}
+                          const changeLocations = buildChangeLocationsFromHunks(curHunks || []);
+                          renderDiffWithFullContext(f, curHunks || [], false, changeLocations);
+                        }
+                      }
+                    } catch (eR) {}
+                  } catch (e0) {}
+                  try { syncChecks(); } catch (e0) {}
+                }, true);
+              }
+
               try {
                 menu.addEventListener('mouseenter', () => {
                   try { if (hideT) clearTimeout(hideT); } catch (e0) {}
@@ -8451,8 +8515,10 @@ flex-shrink:0;cursor:pointer;
                 try {
                   const foldCb = menu.querySelector('#gmEnhanceFold');
                   const hintCb = menu.querySelector('#gmEnhanceRevertHint');
+                  const blameCb = menu.querySelector('#gmEnhanceBlame');
                   if (foldCb) foldCb.checked = !!window.__gmFoldUiEnabled;
                   if (hintCb) hintCb.checked = !!window.__gmRevertBlockHintEnabled;
+                  if (blameCb) blameCb.checked = !!window.__gmBlameEnabled;
                 } catch (e0) {}
               } catch (e) {}
             };
@@ -21253,6 +21319,87 @@ flex-shrink:0;cursor:pointer;
 
   function renderDiffWithFullContext(file, hunks, readonly, changeLocations = []) {
     const view = document.getElementById('diffView');
+    // Blame helpers (right/current side only)
+    let blame = null;
+    const blameCache = (() => { try { if (!window.__gmBlameCache) window.__gmBlameCache = new Map(); return window.__gmBlameCache; } catch (e) { return null; } })();
+    const isBlameEnabled = () => {
+      try {
+        if (typeof window.__gmBlameEnabled === 'boolean') return !!window.__gmBlameEnabled;
+      } catch (e) {}
+      try {
+        const v = localStorage.getItem('gm_blame_enabled');
+        const on = !!(v && String(v).toLowerCase() !== '0' && String(v).toLowerCase() !== 'false' && String(v).toLowerCase() !== 'off');
+        try { window.__gmBlameEnabled = on; } catch (e2) {}
+        return on;
+      } catch (e3) {
+        return false;
+      }
+    };
+    const ensureBlameAsync = () => {
+      try {
+        if (!isBlameEnabled() || !file || !file.path || !blameCache) return;
+        const key = String(file.path||'');
+        const cached = blameCache.get(key);
+        if (cached && Array.isArray(cached.lines)) { blame = cached; return; }
+        // fetch asynchronously and schedule a rerender when ready
+        (async () => {
+          try {
+            const res = await POST('/api/blame', { path: key });
+            if (res && res.ok && Array.isArray(res.lines)) {
+              blameCache.set(key, res);
+              // Re-render current diff once after blame arrives
+              window.__gmAfterDiffRenderHook = () => {
+                try {
+                  const changeLocations2 = buildChangeLocationsFromHunks(hunks || []);
+                  renderDiffWithFullContext(file, hunks || [], readonly, changeLocations2);
+                } catch (e) {}
+              };
+            }
+          } catch (e) {}
+        })();
+      } catch (e) {}
+    };
+    const blameText = (lineNo) => {
+      try {
+        if (!lineNo) return '';
+        const data = blame || (blameCache && file && blameCache.get(String(file.path||''))) || null;
+        if (!data || !Array.isArray(data.lines)) return '';
+        const i = Math.max(1, Number(lineNo||0)) - 1;
+        const rec = data.lines[i];
+        if (!rec) return '';
+        const au = String(rec.author || '');
+        return au;
+      } catch (e) { return ''; }
+    };
+    const blameTitle = (lineNo) => {
+      try {
+        if (!lineNo) return '';
+        const data = blame || (blameCache && file && blameCache.get(String(file.path||''))) || null;
+        if (!data || !Array.isArray(data.lines)) return '';
+        const i = Math.max(1, Number(lineNo||0)) - 1;
+        const rec = data.lines[i];
+        if (!rec) return '';
+        let dt = '';
+        try {
+          const raw = String(rec.author_date || rec.authorDate || rec.author_time || rec.authorTime || '');
+          if (/^\d{4}-\d{2}-\d{2}/.test(raw)) {
+            dt = raw.slice(0,10);
+          } else if (/^\d{10}(?:\d{3})?$/.test(raw)) {
+            const ms = raw.length > 10 ? Number(raw) : Number(raw) * 1000;
+            const d = new Date(ms);
+            if (!isNaN(d.getTime())) dt = d.toISOString().slice(0,10);
+          } else if (raw) {
+            const d = new Date(raw);
+            if (!isNaN(d.getTime())) dt = d.toISOString().slice(0,10);
+          }
+        } catch (e2) { dt = ''; }
+        const au = String(rec.author || '');
+        const su = String(rec.summary || '');
+        const head = `${dt ? (dt + ' ') : ''}${au}`.trim();
+        return su ? `${head} · ${su}` : head;
+      } catch (e) { return ''; }
+    };
+    try { ensureBlameAsync(); } catch (e) {}
 
     const __gmIsRevertHintEnabled = () => {
       try { return !!window.__gmRevertBlockHintEnabled; } catch (e) { return false; }
@@ -21650,7 +21797,15 @@ flex-shrink:0;cursor:pointer;
           }
 
           const lsHtml = (columnType === 'left') ? '' : `<span class="ls" contenteditable="false">${s}</span>`;
-          return `<div class="dl ${line.type}"${lineIdAttr}${editIdAttr}>${actions}${lsHtml}<span class="ln" contenteditable="false">${line.num||''}</span><span${lcAttrs}>${cellText}</span></div>`;
+          const lnVal = Number(ctl && ctl.num ? ctl.num : line.num || 0);
+          const blameOn = (columnType === 'right') ? !!isBlameEnabled() : false;
+          const authorText = (columnType === 'right' && blameOn) ? String(blameText(lnVal) || '') : '';
+          const tipText = (columnType === 'right' && blameOn) ? String(blameTitle(lnVal) || '') : '';
+          const jsTip = (columnType === 'right' && tipText) ? escJsString(tipText) : '';
+          const tipAttrs = (columnType === 'right') ? (jsTip ? ` data-tip="${escHtmlAttr(tipText)}" onmouseenter="showDiffTooltip('${jsTip}', event)" onmousemove="moveDiffTooltip(event)" onmouseleave="hideDiffTooltip()"` : '') : '';
+          const lb = (columnType === 'right' && blameOn) ? `<span class="lb" contenteditable="false"${tipAttrs}>${esc(authorText)}</span>` : '';
+          const hasLbClass = (columnType === 'right' && blameOn) ? ' has-lb' : '';
+          return `<div class="dl ${line.type}${hasLbClass}"${lineIdAttr}${editIdAttr}>${actions}${lsHtml}<span class="ln" contenteditable="false">${line.num||''}</span>${lb}<span${lcAttrs}>${cellText}</span></div>`;
         };
 
         const renderHintRow = (columnType, count, showBtn, hunkIndex, startIdx, endIdx) => {
@@ -21969,10 +22124,18 @@ flex-shrink:0;cursor:pointer;
 
         const ln = (line.type === 'removed' || (line.type === 'context' && (!R || R.type === 'empty'))) ? __nn(L && L.num, __nn(line.num, '')) : __nn(R && R.num, __nn(line.num, ''));
 
-        return `<div class="dl ${line.type}"${lineIdAttr}${editIdAttr}${origAttr}>
+        const blameOn = !!isBlameEnabled();
+        const authorText = blameOn ? String(blameText(ln) || '') : '';
+        const tipText = blameOn ? String(blameTitle(ln) || '') : '';
+        const jsTip = tipText ? escJsString(tipText) : '';
+        const tipAttrs = jsTip ? ` data-tip="${escHtmlAttr(tipText)}" onmouseenter="showDiffTooltip('${jsTip}', event)" onmousemove="moveDiffTooltip(event)" onmouseleave="hideDiffTooltip()"` : '';
+        const lb = blameOn ? `<span class="lb" contenteditable="false"${tipAttrs}>${esc(authorText)}</span>` : '';
+        const hasLbClass = blameOn ? ' has-lb' : '';
+        return `<div class="dl ${line.type}${hasLbClass}"${lineIdAttr}${editIdAttr}${origAttr}>
         <span class="dl-actions" contenteditable="false">${revertBtn}</span>
         <span class="ls" contenteditable="false">${s}</span>
         <span class="ln" contenteditable="false">${ln || ''}</span>
+        ${lb}
         <span${lcAttrs}>${content}</span>
       </div>`;
       };
@@ -28490,7 +28653,29 @@ flex-shrink:0;cursor:pointer;
       onScroll: null,
     };
 
-    const renderGutter = () => {
+    // Blame state and helpers
+    let __gmBlameData = null;
+    let __gmBlameEnabled = false;
+    const blameKey = 'gm_blame_enabled';
+    const loadBlamePref = () => {
+      try { const v = localStorage.getItem(blameKey); if (v===null||v===undefined||v==='') return false; const s=String(v).toLowerCase(); return (s==='1'||s==='true'||s==='on'); } catch(e){ return false; }
+    };
+    const saveBlamePref = (b) => { try { localStorage.setItem(blameKey, b ? '1':'0'); } catch(e){} };
+
+    const ensureBlameLoaded = async () => {
+      if (!__gmBlameEnabled) return;
+      if (__gmBlameData && Array.isArray(__gmBlameData.lines)) return;
+      try {
+        const p = String(window.__plainEditorFilename || filename || '');
+        if (!p) return;
+        const res = await POST('/api/blame', { path: p });
+        if (res && res.ok && Array.isArray(res.lines)) {
+          __gmBlameData = res;
+        }
+      } catch (e) {}
+    };
+
+    const renderGutter = async () => {
       if (!gutter || !ta) return;
 
       const n = getLineCount(ta.value);
@@ -28498,8 +28683,30 @@ flex-shrink:0;cursor:pointer;
 
       if (!useVirtual) {
         __gmPlainGutterVirtual.enabled = false;
+        if (__gmBlameEnabled) { await ensureBlameLoaded(); }
         let html = '';
-        for (let i = 1; i <= n; i++) html += `<div class="n">${i}</div>`;
+        for (let i = 1; i <= n; i++) {
+          const b = (__gmBlameEnabled && __gmBlameData && Array.isArray(__gmBlameData.lines)) ? (__gmBlameData.lines[i-1] || null) : null;
+          let dt = '';
+          if (b) {
+            try {
+              const raw = String(b.author_date || b.author_datetime || b.author_time || b.authorTime || '');
+              if (/^\d{4}-\d{2}-\d{2}/.test(raw)) {
+                dt = raw.slice(0,10);
+              } else if (b.author_time_unix && /^\d+$/.test(String(b.author_time_unix))) {
+                const ms = String(b.author_time_unix).length > 10 ? Number(b.author_time_unix) : Number(b.author_time_unix) * 1000;
+                const d = new Date(ms);
+                if (!isNaN(d.getTime())) dt = d.toISOString().slice(0,10);
+              } else if (raw) {
+                const d = new Date(raw);
+                if (!isNaN(d.getTime())) dt = d.toISOString().slice(0,10);
+              }
+            } catch (e) { dt = ''; }
+          }
+          const tip = b ? `${dt ? (dt + ' ') : ''}${b.author} · ${b.summary}`.replace(/"/g,'&quot;') : '';
+          const text = b ? `${b.author}` : '';
+          html += `<div class="n" title="${tip}">${i}${b?`<span class=\"b\">${esc(text)}</span>`:''}</div>`;
+        }
         gutter.innerHTML = html;
         return;
       }
@@ -28528,7 +28735,7 @@ flex-shrink:0;cursor:pointer;
       const lh = __gmPlainGutterVirtual.lineHeight;
       const buffer = 30;
 
-      const update = () => {
+      const update = async () => {
         try {
           const top = Number(dv.scrollTop || 0);
           if (Math.abs(top - __gmPlainGutterVirtual.lastTop) < 4) return;
@@ -28546,8 +28753,30 @@ flex-shrink:0;cursor:pointer;
           __gmPlainGutterVirtual.lastFrom = from;
           __gmPlainGutterVirtual.lastTo = to;
 
+          if (__gmBlameEnabled) { await ensureBlameLoaded(); }
           let html = '';
-          for (let i = from; i <= to; i++) html += `<div class="n">${i}</div>`;
+          for (let i = from; i <= to; i++) {
+            const b = (__gmBlameEnabled && __gmBlameData && Array.isArray(__gmBlameData.lines)) ? (__gmBlameData.lines[i-1] || null) : null;
+            let dt = '';
+            if (b) {
+              try {
+                const raw = String(b.author_date || b.author_datetime || b.author_time || b.authorTime || '');
+                if (/^\d{4}-\d{2}-\d{2}/.test(raw)) {
+                  dt = raw.slice(0,10);
+                } else if (b.author_time_unix && /^\d+$/.test(String(b.author_time_unix))) {
+                  const ms = String(b.author_time_unix).length > 10 ? Number(b.author_time_unix) : Number(b.author_time_unix) * 1000;
+                  const d = new Date(ms);
+                  if (!isNaN(d.getTime())) dt = d.toISOString().slice(0,10);
+                } else if (raw) {
+                  const d = new Date(raw);
+                  if (!isNaN(d.getTime())) dt = d.toISOString().slice(0,10);
+                }
+              } catch (e) { dt = ''; }
+            }
+            const tip = b ? `${dt ? (dt + ' ') : ''}${b.author} · ${b.summary}`.replace(/"/g,'&quot;') : '';
+            const text = b ? `${b.author}` : '';
+            html += `<div class=\"n\" title=\"${tip}\">${i}${b?`<span class=\\\"b\\\">${esc(text)}</span>`:''}</div>`;
+          }
           inner.innerHTML = html;
           try { inner.style.transform = `translateY(${(from - 1) * lh}px)`; } catch (e) {}
 
@@ -29057,6 +29286,15 @@ flex-shrink:0;cursor:pointer;
     };
 
     if (ta) {
+      // init blame toggle state
+      try {
+        // Prefer global setting from enhance menu; else read localStorage
+        try { if (typeof window.__gmBlameEnabled === 'boolean') __gmBlameEnabled = !!window.__gmBlameEnabled; } catch(e0) {}
+        if (!__gmBlameEnabled) { __gmBlameEnabled = !!loadBlamePref(); }
+        const cont = document.querySelector('.plain-editor-container');
+        if (cont) cont.classList.toggle('show-blame', __gmBlameEnabled);
+      } catch (e) {}
+
       renderGutter();
       syncScroll();
       try { ta.focus({ preventScroll: true }); } catch (e) { try { ta.focus(); } catch (e2) {} }

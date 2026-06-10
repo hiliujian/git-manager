@@ -19,7 +19,8 @@ import py_compile
 import ssl
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs, unquote
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+import re
 try:
     from websockets.sync.server import serve as ws_serve, ServerConnection
     WEBSOCKET_AVAILABLE = True
@@ -12041,6 +12042,94 @@ class Handler(BaseHTTPRequestHandler):
                     "full_hash": new_head_full,
                     "hash": new_head_full[:7] if new_head_full else "",
                 })
+
+            elif p == "/api/blame":
+                logger.info("处理 /api/blame 请求")
+                if not self._require_repo():
+                    return
+                rel = (data.get("path") or "").strip().replace("\\", "/").lstrip("/")
+                if not rel:
+                    self.send_json({"error": "缺少 path"}, 400)
+                    return
+                # Ensure file exists in repo
+                full = _safe_repo_abspath(rel)
+                if not full or (not os.path.exists(full)):
+                    self.send_json({"error": "文件不存在"}, 404)
+                    return
+                # Use line-porcelain for structured blame output
+                out, err, code = run_git(["blame", "--line-porcelain", "--", rel], timeout=120)
+                if code != 0:
+                    self.send_json({"error": err or out or "blame 失败"}, 400)
+                    return
+                lines = []
+                cur = {
+                    "hash": "",
+                    "author": "",
+                    "author_mail": "",
+                    "author_time": "",
+                    "author_time_unix": None,
+                    "author_tz": "",
+                    "author_date": "",
+                    "author_datetime": "",
+                    "summary": "",
+                }
+                ln = 0
+                for raw in (out or "").splitlines():
+                    if not raw:
+                        continue
+                    if raw[0] != '\t':
+                        # header line(s)
+                        parts = raw.split(' ')
+                        if len(parts) >= 1 and re.fullmatch(r"[0-9a-f]{8,40}", parts[0].strip() or ""):
+                            # commit sha header line; when a new group starts, cur applies to next content line
+                            cur["hash"] = parts[0].strip()
+                        elif raw.startswith("author "):
+                            cur["author"] = raw[7:].strip()
+                        elif raw.startswith("author-mail "):
+                            cur["author_mail"] = raw[12:].strip()
+                        elif raw.startswith("author-time "):
+                            try:
+                                ts = int(raw[12:].strip())
+                                cur["author_time_unix"] = ts
+                                cur["author_time"] = datetime.utcfromtimestamp(ts).isoformat() + "Z"
+                            except Exception:
+                                cur["author_time"] = ""
+                                cur["author_time_unix"] = None
+                        elif raw.startswith("author-tz "):
+                            # timezone like +0800
+                            cur["author_tz"] = raw[10:].strip()
+                            try:
+                                ts = cur.get("author_time_unix")
+                                tzs = cur.get("author_tz") or ""
+                                if isinstance(ts, int) and tzs and len(tzs) >= 5 and (tzs[0] in "+-"):
+                                    sign = 1 if tzs[0] == '+' else -1
+                                    hh = int(tzs[1:3])
+                                    mm = int(tzs[3:5])
+                                    offset = timedelta(hours=hh, minutes=mm) * sign
+                                    tzinfo = timezone(offset)
+                                    dt = datetime.fromtimestamp(ts, tz=tzinfo)
+                                    cur["author_date"] = dt.strftime("%Y-%m-%d")
+                                    cur["author_datetime"] = dt.strftime("%Y-%m-%d %H:%M:%S ") + tzs
+                            except Exception:
+                                pass
+                        elif raw.startswith("summary "):
+                            cur["summary"] = raw[8:].strip()
+                        continue
+                    # content line: emit a record tied to current header
+                    ln += 1
+                    lines.append({
+                        "no": ln,
+                        "hash": (cur.get("hash") or "")[:7],
+                        "author": cur.get("author") or "",
+                        "author_mail": cur.get("author_mail") or "",
+                        "author_time": cur.get("author_time") or "",
+                        "author_time_unix": cur.get("author_time_unix"),
+                        "author_tz": cur.get("author_tz") or "",
+                        "author_date": cur.get("author_date") or "",
+                        "author_datetime": cur.get("author_datetime") or "",
+                        "summary": cur.get("summary") or "",
+                    })
+                self.send_json({"ok": True, "lines": lines})
 
             elif p == "/api/stage_file":
                 logger.info("处理 /api/stage_file 请求")
