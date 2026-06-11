@@ -376,6 +376,7 @@
               if ((!Array.isArray(m.attachments) || !m.attachments.length) && m._attMeta.some(x=>x && x.url)) {
                 m.attachments = m._attMeta.map(x=>({ name: String(x && x.name || 'file'), mime: String(x && x.mime || ''), size: Number(x && x.size || 0), url: String(x && x.url || '') }));
               }
+              
               try { __gmDbg('hydrate via content-key', { key: k.slice(0, 60), meta: (m._attMeta||[]).length, name0: (m._attMeta&&m._attMeta[0]&&m._attMeta[0].name)||'' }); } catch (eDbg2) {}
             }
             // if attachments still empty, but we have full attachments saved by content (includes inline text), restore them
@@ -1498,6 +1499,13 @@
     .plain-editor-gutter .n{ position:relative; }
     .plain-editor-gutter .n .b{ position:absolute; left:56px; right:6px; top:0; height:18px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:left; color:var(--text2); }
     [data-theme="light"] .plain-editor-gutter .n .b{ color:#6b7280; }
+    /* 作者筛选面板 */
+    .gm-author-filter{ position:fixed; z-index:9999; display:none; min-width:220px; max-width:320px; max-height:320px; overflow:auto; background:var(--bg2); border:1px solid var(--border); border-radius:8px; box-shadow:0 10px 30px rgba(0,0,0,.25); padding:8px; }
+    .gm-author-filter .row{ display:flex; align-items:center; gap:8px; padding:4px 6px; }
+    .gm-author-filter .row:hover{ background:var(--bg3); }
+    .gm-author-filter .ops{ display:flex; justify-content:space-between; gap:8px; padding:6px; border-bottom:1px dashed var(--border); margin-bottom:6px; }
+    .gm-author-filter .ops button{ font-size:12px; padding:4px 8px; border:1px solid var(--border); background:transparent; color:var(--text2); border-radius:6px; cursor:pointer; }
+    .gm-author-filter .ops button:hover{ color:var(--text); border-color:var(--text3); }
     
     @keyframes hintBounce{
       0%{transform:scale(0.8);opacity:0;}
@@ -2955,7 +2963,7 @@ flex-shrink:0;cursor:pointer;
       <div class="dtab" id="dtUnified" data-action="setDiffMode" data-mode="unified">变更视图</div>
       <div class="diff-filelabel" id="diffLabel"></div>
       <div class="row">
-        <button class="icon-btn" id="codeFoldBtn" data-action="applyCodeFolding" title="编辑增强">
+        <button class="icon-btn" id="codeFoldBtn" data-action="applyCodeFolding" title="编辑增强" onmouseenter="try{window.__gmBootstrapEnhanceMenu&&window.__gmBootstrapEnhanceMenu();}catch(e){}" onmouseover="try{window.__gmBootstrapEnhanceMenu&&window.__gmBootstrapEnhanceMenu();}catch(e){}">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M4 6h10"/>
             <path d="M4 12h6"/>
@@ -2963,6 +2971,255 @@ flex-shrink:0;cursor:pointer;
             <path d="M18 9l-3 3 3 3"/>
           </svg>
         </button>
+        <script>
+          (function(){
+            const run = () => {
+              try {
+                if (typeof window.__gmBootstrapEnhanceMenu !== 'function') {
+                  window.__gmBootstrapEnhanceMenu = function(){
+                    try { if (typeof window.__gmInitEnhanceSubmenu === 'function') window.__gmInitEnhanceSubmenu(); } catch(_){ }
+                    if (typeof window.__gmEnsureEnhanceMenu === 'function') {
+                      try { window.__gmEnsureEnhanceMenu(); } catch(_){ }
+                      return;
+                    }
+                    // Fallback: show minimal menu near the button, and retry a few times until ensure is ready
+                    try {
+                      let menu = document.getElementById('gmEnhanceMenu');
+                      if (!menu) {
+                        menu = document.createElement('div');
+                        menu.id = 'gmEnhanceMenu';
+                        menu.className = 'gm-enhance-menu';
+                        menu.innerHTML = '<div style="padding:8px 10px;color:var(--text3);font-size:12px">加载中…</div>';
+                        (document.body || document.documentElement).appendChild(menu);
+                      }
+                      const b = document.getElementById('codeFoldBtn');
+                      const r = b && b.getBoundingClientRect ? b.getBoundingClientRect() : { left: 12, bottom: 28 };
+                      menu.style.left = Math.max(8, Math.round(r.left)) + 'px';
+                      menu.style.top = Math.round(r.bottom + 8) + 'px';
+                      menu.style.display = 'block';
+                    } catch(_){ }
+                    try {
+                      window.__gmBootstrapEnhanceMenu.__tries = (window.__gmBootstrapEnhanceMenu.__tries || 0) + 1;
+                      if (window.__gmBootstrapEnhanceMenu.__tries < 60) {
+                        setTimeout(function(){
+                          try {
+                            if (typeof window.__gmInitEnhanceSubmenu === 'function') {
+                              try { window.__gmInitEnhanceSubmenu(); } catch(_){ }
+                              try { if (typeof window.__gmEnsureEnhanceMenu === 'function') window.__gmEnsureEnhanceMenu(); } catch(_){ }
+                              return;
+                            }
+                            if (typeof window.__gmEnsureEnhanceMenu === 'function') {
+                              window.__gmEnsureEnhanceMenu();
+                            }
+                          } catch(_){ }
+                        }, 50);
+                      } else {
+                        
+                      }
+                    } catch(_){ }
+                  };
+                }
+                try {
+                  window.addEventListener('pointermove', function(ev){
+                    try {
+                      const el = document.elementFromPoint ? document.elementFromPoint(ev.clientX, ev.clientY) : ev.target;
+                      const b = el && (el.id === 'codeFoldBtn' ? el : (el.closest ? el.closest('#codeFoldBtn') : null));
+                      if (b) {
+                        try { window.__gmBootstrapEnhanceMenu && window.__gmBootstrapEnhanceMenu(); } catch(_){ }
+                      }
+                    } catch(_){ }
+                  }, { capture: true, passive: true });
+                } catch(_){ }
+                // Early shim: provide a minimal ensure function so the submenu can show/hide correctly before main init
+                if (typeof window.__gmEnsureEnhanceMenu !== 'function') {
+                  window.__gmEnsureEnhanceMenu = function(){
+                    try {
+                      let menu = document.getElementById('gmEnhanceMenu');
+                      if (!menu) {
+                        menu = document.createElement('div');
+                        menu.id = 'gmEnhanceMenu';
+                        menu.className = 'gm-enhance-menu';
+                        // Build a functional menu right away so we don't depend on late init
+                        menu.innerHTML = '<div class="gm-enhance-item"><input type="checkbox" id="gmEnhanceFold"><span>行号折叠</span></div><div class="gm-enhance-item"><input type="checkbox" id="gmEnhanceRevertHint"><span>块撤回提示</span></div><div class="gm-enhance-item"><input type="checkbox" id="gmEnhanceBlame"><span>作者标注</span><button id="gmAuthorFilterBtn" style="margin-left:6px;font-size:11px;line-height:1;height:18px;padding:0 6px;border:1px solid var(--border);background:transparent;color:var(--text2);border-radius:6px;cursor:pointer;">筛选</button></div>';
+                        (document.body || document.documentElement).appendChild(menu);
+                      }
+                      if (!menu.__gmEarlyBound) {
+                        menu.__gmEarlyBound = true;
+                        menu.__hideT = 0;
+                        const clearHide = function(){ try { if (menu.__hideT) { clearTimeout(menu.__hideT); menu.__hideT = 0; } } catch(_){} };
+                        const scheduleHide = function(){ try { if (menu.__hideT) clearTimeout(menu.__hideT); menu.__hideT = setTimeout(function(){ try { menu.style.display = 'none'; } catch(_){} }, 500); } catch(_){} };
+                        // Entering the menu cancels hide immediately
+                        menu.addEventListener('mouseenter', clearHide);
+                        menu.addEventListener('pointerenter', clearHide, true);
+                        menu.addEventListener('mouseleave', function(){
+                          try { scheduleHide(); } catch(_){}
+                        });
+                        try {
+                          const b = document.getElementById('codeFoldBtn');
+                          if (b && !b.__gmEarlyHide) {
+                            b.__gmEarlyHide = true;
+                            b.addEventListener('mouseleave', function(){
+                              try { scheduleHide(); } catch(_){}
+                            }, true);
+                            // Entering the button also cancels hide (for bouncing near the edge)
+                            b.addEventListener('mouseenter', clearHide, true);
+                            b.addEventListener('pointerenter', clearHide, true);
+                          }
+                        } catch(_){ }
+                        // Early shim: also bind controls here; guarded by __gmEarlyBound to avoid duplicate handlers.
+                        try {
+                          const foldCb = menu.querySelector('#gmEnhanceFold');
+                          const hintCb = menu.querySelector('#gmEnhanceRevertHint');
+                          const blameCb = menu.querySelector('#gmEnhanceBlame');
+                  try {
+                    const v = localStorage.getItem('gm_blame_enabled');
+                    const s = v == null ? '' : String(v).toLowerCase();
+                    const on = (s === '1' || s === 'true' || s === 'on');
+                    try { window.__gmBlameEnabled = !!on; } catch(_){ }
+                  } catch(_){ }
+                          // Establish default states without adding listeners
+                          if (typeof window.__gmFoldUiEnabled === 'undefined') window.__gmFoldUiEnabled = false;
+                          if (typeof window.__gmRevertBlockHintEnabled === 'undefined') window.__gmRevertBlockHintEnabled = false;
+                          try {
+                            if (typeof window.__gmBlameEnabled === 'undefined') {
+                              const v = String(localStorage.getItem('gm_blame_enabled') || '').toLowerCase();
+                              // Default OFF unless explicitly enabled
+                              window.__gmBlameEnabled = (v === '1' || v === 'true' || v === 'on');
+                            }
+                          } catch(_) { if (typeof window.__gmBlameEnabled === 'undefined') window.__gmBlameEnabled = false; }
+                          if (foldCb) foldCb.checked = !!window.__gmFoldUiEnabled;
+                          if (hintCb) hintCb.checked = !!window.__gmRevertBlockHintEnabled;
+                          if (blameCb) blameCb.checked = !!window.__gmBlameEnabled;
+                          // Early-bind change handlers so state persists even before main init completes
+                          const applyBtnState = () => {
+                            try {
+                              const b2 = document.getElementById('codeFoldBtn');
+                              if (!b2 || !b2.classList) return;
+                              if (window.__gmFoldUiEnabled || window.__gmRevertBlockHintEnabled || window.__gmBlameEnabled) b2.classList.add('on');
+                              else b2.classList.remove('on');
+                            } catch (e) {}
+                          };
+
+                          if (foldCb && !foldCb.__gmEarlyBound) {
+                            foldCb.__gmEarlyBound = true;
+                            const onFoldToggle = async (e) => {
+                              try { if (e && e.stopPropagation) e.stopPropagation(); } catch(_) {}
+                              try {
+                                window.__gmFoldUiEnabled = !!foldCb.checked;
+                                try { localStorage.setItem('gm_fold_ui_enabled', window.__gmFoldUiEnabled ? '1' : '0'); } catch(_) {}
+                                applyBtnState();
+                                if (window.__gmFoldUiEnabled) {
+                                  try { if (typeof window.__gmApplyCodeFolding === 'function') window.__gmApplyCodeFolding(true); } catch(_) {}
+                                } else {
+                                  try {
+                                    const host = document.getElementById('diffView');
+                                    if (host) {
+                                      host.querySelectorAll('.gm-fold-inline, .gm-fold-hint').forEach(el => { try { el.remove(); } catch (_) {} });
+                                      host.querySelectorAll('.dl').forEach(dl => { try { dl.style.display = ''; } catch (_) {} });
+                                    }
+                                  } catch(_) {}
+                                }
+                              } catch(_) {}
+                            };
+                            foldCb.addEventListener('click', onFoldToggle, true);
+                            foldCb.addEventListener('input', onFoldToggle, true);
+                            foldCb.addEventListener('change', onFoldToggle, true);
+                          }
+
+                          if (hintCb && !hintCb.__gmEarlyBound) {
+                            hintCb.__gmEarlyBound = true;
+                            const onHintToggle = (e) => {
+                              try { if (e && e.stopPropagation) e.stopPropagation(); } catch(_) {}
+                              try {
+                                window.__gmRevertBlockHintEnabled = !!hintCb.checked;
+                                try { localStorage.setItem('gm_revert_block_hint_enabled', window.__gmRevertBlockHintEnabled ? '1' : '0'); } catch(_) {}
+                                applyBtnState();
+                                // Best-effort重渲染（若相关函数已定义）
+                                try {
+                                  if (typeof renderDiffWithFullContext === 'function' && typeof buildChangeLocationsFromHunks === 'function') {
+                                    if (typeof curFile !== 'undefined' && typeof files !== 'undefined' && curFile !== null && files && files[curFile]) {
+                                      const f = files[curFile];
+                                      const changeLocations = buildChangeLocationsFromHunks(curHunks || []);
+                                      renderDiffWithFullContext(f, curHunks || [], false, changeLocations);
+                                    }
+                                  }
+                                } catch(_) {}
+                              } catch(_) {}
+                            };
+                            hintCb.addEventListener('click', onHintToggle, true);
+                            hintCb.addEventListener('input', onHintToggle, true);
+                            hintCb.addEventListener('change', onHintToggle, true);
+                          }
+
+                          if (blameCb && !blameCb.__gmEarlyBound) {
+                            blameCb.__gmEarlyBound = true;
+                            const onBlameToggle = async (e) => {
+                              try { if (e && e.stopPropagation) e.stopPropagation(); } catch(_) {}
+                              try {
+                                window.__gmBlameEnabled = !!blameCb.checked;
+                                try { localStorage.setItem('gm_blame_enabled', window.__gmBlameEnabled ? '1' : '0'); } catch(_) {}
+                                applyBtnState();
+                                // 若可用，则刷新plain编辑器gutter或重渲染diff
+                                try {
+                                  if (window.__plainEditorFilename && typeof window.__gmPlainRenderGutter === 'function') {
+                                    const cont = document.querySelector('.plain-editor-container');
+                                    if (cont) cont.classList.toggle('show-blame', !!window.__gmBlameEnabled);
+                                    await window.__gmPlainRenderGutter();
+                                  } else if (typeof renderDiffWithFullContext === 'function' && typeof buildChangeLocationsFromHunks === 'function') {
+                                    if (typeof curFile !== 'undefined' && typeof files !== 'undefined' && curFile !== null && files && files[curFile]) {
+                                      try { if (!window.__gmBlameCache) window.__gmBlameCache = new Map(); } catch(_) {}
+                                      try { if (window.__gmBlameCache && window.__gmBlameCache.delete) window.__gmBlameCache.delete(files[curFile].path); } catch(_) {}
+                                      const f = files[curFile];
+                                      const changeLocations = buildChangeLocationsFromHunks(curHunks || []);
+                                      renderDiffWithFullContext(f, curHunks || [], false, changeLocations);
+                                    }
+                                  }
+                                } catch(_) {}
+                              } catch(_) {}
+                            };
+                            blameCb.addEventListener('click', onBlameToggle, true);
+                            blameCb.addEventListener('input', onBlameToggle, true);
+                            blameCb.addEventListener('change', onBlameToggle, true);
+                          }
+                        } catch(_){ }
+                        // Hide on outside click
+                        try {
+                          document.addEventListener('click', function(ev){
+                            try {
+                              const t = ev.target;
+                              const inMenu = menu.contains(t);
+                              const isBtn = !!(t && (t.id === 'codeFoldBtn' || (t.closest && t.closest('#codeFoldBtn'))));
+                              if (!inMenu && !isBtn) menu.style.display = 'none';
+                            } catch(_){ }
+                          }, true);
+                        } catch(_){ }
+                      }
+                      const b = document.getElementById('codeFoldBtn');
+                      const r = b && b.getBoundingClientRect ? b.getBoundingClientRect() : { left: 12, bottom: 28 };
+                      menu.style.left = Math.max(8, Math.round(r.left)) + 'px';
+                      menu.style.top = Math.round(r.bottom + 8) + 'px';
+                      menu.style.display = 'block';
+                    } catch(_){ }
+                  };
+                }
+                try {
+                  const b = document.getElementById('codeFoldBtn');
+                  if (b && !b.__gmEarly) {
+                    b.__gmEarly = true;
+                    b.addEventListener('mouseenter', function(){
+                      try { window.__gmBootstrapEnhanceMenu && window.__gmBootstrapEnhanceMenu(); } catch(_){ }
+                    }, true);
+                  }
+                } catch(_){ }
+              } catch(_){ }
+            };
+            if (document.readyState === 'loading') {
+              try { document.addEventListener('DOMContentLoaded', run, { once: true }); } catch(_){ }
+            } else {
+              run();
+            }
+          })();
+        </script>
         <button class="btn" data-action="navFile" data-step="-1">‹ 上个</button>
         <button class="btn" data-action="navFile" data-step="1">下个 ›</button>
         <button class="btn red" id="revertFileBtn" style="display:none" data-action="showModal" data-modal="revertFileModal">
@@ -5904,8 +6161,8 @@ flex-shrink:0;cursor:pointer;
               if (window.__plainEditorFilename && document.getElementById('plainEditorTextarea')) return;
             } catch (e0) {}
             try {
-              const masterOn = !!window.__gmFoldUiEnabled && !!window.__gmRevertBlockHintEnabled && !!window.__gmBlameEnabled;
-              const next = !masterOn;
+              const anyOn = !!window.__gmFoldUiEnabled || !!window.__gmRevertBlockHintEnabled || !!window.__gmBlameEnabled;
+              const next = !anyOn;
               window.__gmFoldUiEnabled = next;
               window.__gmRevertBlockHintEnabled = next;
               try { window.__gmBlameEnabled = !!next; } catch (eB0) {}
@@ -8344,25 +8601,42 @@ flex-shrink:0;cursor:pointer;
         if (!window.__gmFoldStateById) window.__gmFoldStateById = new Map();
       } catch (e) {}
 
-      if (!window.__gmEnhanceSubmenuInited) {
-        window.__gmEnhanceSubmenuInited = true;
-        try {
-          const btn = document.getElementById('codeFoldBtn');
-          if (btn) {
+      try {
+        window.__gmInitEnhanceSubmenu = () => {
+          if (window.__gmEnhanceSubmenuInited) { return; }
+          try {
+            const btn = document.getElementById('codeFoldBtn');
+            if (!btn) { return; }
+            window.__gmEnhanceSubmenuInited = true;
             let hoverT = 0;
-            let hideT = 0;
-            const ensureMenu = () => {
+                        let overMenu = false; // 鼠标是否在二级菜单内
+const ensureMenu = () => {
               let menu = document.getElementById('gmEnhanceMenu');
               if (menu) return menu;
               menu = document.createElement('div');
               menu.id = 'gmEnhanceMenu';
               menu.className = 'gm-enhance-menu';
-              menu.innerHTML = `<div class="gm-enhance-item"><input type="checkbox" id="gmEnhanceFold"><span>行号折叠</span></div><div class="gm-enhance-item"><input type="checkbox" id="gmEnhanceRevertHint"><span>块撤回提示</span></div><div class=\"gm-enhance-item\"><input type=\"checkbox\" id=\"gmEnhanceBlame\"><span>作者标注</span></div>`;
+              menu.innerHTML = `<div class="gm-enhance-item"><input type="checkbox" id="gmEnhanceFold"><span>行号折叠</span></div><div class="gm-enhance-item"><input type="checkbox" id="gmEnhanceRevertHint"><span>块撤回提示</span></div><div class=\"gm-enhance-item\"><input type=\"checkbox\" id=\"gmEnhanceBlame\"><span>作者标注</span><button id=\"gmAuthorFilterBtn\" style=\"margin-left:6px;font-size:11px;line-height:1;height:18px;padding:0 6px;border:1px solid var(--border);background:transparent;color:var(--text2);border-radius:6px;cursor:pointer;\">筛选</button></div>`;
               document.body.appendChild(menu);
+              // author filter panel container
+              try {
+                const panel = document.createElement('div');
+                panel.id = 'gmAuthorFilterPanel';
+                panel.className = 'gm-author-filter';
+                panel.innerHTML = `<div class=\"ops\"><button type=\"button\" data-act=\"all\">全选</button><button type=\"button\" data-act=\"none\">全不选</button><button type=\"button\" data-act=\"invert\">反选</button></div><div class=\"list\"></div>`;
+                document.body.appendChild(panel);
+              } catch(e) {}
 
               const foldCb = menu.querySelector('#gmEnhanceFold');
               const hintCb = menu.querySelector('#gmEnhanceRevertHint');
               const blameCb = menu.querySelector('#gmEnhanceBlame');
+                  try {
+                    const v = localStorage.getItem('gm_blame_enabled');
+                    const s = v == null ? '' : String(v).toLowerCase();
+                    const on = (s === '1' || s === 'true' || s === 'on');
+                    try { window.__gmBlameEnabled = !!on; } catch(_){ }
+                  } catch(_){ }
+              const filterBtn = menu.querySelector('#gmAuthorFilterBtn');
 
               const syncChecks = () => {
                 try { if (foldCb) foldCb.checked = !!window.__gmFoldUiEnabled; } catch (e) {}
@@ -8372,11 +8646,130 @@ flex-shrink:0;cursor:pointer;
 
               const applyBtnState = () => {
                 try {
-                  if (!btn || !btn.classList) return;
-                  if (window.__gmFoldUiEnabled || window.__gmRevertBlockHintEnabled || window.__gmBlameEnabled) btn.classList.add('on');
-                  else btn.classList.remove('on');
+                  const b = document.getElementById('codeFoldBtn');
+                  if (!b || !b.classList) return;
+                  if (window.__gmFoldUiEnabled || window.__gmRevertBlockHintEnabled || window.__gmBlameEnabled) b.classList.add('on');
+                  else b.classList.remove('on');
                 } catch (e) {}
               };
+
+              const syncFilterBtnState = () => {
+                try {
+                  const fb = document.getElementById('gmAuthorFilterBtn');
+                  if (!fb) return;
+                  const blameOn = !!window.__gmBlameEnabled;
+                  let hasAuthors = false;
+                  if (blameOn) {
+                    try {
+                      const key = (curFile !== null && files && files[curFile] && files[curFile].path) ? String(files[curFile].path) : String(window.__plainEditorFilename || '');
+                      const cache = window.__gmBlameCache;
+                      const data = cache && key && cache.get ? cache.get(key) : null;
+                      hasAuthors = !!(data && Array.isArray(data.lines) && data.lines.length);
+                    } catch (e) { hasAuthors = false; }
+                  }
+                  const disabled = !blameOn || !hasAuthors;
+                  fb.disabled = !!disabled;
+                  fb.style.opacity = disabled ? '.5' : '1';
+                  fb.title = disabled ? (blameOn ? '作者正在加载，请稍后' : '请先启用作者标注') : '筛选作者行可见性';
+                } catch(e) {}
+              };
+
+              // hidden authors state: do not persist, default to all selected each time
+              try { window.__gmHiddenAuthors = new Set(); } catch(e){}
+              const loadHiddenAuthors = () => { try { window.__gmHiddenAuthors = new Set(); } catch(e){} };
+              const saveHiddenAuthors = () => { /* no-op: do not persist */ };
+
+              const rerenderForFilter = () => {
+                try {
+                  try {
+                    const host = document.getElementById('diffView');
+                    if (host) host.querySelectorAll('.revert-block-hint').forEach(n=>{ try { n.style.display = 'none'; } catch(e){} });
+                  } catch(e0){}
+                  if (curFile !== null && files && files[curFile]) {
+                    const f = files[curFile];
+                    const changeLocations = buildChangeLocationsFromHunks(curHunks || []);
+                    renderDiffWithFullContext(f, curHunks || [], false, changeLocations);
+                  }
+                } catch(e){}
+              };
+
+              const openAuthorPanel = (anchorEl) => {
+                try {
+                  const panel = document.getElementById('gmAuthorFilterPanel');
+                  if (!panel) return;
+                  // collect authors from blame cache of current file (or plain editor file)
+                  let authors = [];
+                  try {
+                    const key = (curFile !== null && files && files[curFile] && files[curFile].path) ? String(files[curFile].path) : String(window.__plainEditorFilename || '');
+                    const cache = window.__gmBlameCache;
+                    if (cache && key && cache.get) {
+                      const data = cache.get(key);
+                      if (data && Array.isArray(data.lines)) {
+                        const s = new Set();
+                        for (const r of data.lines) { if (r && r.author) s.add(String(r.author)); }
+                        authors = Array.from(s).sort((a,b)=>a.localeCompare(b));
+                      }
+                    }
+                  } catch(e){}
+                  const list = panel.querySelector('.list');
+                  if (list) {
+                    const sel = window.__gmHiddenAuthors || new Set();
+                    list.innerHTML = authors.map(a=>{
+                      const hidden = sel.has(a);
+                      return `<label class=\"row\"><input type=\"checkbox\" data-author=\"${a.replace(/"/g,'&quot;')}\" ${hidden? '' : 'checked'}> <span>${a.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</span></label>`;
+                    }).join('') || `<div style=\"padding:6px;color:var(--text3)\">无作者数据（请先启用作者标注加载一次）</div>`;
+                  }
+                  const bb = anchorEl && anchorEl.getBoundingClientRect ? anchorEl.getBoundingClientRect() : {left:20, top:20, height:24};
+                  panel.style.left = Math.max(8, Math.min(window.innerWidth - 260, bb.left)) + 'px';
+                  panel.style.top = (bb.top + bb.height + 8) + 'px';
+                  panel.style.display = 'block';
+                  // click handling inside panel
+                  panel.onclick = (ev)=>{
+                    const t = ev.target;
+                    if (!t) return;
+                    const act = t.getAttribute && t.getAttribute('data-act');
+                    if (act === 'all') {
+                      window.__gmHiddenAuthors = new Set();
+                      rerenderForFilter();
+                      openAuthorPanel(anchorEl);
+                      return;
+                    }
+                    if (act === 'none') {
+                      const all = Array.from(panel.querySelectorAll('input[type="checkbox"][data-author]')).map(x=>x.getAttribute('data-author'));
+                      window.__gmHiddenAuthors = new Set(all);
+                      rerenderForFilter();
+                      openAuthorPanel(anchorEl);
+                      return;
+                    }
+                    if (act === 'invert') {
+                      const all = Array.from(panel.querySelectorAll('input[type="checkbox"][data-author]')).map(x=>x.getAttribute('data-author'));
+                      const cur = window.__gmHiddenAuthors || new Set();
+                      const next = new Set();
+                      for (const a of all) { if (!cur.has(a)) next.add(a); }
+                      window.__gmHiddenAuthors = next;
+                      rerenderForFilter();
+                      openAuthorPanel(anchorEl);
+                      return;
+                    }
+                    if (t.tagName === 'INPUT' && t.type === 'checkbox' && t.hasAttribute('data-author')) {
+                      const a = String(t.getAttribute('data-author'));
+                      const hidden = !t.checked;
+                      const set = window.__gmHiddenAuthors || new Set();
+                      if (hidden) set.add(a); else set.delete(a);
+                      window.__gmHiddenAuthors = set;
+                      rerenderForFilter();
+                    }
+                  };
+                } catch(e){}
+              };
+              const closeAuthorPanel = () => { try { const p = document.getElementById('gmAuthorFilterPanel'); if (p) p.style.display = 'none'; } catch(e){} };
+              document.addEventListener('click', (e)=>{
+                try {
+                  const p = document.getElementById('gmAuthorFilterPanel');
+                  const within = p && (p.contains(e.target) || (filterBtn && filterBtn.contains(e.target)));
+                  if (p && p.style.display === 'block' && !within) closeAuthorPanel();
+                } catch(e){}
+              }, true);
 
               const rerenderCurrent = () => {
                 try {
@@ -8453,8 +8846,11 @@ flex-shrink:0;cursor:pointer;
               if (blameCb) {
                 try {
                   const v = localStorage.getItem('gm_blame_enabled');
-                  const init = (v && String(v).toLowerCase() !== '0' && String(v).toLowerCase() !== 'false' && String(v).toLowerCase() !== 'off');
+                  const s = v == null ? '' : String(v).toLowerCase();
+                  const init = (s === '1' || s === 'true' || s === 'on');
                   window.__gmBlameEnabled = !!init;
+                  try { syncChecks(); } catch(_){ }
+                  try { applyBtnState(); } catch(_){ }
                 } catch (e) { window.__gmBlameEnabled = false; }
                 blameCb.addEventListener('change', async (e) => {
                   try { e.stopPropagation(); } catch (e2) {}
@@ -8462,6 +8858,7 @@ flex-shrink:0;cursor:pointer;
                     window.__gmBlameEnabled = !!blameCb.checked;
                     try { localStorage.setItem('gm_blame_enabled', window.__gmBlameEnabled ? '1' : '0'); } catch (e3) {}
                     applyBtnState();
+                    try { syncFilterBtnState(); } catch (eS) {}
                     // If editor mode is open, refresh gutter; else rerender diff
                     try {
                       if (window.__plainEditorFilename && typeof window.__gmPlainRenderGutter === 'function') {
@@ -8469,6 +8866,7 @@ flex-shrink:0;cursor:pointer;
                           document.querySelector('.plain-editor-container').classList.toggle('show-blame', !!window.__gmBlameEnabled);
                         }
                         await window.__gmPlainRenderGutter();
+                        try { syncFilterBtnState(); } catch (eS2) {}
                       } else {
                         // trigger load blame (async) and rerender current diff
                         if (curFile !== null && files && files[curFile]) {
@@ -8477,6 +8875,7 @@ flex-shrink:0;cursor:pointer;
                           try { window.__gmBlameCache.delete && window.__gmBlameCache.delete(f.path); } catch(e5){}
                           const changeLocations = buildChangeLocationsFromHunks(curHunks || []);
                           renderDiffWithFullContext(f, curHunks || [], false, changeLocations);
+                          try { syncFilterBtnState(); } catch (eS3) {}
                         }
                       }
                     } catch (eR) {}
@@ -8487,26 +8886,43 @@ flex-shrink:0;cursor:pointer;
 
               try {
                 menu.addEventListener('mouseenter', () => {
-                  try { if (hideT) clearTimeout(hideT); } catch (e0) {}
+                  try { overMenu = true; if (hideT) clearTimeout(hideT); } catch (e0) {}
                 });
+                menu.addEventListener('pointerenter', () => {
+                  try { overMenu = true; if (hideT) clearTimeout(hideT); } catch (e0) {}
+                }, true);
                 menu.addEventListener('mouseleave', () => {
                   try {
+                    overMenu = false;
                     if (hideT) clearTimeout(hideT);
                     hideT = setTimeout(() => {
-                      try { menu.style.display = 'none'; } catch (e0) {}
-                    }, 120);
+                      try { if (!overMenu) menu.style.display = 'none'; } catch (e0) {}
+                    }, 200);
                   } catch (e0) {}
                 });
               } catch (e0) {}
-
               try { syncChecks(); } catch (e0) {}
+              try {
+                const fb = document.getElementById('gmAuthorFilterBtn');
+                if (fb && !fb.__gmBound) {
+                  fb.__gmBound = true;
+                  fb.addEventListener('click', (e)=>{
+                    try { e.stopPropagation(); } catch(e1){}
+                    try { syncFilterBtnState(); } catch(eS) {}
+                    if (fb.disabled) return;
+                    openAuthorPanel(fb);
+                  }, true);
+                }
+              } catch(e){}
               return menu;
             };
 
-            const showMenu = () => {
+            window.__gmEnsureEnhanceMenu = () => {
               try {
-                const menu = ensureMenu();
-                const rect = btn.getBoundingClientRect();
+                const btnEl = document.getElementById('codeFoldBtn');
+                let menu = document.getElementById('gmEnhanceMenu');
+                if (!menu) menu = ensureMenu();
+                const rect = btnEl ? btnEl.getBoundingClientRect() : { left: 12, bottom: 28 };
                 try {
                   menu.style.left = `${Math.max(8, Math.round(rect.left))}px`;
                   menu.style.top = `${Math.round(rect.bottom + 8)}px`;
@@ -8516,35 +8932,147 @@ flex-shrink:0;cursor:pointer;
                   const foldCb = menu.querySelector('#gmEnhanceFold');
                   const hintCb = menu.querySelector('#gmEnhanceRevertHint');
                   const blameCb = menu.querySelector('#gmEnhanceBlame');
+                  try {
+                    const v = localStorage.getItem('gm_blame_enabled');
+                    const s = v == null ? '' : String(v).toLowerCase();
+                    const on = (s === '1' || s === 'true' || s === 'on');
+                    try { window.__gmBlameEnabled = !!on; } catch(_){ }
+                  } catch(_){ }
                   if (foldCb) foldCb.checked = !!window.__gmFoldUiEnabled;
                   if (hintCb) hintCb.checked = !!window.__gmRevertBlockHintEnabled;
                   if (blameCb) blameCb.checked = !!window.__gmBlameEnabled;
+                  try { syncFilterBtnState(); } catch (eS4) {}
                 } catch (e0) {}
               } catch (e) {}
             };
 
-            btn.addEventListener('mouseenter', () => {
-              try { if (hideT) clearTimeout(hideT); } catch (e0) {}
-              try { if (hoverT) clearTimeout(hoverT); } catch (e0) {}
-              hoverT = setTimeout(() => {
-                showMenu();
-              }, 600);
-            });
+            window.__gmShowEnhanceMenu = () => { try { window.__gmEnsureEnhanceMenu && window.__gmEnsureEnhanceMenu(); } catch(e){} };
 
-            btn.addEventListener('mouseleave', () => {
-              try { if (hoverT) clearTimeout(hoverT); } catch (e0) {}
-              try {
+            if (btn) {
+              btn.addEventListener('mouseenter', () => {
+                try { if (hideT) clearTimeout(hideT); } catch (e0) {}
+                try { if (hoverT) clearTimeout(hoverT); } catch (e0) {}
+                window.__gmShowEnhanceMenu();
+              });
+
+              btn.addEventListener('mouseleave', () => {
+                try { if (hoverT) clearTimeout(hoverT); } catch (e0) {}
+                try {
+                  const menu = document.getElementById('gmEnhanceMenu');
+                  if (!menu) return;
+                  if (hideT) clearTimeout(hideT);
+                  hideT = setTimeout(() => {
+                    try { if (!overMenu) menu.style.display = 'none'; } catch (e0) {}
+                  }, 200);
+                } catch (e0) {}
+              });
+
+              // Do NOT hijack primary click so the original master toggle continues to work.
+              // Provide a context menu (right-click) entry to open the submenu explicitly.
+              btn.addEventListener('contextmenu', (e) => {
+                try { e.preventDefault(); } catch(e0){}
+                try { e.stopPropagation(); } catch(e1){}
                 const menu = document.getElementById('gmEnhanceMenu');
-                if (!menu) return;
-                if (hideT) clearTimeout(hideT);
-                hideT = setTimeout(() => {
-                  try { menu.style.display = 'none'; } catch (e0) {}
-                }, 160);
-              } catch (e0) {}
+                if (menu && menu.style.display === 'block') {
+                  try { menu.style.display = 'none'; } catch(e2){}
+                } else {
+                  window.__gmShowEnhanceMenu();
+                }
+              }, true);
+            }
+
+            // No need for MutationObserver here since we require btn present
+          } catch (e) {}
+        };
+      } catch (e) {}
+
+      // Bootstrap: init as soon as DOM is ready, and also on first hover as fallback
+      try {
+        if (document.readyState === 'loading') {
+          document.addEventListener('DOMContentLoaded', () => { try { window.__gmInitEnhanceSubmenu && window.__gmInitEnhanceSubmenu(); } catch(e){} }, { once: true });
+        } else {
+          try { window.__gmInitEnhanceSubmenu && window.__gmInitEnhanceSubmenu(); } catch(e){}
+        }
+        // Ensure submenu can show even before full init defines helpers
+        try {
+          window.__gmBootstrapEnhanceMenu = () => {
+            try { if (typeof window.__gmInitEnhanceSubmenu === 'function') window.__gmInitEnhanceSubmenu(); } catch(e){}
+            try {
+              if (typeof window.__gmEnsureEnhanceMenu === 'function') {
+                window.__gmEnsureEnhanceMenu();
+              } else {
+                let menu = document.getElementById('gmEnhanceMenu');
+                if (!menu) {
+                  menu = document.createElement('div');
+                  menu.id = 'gmEnhanceMenu';
+                  menu.className = 'gm-enhance-menu';
+                  menu.innerHTML = '<div style="padding:8px 10px;color:var(--text3);font-size:12px">加载中…</div>';
+                  document.body.appendChild(menu);
+                }
+                menu.style.left = '12px';
+                menu.style.top = '36px';
+                menu.style.display = 'block';
+              }
+            } catch(e){}
+          };
+        } catch(_){}
+        document.addEventListener('mouseover', (ev)=>{
+          try {
+            const t = ev.target;
+            const b = t && t.closest ? t.closest('#codeFoldBtn') : null;
+            if (b) {
+              try { window.__gmBootstrapEnhanceMenu && window.__gmBootstrapEnhanceMenu(); } catch(e1){}
+            }
+          } catch (e0) {}
+        }, true);
+        // Delegated mouseenter to improve reliability on first hover after refresh
+        document.addEventListener('mouseenter', (ev)=>{
+          try {
+            const t = ev.target;
+            const b = t && t.closest ? t.closest('#codeFoldBtn') : null;
+            if (b) { try { window.__gmBootstrapEnhanceMenu && window.__gmBootstrapEnhanceMenu(); } catch(e1){} }
+          } catch (e0) {}
+        }, true);
+        // Capture pointermove as a last-resort detector (covers edge cases on first load/shadow retargeting)
+        try {
+          window.addEventListener('pointermove', (ev)=>{
+            try {
+              const el = document.elementFromPoint ? document.elementFromPoint(ev.clientX, ev.clientY) : ev.target;
+              const b = el && (el.id === 'codeFoldBtn' ? el : (el.closest ? el.closest('#codeFoldBtn') : null));
+              if (b) {
+                try { window.__gmBootstrapEnhanceMenu && window.__gmBootstrapEnhanceMenu(); } catch(_){ }
+              }
+            } catch(_){ }
+          }, { capture: true, passive: true });
+        } catch(_){ }
+        // Global shortcut: Alt+M to open enhance submenu at a default location
+        try {
+          document.addEventListener('keydown', (e) => {
+            try {
+              const altM = (e.altKey && (e.key === 'm' || e.key === 'M'));
+              if (!altM) return;
+              try { e.preventDefault(); e.stopPropagation(); } catch(e0){}
+              try { window.__gmBootstrapEnhanceMenu && window.__gmBootstrapEnhanceMenu(); } catch(e2){}
+            } catch(e3){}
+          }, true);
+        } catch(e){}
+        // Ensure submenu initializes as soon as the codeFoldBtn is injected into DOM
+        try {
+          if (!window.__gmEnhanceSubmenuInited) {
+            const mo = new MutationObserver((ml, obs)=>{
+              try {
+                const b = document.getElementById('codeFoldBtn');
+                if (b) {
+                  try { window.__gmInitEnhanceSubmenu && window.__gmInitEnhanceSubmenu(); } catch(e){}
+                  try { obs.disconnect(); } catch(e){}
+                }
+              } catch(e){}
             });
+            mo.observe(document.body || document.documentElement, { childList: true, subtree: true });
           }
-        } catch (e) {}
-      }
+        } catch(e){}
+        // Cleanup: removed periodic retry; delegated events + MutationObserver are sufficient
+      } catch (e) {}
 
       window.__gmMaybeApplyCodeFoldingAfterRender = () => {
         try {
@@ -21328,7 +21856,8 @@ flex-shrink:0;cursor:pointer;
       } catch (e) {}
       try {
         const v = localStorage.getItem('gm_blame_enabled');
-        const on = !!(v && String(v).toLowerCase() !== '0' && String(v).toLowerCase() !== 'false' && String(v).toLowerCase() !== 'off');
+        const s = v == null ? '' : String(v).toLowerCase();
+        const on = (s === '1' || s === 'true' || s === 'on');
         try { window.__gmBlameEnabled = on; } catch (e2) {}
         return on;
       } catch (e3) {
@@ -21348,12 +21877,36 @@ flex-shrink:0;cursor:pointer;
             if (res && res.ok && Array.isArray(res.lines)) {
               blameCache.set(key, res);
               // Re-render current diff once after blame arrives
-              window.__gmAfterDiffRenderHook = () => {
-                try {
-                  const changeLocations2 = buildChangeLocationsFromHunks(hunks || []);
-                  renderDiffWithFullContext(file, hunks || [], readonly, changeLocations2);
-                } catch (e) {}
-              };
+              try {
+                window.__gmAfterDiffRenderHook = () => {
+                  try {
+                    const changeLocations2 = buildChangeLocationsFromHunks(hunks || []);
+                    renderDiffWithFullContext(file, hunks || [], readonly, changeLocations2);
+                  } catch (e) {}
+                };
+              } catch(e) {}
+              // Also trigger an immediate rerender in case the previous render has already finalized
+              try {
+                const changeLocations2 = buildChangeLocationsFromHunks(hunks || []);
+                setTimeout(() => { try { renderDiffWithFullContext(file, hunks || [], readonly, changeLocations2); } catch(e){} }, 0);
+              } catch (e) {}
+              // And enable the filter button if the menu is open
+              try {
+                setTimeout(() => {
+                  try {
+                    const fb = document.getElementById('gmAuthorFilterBtn');
+                    if (fb) {
+                      const data = blameCache && blameCache.get ? blameCache.get(key) : null;
+                      const hasAuthors = !!(data && Array.isArray(data.lines) && data.lines.length);
+                      const blameOn = !!window.__gmBlameEnabled;
+                      const disabled = !blameOn || !hasAuthors;
+                      fb.disabled = !!disabled;
+                      fb.style.opacity = disabled ? '.5' : '1';
+                      fb.title = disabled ? (blameOn ? '作者正在加载，请稍后' : '请先启用作者标注') : '筛选作者行可见性';
+                    }
+                  } catch(e0){}
+                }, 0);
+              } catch(e){}
             }
           } catch (e) {}
         })();
@@ -21419,6 +21972,90 @@ flex-shrink:0;cursor:pointer;
 
     const __gmRenderTokenAlive = () => {
       try { return Number(__nn(view.__gmRenderToken, 0)) === __gmRenderToken; } catch (e) { return false; }
+    };
+
+    const __gmApplyAuthorFilterAfterRender = () => {
+      try {
+        const hidden = window.__gmHiddenAuthors || new Set();
+        const host = document.getElementById('diffView');
+        if (!hidden || hidden.size === 0) return;
+        if (!host) return;
+        // Do not force-hide revert-block-hint; keep them and rely on recomputation logic
+        const split = host.querySelector('.split-wrap');
+        if (split) {
+          const left = host.querySelector('#__gmSplitLeft');
+          const right = host.querySelector('#__gmSplitRight');
+          if (left && right) {
+            const Ls = Array.from(left.querySelectorAll('.dl'));
+            const Rs = Array.from(right.querySelectorAll('.dl'));
+            const n = Math.max(Ls.length, Rs.length);
+            for (let i = 0; i < n; i++) {
+              const l = Ls[i];
+              const r = Rs[i];
+              // Determine author from RIGHT side only (mirror-left to keep alignment)
+              let au = null;
+              try { au = (r && r.getAttribute) ? r.getAttribute('data-author') : null; } catch(_){}
+              if (!au && r) {
+                try {
+                  const lb = r.querySelector ? r.querySelector('.lb') : null;
+                  if (lb && lb.textContent) au = String(lb.textContent).trim();
+                } catch(_){}
+              }
+              const hideRight = !!(au && hidden.has(au));
+              if (r) { try { r.style.display = hideRight ? 'none' : ''; } catch(e){} }
+              if (l) { try { l.style.display = hideRight ? 'none' : ''; } catch(e){} }
+            }
+            // Post-process revert-block-hint: adjust visibility and counts based on visible CHANGED rows only
+            try {
+              for (let i = 0; i < Rs.length; i++) {
+                const r = Rs[i];
+                if (!r || !r.classList || !r.classList.contains('revert-block-hint')) continue;
+                let visibleChanged = 0;
+                for (let j = i + 1; j < Rs.length; j++) {
+                  const rr = Rs[j];
+                  if (!rr || !rr.classList) continue;
+                  if (rr.classList.contains('revert-block-hint')) break; // end of this block
+                  if (rr.classList.contains('gm-gap-hint') || rr.classList.contains('gm-fold-hint')) continue;
+                  // Only consider changed rows on the right side
+                  const isChanged = rr.classList.contains('added') || rr.classList.contains('removed') || rr.classList.contains('modified');
+                  if (!isChanged) continue;
+                  if (rr.style && rr.style.display === 'none') continue;
+                  visibleChanged++;
+                }
+                if (visibleChanged < 2) {
+                  try { r.style.display = 'none'; } catch(e){}
+                  const l = Ls[i];
+                  if (l && l.classList && l.classList.contains('revert-block-hint')) { try { l.style.display = 'none'; } catch(e){} }
+                } else {
+                  // Update counts in hint text/button to reflect visibleChanged
+                  try {
+                    const txt = r.querySelector('.hint-text');
+                    if (txt && txt.textContent) {
+                      txt.textContent = txt.textContent.replace(/（\d+行）/, `（${visibleChanged}行）`);
+                    }
+                  } catch(_){}
+                  try {
+                    const btn = r.querySelector('.hint-btn');
+                    if (btn && btn.textContent) {
+                      btn.textContent = btn.textContent.replace(/（\d+）/, `（${visibleChanged}）`);
+                    }
+                  } catch(_){}
+                }
+              }
+            } catch(e){}
+          }
+          return;
+        }
+        const unified = host.querySelector('.unified-wrap');
+        if (unified) {
+          unified.querySelectorAll('.dl[data-author]').forEach(dl => {
+            try {
+              const a = dl.getAttribute('data-author');
+              if (a && hidden.has(a)) dl.style.display = 'none';
+            } catch(e){}
+          });
+        }
+      } catch (e) {}
     };
 
     const __gmAppendPartsProgressively = (el, parts, chunkSize, done) => {
@@ -21798,14 +22435,18 @@ flex-shrink:0;cursor:pointer;
 
           const lsHtml = (columnType === 'left') ? '' : `<span class="ls" contenteditable="false">${s}</span>`;
           const lnVal = Number(ctl && ctl.num ? ctl.num : line.num || 0);
-          const blameOn = (columnType === 'right') ? !!isBlameEnabled() : false;
-          const authorText = (columnType === 'right' && blameOn) ? String(blameText(lnVal) || '') : '';
+          const blameOn = !!isBlameEnabled();
+          const authorAll = blameOn ? String(blameText(lnVal) || '') : '';
+          const authorText = (columnType === 'right' && blameOn) ? authorAll : '';
           const tipText = (columnType === 'right' && blameOn) ? String(blameTitle(lnVal) || '') : '';
           const jsTip = (columnType === 'right' && tipText) ? escJsString(tipText) : '';
           const tipAttrs = (columnType === 'right') ? (jsTip ? ` data-tip="${escHtmlAttr(tipText)}" onmouseenter="showDiffTooltip('${jsTip}', event)" onmousemove="moveDiffTooltip(event)" onmouseleave="hideDiffTooltip()"` : '') : '';
           const lb = (columnType === 'right' && blameOn) ? `<span class="lb" contenteditable="false"${tipAttrs}>${esc(authorText)}</span>` : '';
           const hasLbClass = (columnType === 'right' && blameOn) ? ' has-lb' : '';
-          return `<div class="dl ${line.type}${hasLbClass}"${lineIdAttr}${editIdAttr}>${actions}${lsHtml}<span class="ln" contenteditable="false">${line.num||''}</span>${lb}<span${lcAttrs}>${cellText}</span></div>`;
+          let hideStyle = '';
+          try { const set = window.__gmHiddenAuthors; if (set && set.size && authorAll && set.has(authorAll)) hideStyle = ' style="display:none"'; } catch(e){}
+          const authorAttr = authorAll ? ` data-author="${escHtmlAttr(authorAll)}"` : '';
+          return `<div class="dl ${line.type}${hasLbClass}"${lineIdAttr}${editIdAttr}${authorAttr}${hideStyle}>${actions}${lsHtml}<span class="ln" contenteditable="false">${line.num||''}</span>${lb}<span${lcAttrs}>${cellText}</span></div>`;
         };
 
         const renderHintRow = (columnType, count, showBtn, hunkIndex, startIdx, endIdx) => {
@@ -21880,9 +22521,33 @@ flex-shrink:0;cursor:pointer;
             const leftShowBtn = false;
             const rightShowBtn = true;
 
-            if (first && last && first.hunkIndex !== undefined && first.originalLineIndex !== undefined && last.originalLineIndex !== undefined) {
-              leftParts.push(renderHintRow('left', sameLeft.length, leftShowBtn, first.hunkIndex, first.originalLineIndex, last.originalLineIndex));
-              rightParts.push(renderHintRow('right', sameRight.length, rightShowBtn, first.hunkIndex, first.originalLineIndex, last.originalLineIndex));
+            // Recompute visible count based on author filter (right/current side only)
+            try {
+              const hidden = window.__gmHiddenAuthors || new Set();
+              const blameOn = !!isBlameEnabled();
+              let visibleCount = 0;
+              for (let idx = 0; idx < sameRight.length; idx++) {
+                const rline = sameRight[idx];
+                if (!rline) continue;
+                const n = Number(rline.num || 0);
+                if (!blameOn || !n || !hidden || hidden.size === 0) { visibleCount++; continue; }
+                try {
+                  const au = String(blameText(n) || '');
+                  if (!au || !hidden.has(au)) visibleCount++;
+                } catch(ev) { visibleCount++; }
+              }
+              if (first && last && first.hunkIndex !== undefined && first.originalLineIndex !== undefined && last.originalLineIndex !== undefined) {
+                if (visibleCount > 1) {
+                  leftParts.push(renderHintRow('left', visibleCount, leftShowBtn, first.hunkIndex, first.originalLineIndex, last.originalLineIndex));
+                  rightParts.push(renderHintRow('right', visibleCount, rightShowBtn, first.hunkIndex, first.originalLineIndex, last.originalLineIndex));
+                }
+              }
+            } catch(evc) {
+              // Fallback to previous behavior on error
+              if (first && last && first.hunkIndex !== undefined && first.originalLineIndex !== undefined && last.originalLineIndex !== undefined) {
+                leftParts.push(renderHintRow('left', sameLeft.length, leftShowBtn, first.hunkIndex, first.originalLineIndex, last.originalLineIndex));
+                rightParts.push(renderHintRow('right', sameRight.length, rightShowBtn, first.hunkIndex, first.originalLineIndex, last.originalLineIndex));
+              }
             }
           }
 
@@ -21948,6 +22613,7 @@ flex-shrink:0;cursor:pointer;
         updateAllBlockCheckboxes(view, file.path, hunks);
         setupEditableLineEditing();
         try { if (typeof window.__gmMaybeApplyCodeFoldingAfterRender === 'function') window.__gmMaybeApplyCodeFoldingAfterRender(); } catch (e) {}
+        try { __gmApplyAuthorFilterAfterRender(); } catch (e) {}
         try {
           if (typeof window.__gmAfterDiffRenderHook === 'function') {
             const fn = window.__gmAfterDiffRenderHook;
@@ -22131,7 +22797,10 @@ flex-shrink:0;cursor:pointer;
         const tipAttrs = jsTip ? ` data-tip="${escHtmlAttr(tipText)}" onmouseenter="showDiffTooltip('${jsTip}', event)" onmousemove="moveDiffTooltip(event)" onmouseleave="hideDiffTooltip()"` : '';
         const lb = blameOn ? `<span class="lb" contenteditable="false"${tipAttrs}>${esc(authorText)}</span>` : '';
         const hasLbClass = blameOn ? ' has-lb' : '';
-        return `<div class="dl ${line.type}${hasLbClass}"${lineIdAttr}${editIdAttr}${origAttr}>
+        let hideStyle = '';
+        try { const set = window.__gmHiddenAuthors; if (set && set.size && authorText && set.has(authorText)) hideStyle = ' style="display:none"'; } catch(e){}
+        const authorAttr = authorText ? ` data-author="${escHtmlAttr(authorText)}"` : '';
+        return `<div class="dl ${line.type}${hasLbClass}"${lineIdAttr}${editIdAttr}${origAttr}${authorAttr}${hideStyle}>
         <span class="dl-actions" contenteditable="false">${revertBtn}</span>
         <span class="ls" contenteditable="false">${s}</span>
         <span class="ln" contenteditable="false">${ln || ''}</span>
@@ -22195,6 +22864,7 @@ flex-shrink:0;cursor:pointer;
       applyIndeterminateCheckboxes(view);
       setupEditableLineEditing();
       try { if (typeof window.__gmMaybeApplyCodeFoldingAfterRender === 'function') window.__gmMaybeApplyCodeFoldingAfterRender(); } catch (e) {}
+      try { __gmApplyAuthorFilterAfterRender(); } catch (e) {}
     } else if (effectiveMode === 'single') {
       // 状态 U/D：单列显示（U 仅当前；D 仅原始）
       const leftLines = [];
@@ -22467,6 +23137,7 @@ flex-shrink:0;cursor:pointer;
         updateAllBlockCheckboxes(view, file.path, hunks);
         setupEditableLineEditing();
         try { if (typeof window.__gmMaybeApplyCodeFoldingAfterRender === 'function') window.__gmMaybeApplyCodeFoldingAfterRender(); } catch (e) {}
+        try { __gmApplyAuthorFilterAfterRender(); } catch (e) {}
         try {
           const first = view.querySelector('.editable-line');
           if (first && typeof first.focus === 'function') first.focus({ preventScroll: true });
@@ -30371,3 +31042,5 @@ flex-shrink:0;cursor:pointer;
 </script>
 </body>
 </html>
+
+
