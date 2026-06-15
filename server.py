@@ -1,4 +1,4 @@
-        #!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 Git Manager Backend — 完整修复版 + 完善日志系统 + WebSocket实时通信
 python3 server.py  →  http://localhost:7842
@@ -12047,15 +12047,17 @@ class Handler(BaseHTTPRequestHandler):
                 logger.info("处理 /api/blame 请求")
                 if not self._require_repo():
                     return
-                rel = (data.get("path") or "").strip().replace("\\", "/").lstrip("/")
-                if not rel:
+                raw_path = (data.get("path") or "").strip()
+                if not raw_path:
                     self.send_json({"error": "缺少 path"}, 400)
                     return
-                # Ensure file exists in repo
-                full = _safe_repo_abspath(rel)
+                # _safe_repo_abspath handles both absolute and repo-relative paths
+                full = _safe_repo_abspath(raw_path)
                 if not full or (not os.path.exists(full)):
                     self.send_json({"error": "文件不存在"}, 404)
                     return
+                # Derive the repo-relative path from the resolved absolute path
+                rel = os.path.relpath(full, os.path.abspath(REPO_PATH)).replace("\\", "/")
                 # Use line-porcelain for structured blame output
                 out, err, code = run_git(["blame", "--line-porcelain", "--", rel], timeout=120)
                 if code != 0:
@@ -12964,4 +12966,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    

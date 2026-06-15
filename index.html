@@ -1495,9 +1495,9 @@
       position:relative;
       overflow:hidden;
     }
-    .show-blame .plain-editor-gutter{ width:260px; min-width:260px; }
+    .show-blame .plain-editor-gutter{ width:160px; min-width:160px; }
     .plain-editor-gutter .n{ position:relative; }
-    .plain-editor-gutter .n .b{ position:absolute; left:56px; right:6px; top:0; height:18px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:left; color:var(--text2); }
+    .plain-editor-gutter .n .b{ position:absolute; left:52px; width:100px; top:0; height:18px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:left; color:var(--text2); font-size:10px; }
     [data-theme="light"] .plain-editor-gutter .n .b{ color:#6b7280; }
     /* 作者筛选面板 */
     .gm-author-filter{ position:fixed; z-index:9999; display:none; min-width:220px; max-width:320px; max-height:320px; overflow:auto; background:var(--bg2); border:1px solid var(--border); border-radius:8px; box-shadow:0 10px 30px rgba(0,0,0,.25); padding:8px; }
@@ -3163,7 +3163,12 @@ flex-shrink:0;cursor:pointer;
                                 try {
                                   if (window.__plainEditorFilename && typeof window.__gmPlainRenderGutter === 'function') {
                                     const cont = document.querySelector('.plain-editor-container');
-                                    if (cont) cont.classList.toggle('show-blame', !!window.__gmBlameEnabled);
+                                    if (cont) {
+                                      // Only remove show-blame class when toggling off; let ensureBlameLoaded add it when data arrives
+                                      if (!window.__gmBlameEnabled) {
+                                        cont.classList.remove('show-blame');
+                                      }
+                                    }
                                     await window.__gmPlainRenderGutter();
                                   } else if (typeof renderDiffWithFullContext === 'function' && typeof buildChangeLocationsFromHunks === 'function') {
                                     if (typeof curFile !== 'undefined' && typeof files !== 'undefined' && curFile !== null && files && files[curFile]) {
@@ -6228,7 +6233,12 @@ flex-shrink:0;cursor:pointer;
             try {
               if (window.__plainEditorFilename && typeof window.__gmPlainRenderGutter === 'function') {
                 const cont = document.querySelector('.plain-editor-container');
-                if (cont) cont.classList.toggle('show-blame', !!window.__gmBlameEnabled);
+                if (cont) {
+                  // Only remove show-blame class when toggling off; let ensureBlameLoaded add it when data arrives
+                  if (!window.__gmBlameEnabled) {
+                    cont.classList.remove('show-blame');
+                  }
+                }
                 try { window.__gmPlainRenderGutter(); } catch(eRg) {}
               } else {
                 if (curFile !== null && files && files[curFile]) {
@@ -8851,7 +8861,10 @@ const ensureMenu = () => {
                   window.__gmBlameEnabled = !!init;
                   try { syncChecks(); } catch(_){ }
                   try { applyBtnState(); } catch(_){ }
-                } catch (e) { window.__gmBlameEnabled = false; }
+                } catch (e) {
+                  // On error still read localStorage so blame state isn't silently reset to false
+                  try { const v=localStorage.getItem('gm_blame_enabled'); const s=v==null?'':String(v).toLowerCase(); window.__gmBlameEnabled=(s==='1'||s==='true'||s==='on'); } catch(_){ window.__gmBlameEnabled = false; }
+                }
                 blameCb.addEventListener('change', async (e) => {
                   try { e.stopPropagation(); } catch (e2) {}
                   try {
@@ -8862,10 +8875,17 @@ const ensureMenu = () => {
                     // If editor mode is open, refresh gutter; else rerender diff
                     try {
                       if (window.__plainEditorFilename && typeof window.__gmPlainRenderGutter === 'function') {
-                        if (document.querySelector('.plain-editor-container')) {
-                          document.querySelector('.plain-editor-container').classList.toggle('show-blame', !!window.__gmBlameEnabled);
+                        const cont = document.querySelector('.plain-editor-container');
+                        if (cont) {
+                          // Only remove show-blame class when toggling off; let ensureBlameLoaded add it when data arrives
+                          if (!window.__gmBlameEnabled) {
+                            cont.classList.remove('show-blame');
+                          }
                         }
+                        // Reset blame cache so toggling on always re-fetches
+                        try { if (window.__gmBlameEnabled) { (window.__gmPlainResetBlame || function(){})(); } } catch (_) {}
                         await window.__gmPlainRenderGutter();
+                        try { if (window.__gmBlameEnabled && typeof window.__gmPlainFetchBlameAsync === 'function') window.__gmPlainFetchBlameAsync(); } catch (_) {}
                         try { syncFilterBtnState(); } catch (eS2) {}
                       } else {
                         // trigger load blame (async) and rerender current diff
@@ -29325,28 +29345,107 @@ const ensureMenu = () => {
     };
 
     // Blame state and helpers
+    // __gmBlameData: local cache for this editor session
     let __gmBlameData = null;
-    let __gmBlameEnabled = false;
     const blameKey = 'gm_blame_enabled';
     const loadBlamePref = () => {
       try { const v = localStorage.getItem(blameKey); if (v===null||v===undefined||v==='') return false; const s=String(v).toLowerCase(); return (s==='1'||s==='true'||s==='on'); } catch(e){ return false; }
     };
-    const saveBlamePref = (b) => { try { localStorage.setItem(blameKey, b ? '1':'0'); } catch(e){} };
-
-    const ensureBlameLoaded = async () => {
-      if (!__gmBlameEnabled) return;
-      if (__gmBlameData && Array.isArray(__gmBlameData.lines)) return;
-      try {
-        const p = String(window.__plainEditorFilename || filename || '');
-        if (!p) return;
-        const res = await POST('/api/blame', { path: p });
-        if (res && res.ok && Array.isArray(res.lines)) {
-          __gmBlameData = res;
-        }
-      } catch (e) {}
+    // Always reads live state so enhance-menu toggles are reflected immediately.
+    // Mirrors diff view's isBlameEnabled pattern exactly.
+    const _isBlameOn = () => {
+      try { if (typeof window.__gmBlameEnabled === 'boolean') return window.__gmBlameEnabled; } catch (e) {}
+      return loadBlamePref();
     };
 
-    const renderGutter = async () => {
+    // Helper to format blame info for a single line
+    const __gmFormatBlameInfo = (blame) => {
+      if (!blame) return { tip: '', text: '' };
+      let dt = '';
+      try {
+        const raw = String(blame.author_date || blame.author_datetime || blame.author_time || blame.authorTime || '');
+        if (/^\d{4}-\d{2}-\d{2}/.test(raw)) {
+          dt = raw.slice(0, 10);
+        } else if (blame.author_time_unix && /^\d+$/.test(String(blame.author_time_unix))) {
+          const ms = String(blame.author_time_unix).length > 10 ? Number(blame.author_time_unix) : Number(blame.author_time_unix) * 1000;
+          const d = new Date(ms);
+          if (!isNaN(d.getTime())) dt = d.toISOString().slice(0, 10);
+        } else if (raw) {
+          const d = new Date(raw);
+          if (!isNaN(d.getTime())) dt = d.toISOString().slice(0, 10);
+        }
+      } catch (e) { dt = ''; }
+      const tip = `${dt ? (dt + ' ') : ''}${blame.author} · ${blame.summary}`.replace(/"/g, '&quot;');
+      const text = blame.author;
+      return { tip, text };
+    };
+
+    let __gmBlameFetching = false; // Flag to prevent duplicate API calls
+
+    // Ensure blame data is loaded (async, doesn't block). Mirrors diff view's pattern.
+    const ensureBlameLoaded = async () => {
+      if (!_isBlameOn()) return;
+      if (__gmBlameFetching) return; // Prevent duplicate calls
+      
+      // Use window.__plainEditorFilename directly to avoid scope issues
+      const currentFilename = window.__plainEditorFilename;
+      let p = String(currentFilename || '');
+      if (!p) return;
+      
+      // Clear previous blame data before fetching
+      __gmBlameData = null;
+      
+      // Check if file is in repo
+      const repoFile = (files || []).find(f => {
+        if (!f) return false;
+        const filePath = String(f.path || '');
+        return filePath === p || filePath.endsWith('/' + p);
+      });
+      
+      // If file is not in repo and is external, skip blame fetch and hide blame UI
+      if (!repoFile && window.__plainEditorIsExternal) {
+        const cont = document.querySelector('.plain-editor-container');
+        if (cont) cont.classList.remove('show-blame');
+        try { renderGutter(); } catch (e2) {}
+        return;
+      }
+      
+      // Build list of possible paths to try
+      const pathsToTry = [p];
+      if (repoFile) {
+        const fullPath = String(repoFile.path || '');
+        if (fullPath !== p) {
+          pathsToTry.push(fullPath);
+        }
+      }
+      
+      __gmBlameFetching = true;
+      try {
+        // Try each path until we get a successful response
+        for (const path of pathsToTry) {
+          try {
+            const res = await POST('/api/blame', { path });
+            if (res && res.ok && Array.isArray(res.lines)) {
+              __gmBlameData = res;
+              break;
+            }
+          } catch (e) {}
+        }
+      } finally {
+        __gmBlameFetching = false;
+      }
+      
+      // Update show-blame class based on whether we have blame data
+      const cont = document.querySelector('.plain-editor-container');
+      if (cont) {
+        cont.classList.toggle('show-blame', !!(__gmBlameData && Array.isArray(__gmBlameData.lines)));
+      }
+      
+      // Re-render gutter to update UI with blame data
+      try { renderGutter(); } catch (e2) {}
+    };
+
+    const renderGutter = () => {
       if (!gutter || !ta) return;
 
       const n = getLineCount(ta.value);
@@ -29354,28 +29453,10 @@ const ensureMenu = () => {
 
       if (!useVirtual) {
         __gmPlainGutterVirtual.enabled = false;
-        if (__gmBlameEnabled) { await ensureBlameLoaded(); }
         let html = '';
         for (let i = 1; i <= n; i++) {
-          const b = (__gmBlameEnabled && __gmBlameData && Array.isArray(__gmBlameData.lines)) ? (__gmBlameData.lines[i-1] || null) : null;
-          let dt = '';
-          if (b) {
-            try {
-              const raw = String(b.author_date || b.author_datetime || b.author_time || b.authorTime || '');
-              if (/^\d{4}-\d{2}-\d{2}/.test(raw)) {
-                dt = raw.slice(0,10);
-              } else if (b.author_time_unix && /^\d+$/.test(String(b.author_time_unix))) {
-                const ms = String(b.author_time_unix).length > 10 ? Number(b.author_time_unix) : Number(b.author_time_unix) * 1000;
-                const d = new Date(ms);
-                if (!isNaN(d.getTime())) dt = d.toISOString().slice(0,10);
-              } else if (raw) {
-                const d = new Date(raw);
-                if (!isNaN(d.getTime())) dt = d.toISOString().slice(0,10);
-              }
-            } catch (e) { dt = ''; }
-          }
-          const tip = b ? `${dt ? (dt + ' ') : ''}${b.author} · ${b.summary}`.replace(/"/g,'&quot;') : '';
-          const text = b ? `${b.author}` : '';
+          const b = (_isBlameOn() && __gmBlameData && Array.isArray(__gmBlameData.lines)) ? (__gmBlameData.lines[i-1] || null) : null;
+          const { tip, text } = __gmFormatBlameInfo(b);
           html += `<div class="n" title="${tip}">${i}${b?`<span class=\"b\">${esc(text)}</span>`:''}</div>`;
         }
         gutter.innerHTML = html;
@@ -29406,10 +29487,14 @@ const ensureMenu = () => {
       const lh = __gmPlainGutterVirtual.lineHeight;
       const buffer = 30;
 
-      const update = async () => {
+      const update = () => {
         try {
           const top = Number(dv.scrollTop || 0);
-          if (Math.abs(top - __gmPlainGutterVirtual.lastTop) < 4) return;
+          // Always render on first call (lastTop === -1), otherwise check scroll threshold
+          if (__gmPlainGutterVirtual.lastTop !== -1 && Math.abs(top - __gmPlainGutterVirtual.lastTop) < 4) {
+            try { inner.style.transform = `translateY(${(Math.max(0, Math.floor(top / lh) - Math.floor(buffer / 2)) * lh)}px)`; } catch (e) {}
+            return;
+          }
           __gmPlainGutterVirtual.lastTop = top;
 
           const viewLines = Math.ceil((dv.clientHeight || 0) / lh) + buffer;
@@ -29424,28 +29509,10 @@ const ensureMenu = () => {
           __gmPlainGutterVirtual.lastFrom = from;
           __gmPlainGutterVirtual.lastTo = to;
 
-          if (__gmBlameEnabled) { await ensureBlameLoaded(); }
           let html = '';
           for (let i = from; i <= to; i++) {
-            const b = (__gmBlameEnabled && __gmBlameData && Array.isArray(__gmBlameData.lines)) ? (__gmBlameData.lines[i-1] || null) : null;
-            let dt = '';
-            if (b) {
-              try {
-                const raw = String(b.author_date || b.author_datetime || b.author_time || b.authorTime || '');
-                if (/^\d{4}-\d{2}-\d{2}/.test(raw)) {
-                  dt = raw.slice(0,10);
-                } else if (b.author_time_unix && /^\d+$/.test(String(b.author_time_unix))) {
-                  const ms = String(b.author_time_unix).length > 10 ? Number(b.author_time_unix) : Number(b.author_time_unix) * 1000;
-                  const d = new Date(ms);
-                  if (!isNaN(d.getTime())) dt = d.toISOString().slice(0,10);
-                } else if (raw) {
-                  const d = new Date(raw);
-                  if (!isNaN(d.getTime())) dt = d.toISOString().slice(0,10);
-                }
-              } catch (e) { dt = ''; }
-            }
-            const tip = b ? `${dt ? (dt + ' ') : ''}${b.author} · ${b.summary}`.replace(/"/g,'&quot;') : '';
-            const text = b ? `${b.author}` : '';
+            const b = (_isBlameOn() && __gmBlameData && Array.isArray(__gmBlameData.lines)) ? (__gmBlameData.lines[i-1] || null) : null;
+            const { tip, text } = __gmFormatBlameInfo(b);
             html += `<div class=\"n\" title=\"${tip}\">${i}${b?`<span class=\\\"b\\\">${esc(text)}</span>`:''}</div>`;
           }
           inner.innerHTML = html;
@@ -29476,6 +29543,8 @@ const ensureMenu = () => {
     };
 
     try { window.__gmPlainRenderGutter = renderGutter; } catch (e) {}
+    try { window.__gmPlainFetchBlameAsync = ensureBlameLoaded; } catch (e) {}
+    try { window.__gmPlainResetBlame = () => { __gmBlameData = null; __gmBlameFetching = false; }; } catch (e) {}
 
     const syncScroll = () => {
       if (!gutter) return;
@@ -29957,16 +30026,19 @@ const ensureMenu = () => {
     };
 
     if (ta) {
-      // init blame toggle state
+      // init blame toggle state: reset cache for new file, render gutter, then
+      // kick off blame fetch in background (mirrors diff view ensureBlameAsync pattern)
       try {
-        // Prefer global setting from enhance menu; else read localStorage
-        try { if (typeof window.__gmBlameEnabled === 'boolean') __gmBlameEnabled = !!window.__gmBlameEnabled; } catch(e0) {}
-        if (!__gmBlameEnabled) { __gmBlameEnabled = !!loadBlamePref(); }
+        __gmBlameData = null; // clear stale blame from previous file
+        __gmBlameFetching = false; // reset fetching flag for new file
         const cont = document.querySelector('.plain-editor-container');
-        if (cont) cont.classList.toggle('show-blame', __gmBlameEnabled);
+        if (cont) cont.classList.remove('show-blame'); // Don't show blame UI until data is loaded
       } catch (e) {}
 
       renderGutter();
+      // Fetch blame independently so it doesn't block the initial render.
+      // ensureBlameLoaded re-calls renderGutter() once data arrives and updates show-blame class.
+      try { ensureBlameLoaded(); } catch (e) {}
       syncScroll();
       try { ta.focus({ preventScroll: true }); } catch (e) { try { ta.focus(); } catch (e2) {} }
 
@@ -31042,5 +31114,3 @@ const ensureMenu = () => {
 </script>
 </body>
 </html>
-
-
