@@ -24782,15 +24782,38 @@ flex-shrink:0;cursor:pointer;
               window.__dirtyEdits = false;
               return;
             }
-            // 保存失败（可能因频率限制等），不回滚UI，改为调度延迟重试
-            try { window.__dirtyEdits = true; } catch (e) {}
-            const delay = Number(window.__lastSaveRetryAfter || 0);
-            const ms = Number.isFinite(delay) && delay > 0 ? (delay * 1000 + 200) : 3000;
-            try { clearTimeout(window.__autoSaveTimer); } catch (e) {}
-            window.__autoSaveTimer = setTimeout(() => { try { saveFile(); } catch (e) {} }, ms);
-            toast('保存排队中…', 'info');
+            // 保存失败，回滚所有乐观更新
+            curHunks = originalHunks;
+            curFileContent = originalContent;
+            files = originalFiles;
+            commitLinesSelectedByPath.set(filepath, new Set(originalSelectedKeys));
+            commitLinesInitByPath.set(filepath, true);
+
+            if (curFile !== null && files[curFile]) {
+              const f = files[curFile];
+              const changeLocations = buildChangeLocationsFromHunks(curHunks);
+              renderDiffWithFullContext(f, curHunks, false, changeLocations);
+            }
+            renderFileList();
+            updateStats();
+            __gmToastError('撤回失败', '保存文件失败，已恢复');
           } catch (e) {
             console.error('[GM] 撤回: 立即保存失败', e);
+            // 异常时同样回滚
+            curHunks = originalHunks;
+            curFileContent = originalContent;
+            files = originalFiles;
+            commitLinesSelectedByPath.set(filepath, new Set(originalSelectedKeys));
+            commitLinesInitByPath.set(filepath, true);
+
+            if (curFile !== null && files[curFile]) {
+              const f = files[curFile];
+              const changeLocations = buildChangeLocationsFromHunks(curHunks);
+              renderDiffWithFullContext(f, curHunks, false, changeLocations);
+            }
+            renderFileList();
+            updateStats();
+            __gmToastError('撤回失败', '已恢复');
           }
         })();
       } catch (e) {}
