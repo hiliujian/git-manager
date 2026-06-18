@@ -6738,7 +6738,6 @@ flex-shrink:0;cursor:pointer;
   function __gmScrollTextareaToSelection(ta, posOverride) {
     try {
       if (!ta) return;
-      const v = String(ta.value || '');
       const pos = (posOverride !== undefined && posOverride !== null)
               ? Number(posOverride || 0)
               : Number(ta.selectionStart || 0);
@@ -6750,16 +6749,14 @@ flex-shrink:0;cursor:pointer;
         const n = parseFloat(String(lhRaw || '').replace('px',''));
         if (Number.isFinite(n) && n > 0) lh = n;
       } catch (e) {}
-      const targetTop = Math.max(0, (line - 1) * lh - Math.max(0, (ta.clientHeight - lh) / 2));
-      ta.scrollTop = targetTop;
 
-      // Plain editor uses textarea as the authoritative scroll container.
-      // Do not force-scroll the outer host (#diffView) to avoid unexpected view jumps.
-
-      try {
-        const gutter = document.getElementById('plainEditorGutter');
-        if (gutter) gutter.scrollTop = ta.scrollTop;
-      } catch (e2) {}
+      // textarea 是 overflow-y:hidden，#diffView 才是真正的滚动容器
+      const diffView = document.getElementById('diffView');
+      if (!diffView) return;
+      const lineOffsetInTa = (line - 1) * lh;
+      const taOffsetInDiffView = ta.getBoundingClientRect().top - diffView.getBoundingClientRect().top + diffView.scrollTop;
+      const targetScrollTop = Math.max(0, taOffsetInDiffView + lineOffsetInTa - (diffView.clientHeight - lh) / 2);
+      diffView.scrollTop = targetScrollTop;
     } catch (e) {}
   }
 
@@ -19303,6 +19300,14 @@ flex-shrink:0;cursor:pointer;
     try { window.__gmLastFilesError = ''; } catch (eFE1) {}
     try { __gmUpdateSelfCheckButtonState(); } catch (eS1) {}
 
+    // 在覆盖 files 之前，先用旧 files + 旧 checkedSet 记录选中的 path 集合
+    const __prevCheckedPaths = new Set();
+    try {
+      (files || []).forEach((f, i) => {
+        if (checkedSet && checkedSet.has(i) && f && f.path) __prevCheckedPaths.add(f.path);
+      });
+    } catch (e) {}
+
     files   = fRes.files  || [];
     // Apply accurate per-file stats overrides when available
     files.forEach(file => {
@@ -19355,18 +19360,10 @@ flex-shrink:0;cursor:pointer;
       }
     } catch (e) {}
 
-    // 重建 checkedSet（按 path 保留勾选，不再默认全选）
-    const checkedPaths = new Set();
-    try {
-      (files || []).forEach((f, i) => {
-        // NOTE: Here 'files' is already updated, so we rely on the previous checkedSet only.
-        // If checkedSet refers to older indices, it will be reconciled on the next WS update.
-        if (checkedSet && checkedSet.has(i) && f && f.path) checkedPaths.add(f.path);
-      });
-    } catch (e) {}
+    // 重建 checkedSet：按 path 将旧勾选状态映射到新 files 的 index
     const nextChecked = new Set();
     (files || []).forEach((f, i) => {
-      if (f && f.path && checkedPaths.has(f.path)) nextChecked.add(i);
+      if (f && f.path && __prevCheckedPaths.has(f.path)) nextChecked.add(i);
     });
     checkedSet = nextChecked;
 
@@ -24782,38 +24779,15 @@ flex-shrink:0;cursor:pointer;
               window.__dirtyEdits = false;
               return;
             }
-            // 保存失败，回滚所有乐观更新
-            curHunks = originalHunks;
-            curFileContent = originalContent;
-            files = originalFiles;
-            commitLinesSelectedByPath.set(filepath, new Set(originalSelectedKeys));
-            commitLinesInitByPath.set(filepath, true);
-
-            if (curFile !== null && files[curFile]) {
-              const f = files[curFile];
-              const changeLocations = buildChangeLocationsFromHunks(curHunks);
-              renderDiffWithFullContext(f, curHunks, false, changeLocations);
-            }
-            renderFileList();
-            updateStats();
-            __gmToastError('撤回失败', '保存文件失败，已恢复');
+            // 保存失败（可能因频率限制等），不回滚UI，改为调度延迟重试
+            try { window.__dirtyEdits = true; } catch (e) {}
+            const delay = Number(window.__lastSaveRetryAfter || 0);
+            const ms = Number.isFinite(delay) && delay > 0 ? (delay * 1000 + 200) : 3000;
+            try { clearTimeout(window.__autoSaveTimer); } catch (e) {}
+            window.__autoSaveTimer = setTimeout(() => { try { saveFile(); } catch (e) {} }, ms);
+            toast('保存排队中…', 'info');
           } catch (e) {
             console.error('[GM] 撤回: 立即保存失败', e);
-            // 异常时同样回滚
-            curHunks = originalHunks;
-            curFileContent = originalContent;
-            files = originalFiles;
-            commitLinesSelectedByPath.set(filepath, new Set(originalSelectedKeys));
-            commitLinesInitByPath.set(filepath, true);
-
-            if (curFile !== null && files[curFile]) {
-              const f = files[curFile];
-              const changeLocations = buildChangeLocationsFromHunks(curHunks);
-              renderDiffWithFullContext(f, curHunks, false, changeLocations);
-            }
-            renderFileList();
-            updateStats();
-            __gmToastError('撤回失败', '已恢复');
           }
         })();
       } catch (e) {}
