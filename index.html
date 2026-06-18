@@ -3170,6 +3170,7 @@ flex-shrink:0;cursor:pointer;
           <button class="btn red" id="revertCommitBtn" style="padding:2px 10px;display:none" title="撤回该提交（git revert），会生成一个新的回滚提交" data-action="revertCommitFromHistory">Revert</button>
           <button class="btn blue" id="pushCommitBtn" style="padding:2px 10px;display:none" title="推送当前分支" data-action="pushFromHistory">Push</button>
           <button class="btn" id="softResetCommitBtn" style="padding:2px 8px;display:none" title="撤销最近一次提交（git reset --soft），保留修改" data-action="softResetCommitFromHistory">↩</button>
+          <button class="btn" id="restoreToCommitBtn" style="padding:2px 10px;display:none" title="将工作区还原到该版本状态，当前修改会被暂存" data-action="restoreWorkspaceToCommit">还原到此版本</button>
           <span id="commitActionHint" style="color:var(--text3);font-size:11px">撤回该提交（git revert），会生成一个新的回滚提交</span>
         </div>
         <div class="log-detail-meta" id="ldMeta"></div>
@@ -5794,6 +5795,7 @@ flex-shrink:0;cursor:pointer;
           if (act === 'revertCommitFromHistory') { e.preventDefault(); revertCommitFromHistory(); return; }
           if (act === 'pushFromHistory') { e.preventDefault(); pushFromHistory(); return; }
           if (act === 'softResetCommitFromHistory') { e.preventDefault(); softResetCommitFromHistory(); return; }
+          if (act === 'restoreWorkspaceToCommit') { e.preventDefault(); restoreWorkspaceToCommit(); return; }
 
           if (act === 'newAiSession') { e.preventDefault(); newAiSession(); return; }
           if (act === 'sendAiChat') { e.preventDefault(); sendAiChat(); return; }
@@ -25901,6 +25903,7 @@ flex-shrink:0;cursor:pointer;
     const rb = document.getElementById('revertCommitBtn');
     const pb = document.getElementById('pushCommitBtn');
     const sb = document.getElementById('softResetCommitBtn');
+    const rb2 = document.getElementById('restoreToCommitBtn');
     const hint = document.getElementById('commitActionHint');
 
     // pushed === true  => show Revert, hide Push
@@ -25912,16 +25915,19 @@ flex-shrink:0;cursor:pointer;
     // Soft reset 仅用于：未 push + HEAD
     if (sb) sb.style.display = (pushed === false && isHead === true) ? '' : 'none';
 
+    // 还原到此版本：始终显示（只要有提交信息）
+    if (rb2) rb2.style.display = (pushed !== null) ? '' : 'none';
+
     // Ensure Push / ↩ disabled state is linked whenever visibility changes.
     try { __gmSyncHistoryPushSoftResetDisabled(); } catch (e) {}
 
     if (hint) {
       if (pushed === true) {
-        hint.textContent = '撤回该提交（git revert），会生成一个新的回滚提交';
+        hint.textContent = '撤回该提交（git revert），会生成一个新的回滚提交；或还原到此版本，当前修改会被暂存';
       } else if (pushed === false) {
         hint.textContent = (isHead === true)
-          ? '该提交尚未推送到远端：可 Push 同步；或用 ↩ 撤销提交（保留修改）后继续完善'
-          : '该提交尚未推送到远端，如需同步到远端请先 Push';
+          ? '该提交尚未推送到远端：可 Push 同步；或用 ↩ 撤销提交（保留修改）后继续完善；或还原到此版本'
+          : '该提交尚未推送到远端，如需同步到远端请先 Push；或还原到此版本';
       } else {
         hint.textContent = '';
       }
@@ -26334,7 +26340,7 @@ flex-shrink:0;cursor:pointer;
         await refresh();
         try { refreshSyncStatus(true); } catch (e) {}
       } else {
-        __gmToastApiError('恢复失败', res, (res && (res.msg || res.error)) ? (res.msg || res.error) : '恢复失败');
+        __gmToastApiError('重置失败', res, (res && (res.msg || res.error)) ? (res.msg || res.error) : '重置失败');
       }
     } finally {
       setButtonBusy(btnEl, false);
@@ -26540,6 +26546,304 @@ flex-shrink:0;cursor:pointer;
 
       m.classList.add('show');
     });
+  }
+
+  function afterRestoreSuccess() {
+    curFile = null;
+    curHunks = [];
+    clearDiff();
+    backToLog();
+    try { refreshSyncStatus(true); } catch (e) {}
+  }
+
+  async function showRestoreConfirmDialog(commit, diffInfo) {
+    return new Promise(resolve => {
+      const overlay = document.createElement('div');
+      overlay.className = 'overlay show';
+      overlay.style.zIndex = '10000';
+
+      const dialog = document.createElement('div');
+      dialog.className = 'confirm-dlg';
+      dialog.style.maxWidth = '600px';
+      dialog.style.position = 'relative';
+      dialog.style.zIndex = '10001';
+
+      const hash = commit.hash || commit.full_hash || '';
+      const shortHash = hash.length > 7 ? hash.slice(0, 7) : hash;
+      const msg = commit.subject || commit.message || '';
+      const author = commit.author || '';
+      const date = commit.date ? commit.date.slice(0, 16) : '';
+
+      const changedFiles = diffInfo && diffInfo.files ? diffInfo.files : [];
+      const added = diffInfo && diffInfo.added !== undefined ? diffInfo.added : 0;
+      const removed = diffInfo && diffInfo.removed !== undefined ? diffInfo.removed : 0;
+      const modified = diffInfo && diffInfo.modified !== undefined ? diffInfo.modified : 0;
+
+      let filesHtml = '';
+      if (changedFiles.length > 0) {
+        filesHtml = `
+          <div style="margin-top:12px;max-height:150px;overflow-y:auto;border-top:1px solid var(--border);padding-top:10px;">
+            <div style="font-size:12px;color:var(--text2);margin-bottom:6px;">变更文件（${changedFiles.length}个）：</div>
+            ${changedFiles.slice(0, 10).map(f => `
+              <div style="display:flex;align-items:center;gap:8px;padding:3px 0;font-size:11px;">
+                <span style="color:${f.status === 'A' ? '#50dc8c' : f.status === 'D' ? '#ff5050' : f.status === 'M' ? '#f0a500' : 'var(--text3)'}"">${f.status || 'M'}</span>
+                <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text2)">${esc(f.path || '')}</span>
+              </div>
+            `).join('')}
+            ${changedFiles.length > 10 ? `<div style="font-size:11px;color:var(--text3);margin-top:4px;">...还有 ${changedFiles.length - 10} 个文件</div>` : ''}
+          </div>
+        `;
+      } else {
+        filesHtml = '<div style="margin-top:8px;font-size:12px;color:var(--text3);font-style:italic;">当前工作区与目标版本无差异</div>';
+      }
+
+      dialog.innerHTML = `
+        <div class="confirm-title" style="color: var(--accent);">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 8px;">
+            <path d="M3 10h18"/>
+            <path d="M3 14h18"/>
+            <path d="M8 21l-4-4 4-4"/>
+            <path d="M16 3l4 4-4 4"/>
+          </svg>
+          确认还原到此版本
+        </div>
+        <div class="confirm-msg" style="margin-bottom: 16px; line-height: 1.6;">
+          <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--warn);margin-bottom:4px;">${esc(shortHash)}</div>
+          <div style="font-size:13px;font-weight:600;margin-bottom:4px;">${esc(msg)}</div>
+          <div style="font-size:11px;color:var(--text2);margin-bottom:10px;">${esc(author)} · ${date}</div>
+          
+          <div style="background:var(--bg3);border-radius:6px;padding:10px;">
+            <div style="font-size:12px;color:var(--text2);margin-bottom:6px;">还原后将：</div>
+            <ul style="margin:0;padding-left:20px;font-size:11px;color:var(--text);">
+              <li style="margin-bottom:2px;">将工作区所有文件还原为该版本的内容</li>
+              <li style="margin-bottom:2px;">当前未提交的修改会被暂存（stash），可后续恢复</li>
+              <li style="margin-bottom:2px;">${added > 0 || removed > 0 || modified > 0 ? `本次还原涉及：${modified > 0 ? `${modified}个文件修改` : ''}${added > 0 ? `${modified > 0 ? '、' : ''}${added}行新增` : ''}${removed > 0 ? `${(modified > 0 || added > 0) ? '、' : ''}${removed}行删除` : ''}` : '当前工作区与目标版本无差异'}</li>
+            </ul>
+          </div>
+          
+          ${filesHtml}
+        </div>
+        <div class="confirm-btns" style="display:flex;gap:8px;justify-content:flex-end;">
+          <button class="btn" id="restoreCancelBtn">取消</button>
+          <button class="btn blue" id="restoreConfirmBtn">确认还原</button>
+        </div>
+      `;
+
+      overlay.appendChild(dialog);
+      document.body.appendChild(overlay);
+
+      const cleanup = () => { overlay.remove(); };
+      dialog.querySelector('#restoreCancelBtn').addEventListener('click', () => { cleanup(); resolve(false); });
+      dialog.querySelector('#restoreConfirmBtn').addEventListener('click', () => { cleanup(); resolve(true); });
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) { cleanup(); resolve(false); }});
+    });
+  }
+
+  async function restoreWorkspaceToCommit() {
+    const commit = curCommit;
+    if (!commit) return;
+
+    const fullHash = (commit.full_hash || commit.hash || '').trim();
+    if (!fullHash) return;
+
+    const btn = document.getElementById('restoreToCommitBtn');
+    setButtonBusy(btn, true);
+
+    try {
+      toast('正在计算版本差异...', 'warn');
+      
+      const diffRes = await GET(`/api/diff_commit?hash=${encodeURIComponent(fullHash)}`);
+      const diffInfo = diffRes && diffRes.ok ? diffRes : {};
+
+      const ok = await showRestoreConfirmDialog(commit, diffInfo);
+      if (!ok) return;
+
+      toast('正在还原到目标版本...', 'warn');
+
+      const res = await POST('/api/restore_workspace', { hash: fullHash });
+      if (res && res.ok) {
+        toast('✓ 已成功还原到目标版本', 'ok');
+        await refresh();
+        afterRestoreSuccess();
+      } else {
+        const msg = (res && (res.msg || res.error)) ? (res.msg || res.error) : '还原失败';
+        if (msg && msg.includes('工作区有未提交更改')) {
+          const choice = await showRestoreLocalChangesDialog(fullHash);
+          if (choice === 'stash') {
+            await stashAndRestoreWorkspace(fullHash);
+          } else if (choice === 'commit') {
+            await commitAndRestoreWorkspace(fullHash);
+          } else if (choice === 'force') {
+            const confirmForce = await showConfirm({
+              title: '确认强制还原？',
+              message: '将丢弃所有本地未提交修改，然后执行还原。此操作不可恢复。',
+              okText: '确认丢弃并还原',
+              cancelText: '取消'
+            });
+            if (confirmForce) {
+              toast('丢弃本地修改并还原中...','warn');
+              const fres = await POST('/api/restore_workspace_force', { hash: fullHash });
+              if (fres && fres.ok) {
+                toast('✓ 还原完成','ok');
+                await refresh();
+                afterRestoreSuccess();
+                return;
+              }
+              __gmToastApiError('还原失败', fres, (fres && (fres.msg || fres.error)) ? (fres.msg || fres.error) : '未知错误');
+              await refresh();
+              return;
+            }
+          }
+        } else {
+          __gmToastApiError('还原失败', res, msg);
+        }
+      }
+    } finally {
+      setButtonBusy(btn, false);
+    }
+  }
+
+  async function showRestoreLocalChangesDialog(targetHash) {
+    return new Promise((resolve) => {
+      const overlay = document.createElement('div');
+      overlay.className = 'overlay show';
+      overlay.style.zIndex = '10000';
+
+      const dialog = document.createElement('div');
+      dialog.className = 'confirm-dlg';
+      dialog.style.maxWidth = '560px';
+      dialog.style.position = 'relative';
+      dialog.style.zIndex = '10001';
+      dialog.innerHTML = `
+        <div class="confirm-title" style="color: var(--warn);">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 8px;">
+            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+            <line x1="12" y1="9" x2="12" y2="13"/>
+            <line x1="12" y1="17" x2="12.01" y2="17"/>
+          </svg>
+          检测到本地未提交的修改
+        </div>
+        <div class="confirm-msg" style="margin-bottom: 20px; line-height: 1.6;">
+          <p style="margin-top: 4px;">需要先处理本地修改后才能执行还原。</p>
+          <p style="margin-top: 8px; margin-bottom: 8px; font-weight: 500;">请选择处理方式：</p>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px;">
+          <button class="choice-btn commit-choice" style="padding: 12px; border: 1px solid var(--accent); background: var(--bg3); color: var(--text); border-radius: 6px; cursor: pointer; text-align: left; transition: all 0.2s;">
+            <div style="font-weight: 600; margin-bottom: 4px;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                <polyline points="20 6 9 17 4 12"/>
+              </svg>
+              提交后继续还原
+            </div>
+            <div style="font-size: 11px; color: var(--text2); margin-left: 22px;">将所有本地修改提交到版本库，然后继续执行还原。</div>
+          </button>
+          <button class="choice-btn stash-choice" style="padding: 12px; border: 1px solid var(--accent2); background: var(--bg3); color: var(--text); border-radius: 6px; cursor: pointer; text-align: left; transition: all 0.2s;">
+            <div style="font-weight: 600; margin-bottom: 4px;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+              </svg>
+              暂存后继续还原
+            </div>
+            <div style="font-size: 11px; color: var(--text2); margin-left: 22px;">将本地修改保存到 stash（不提交），然后继续执行还原。之后可选择是否恢复修改。</div>
+          </button>
+          <button class="choice-btn force-choice" style="padding: 12px; border: 1px solid var(--danger); background: var(--bg3); color: var(--text); border-radius: 6px; cursor: pointer; text-align: left; transition: all 0.2s;">
+            <div style="font-weight: 600; margin-bottom: 4px; color: var(--danger);">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                <polyline points="20 6 9 17 4 12"/>
+              </svg>
+              强制还原（丢弃本地修改）
+            </div>
+            <div style="font-size: 11px; color: var(--text2); margin-left: 22px;">直接丢弃本地未提交修改，然后执行还原。此操作不可恢复，请谨慎选择。</div>
+          </button>
+        </div>
+        <div class="confirm-btns">
+          <button class="btn cancel-choice">取消</button>
+        </div>
+      `;
+
+      overlay.appendChild(dialog);
+      document.body.appendChild(overlay);
+
+      dialog.querySelectorAll('.choice-btn').forEach(btn => {
+        btn.addEventListener('mouseenter', () => {
+          btn.style.background = 'var(--bg4)';
+          btn.style.transform = 'translateY(-1px)';
+          btn.style.boxShadow = '0 4px 12px rgba(0,0,0,0.15)';
+        });
+        btn.addEventListener('mouseleave', () => {
+          btn.style.background = 'var(--bg3)';
+          btn.style.transform = 'translateY(0)';
+          btn.style.boxShadow = 'none';
+        });
+      });
+
+      const cleanup = () => { overlay.remove(); };
+      dialog.querySelector('.commit-choice').addEventListener('click', () => { cleanup(); resolve('commit'); });
+      dialog.querySelector('.stash-choice').addEventListener('click', () => { cleanup(); resolve('stash'); });
+      dialog.querySelector('.force-choice').addEventListener('click', () => { cleanup(); resolve('force'); });
+      dialog.querySelector('.cancel-choice').addEventListener('click', () => { cleanup(); resolve('cancel'); });
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) { cleanup(); resolve('cancel'); }});
+    });
+  }
+
+  async function stashAndRestoreWorkspace(commitHash) {
+    try {
+      toast('正在暂存本地修改...', 'warn');
+      const stashRes = await POST('/api/stash_push');
+      if (!stashRes || !stashRes.ok) {
+        __gmToastApiError('暂存失败', stashRes, (stashRes && stashRes.msg) ? stashRes.msg : '暂存失败');
+        return;
+      }
+
+      toast('正在还原到目标版本...', 'warn');
+      const res = await POST('/api/restore_workspace', { hash: commitHash });
+      if (res && res.ok) {
+        toast('✓ 还原完成', 'ok');
+        await refresh();
+        afterRestoreSuccess();
+        
+        const shouldPop = await showConfirm({
+          title: '是否恢复暂存的修改？',
+          message: '已完成还原。是否恢复刚才暂存的本地修改？',
+          okText: '恢复修改',
+          cancelText: '暂不恢复'
+        });
+        if (shouldPop) {
+          toast('恢复暂存中...', 'warn');
+          const popRes = await POST('/api/stash_pop', {});
+          if (popRes && popRes.ok) toast('✓ 已恢复修改', 'ok');
+          else __gmToastApiError('恢复修改失败', popRes, (popRes && (popRes.error || popRes.msg || popRes.message)) ? (popRes.error || popRes.msg || popRes.message) : '恢复修改失败');
+        }
+      } else {
+        __gmToastApiError('还原失败', res, (res && (res.msg || res.error)) ? (res.msg || res.error) : '还原失败');
+      }
+    } catch (e) {
+      __gmToastApiError('操作失败', null, e.message || '未知错误');
+    }
+  }
+
+  async function commitAndRestoreWorkspace(commitHash) {
+    try {
+      const msg = `暂存提交 - 还原到版本 ${commitHash.slice(0, 7)} 前的状态`;
+      toast('正在提交本地修改...', 'warn');
+      const commitRes = await POST('/api/commit', { message: msg, files: ['all'] });
+      if (!commitRes || !commitRes.ok) {
+        __gmToastApiError('提交失败', commitRes, (commitRes && commitRes.msg) ? commitRes.msg : '提交失败');
+        return;
+      }
+
+      toast('正在还原到目标版本...', 'warn');
+      const res = await POST('/api/restore_workspace', { hash: commitHash });
+      if (res && res.ok) {
+        toast('✓ 已成功还原到目标版本', 'ok');
+        await refresh();
+        afterRestoreSuccess();
+      } else {
+        __gmToastApiError('还原失败', res, (res && (res.msg || res.error)) ? (res.msg || res.error) : '还原失败');
+      }
+    } catch (e) {
+      __gmToastApiError('操作失败', null, e.message || '未知错误');
+    }
   }
 
   function showPrompt({title='输入', message='', defaultValue='', okText='确定', cancelText='取消'}={}) {

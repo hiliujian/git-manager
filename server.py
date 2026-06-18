@@ -4375,7 +4375,7 @@ def restore_file_from_commit(commit: str, filepath: str):
     return True, ""
 
 
-def restore_workspace_to_commit(commit: str):
+def restore_workspace_to_commit(commit: str, force=False):
     if not REPO_PATH:
         return False, "未打开仓库"
 
@@ -4383,10 +4383,16 @@ def restore_workspace_to_commit(commit: str):
     if not commit:
         return False, "缺少 hash"
 
-    # Reset tracked files to commit and clean untracked files.
+    if not force:
+        out, err, code = run_git(["status", "--porcelain=v1"])
+        if code != 0:
+            return False, (err or "无法检测工作区状态")
+        if (out or "").strip():
+            return False, "工作区有未提交更改，请先提交/撤回/暂存（stash）后再执行还原"
+
     _, err, code = run_git(["reset", "--hard", commit], timeout=120)
     if code != 0:
-        return False, (err or "恢复工作区失败")
+        return False, (err or "还原工作区失败")
     run_git(["clean", "-fd"], timeout=120)
     return True, ""
 
@@ -11949,8 +11955,67 @@ class Handler(BaseHTTPRequestHandler):
                 if not commit:
                     self.send_json({"error":"缺少 hash"}, 400)
                     return
-                ok, msg = restore_workspace_to_commit(commit)
+                ok, msg = restore_workspace_to_commit(commit, force=False)
                 self.send_json({"ok": ok, "msg": msg})
+
+            elif p == "/api/restore_workspace_force":
+                logger.info("处理 /api/restore_workspace_force 请求 (丢弃本地修改后还原)")
+                if not self._require_repo():
+                    return
+                commit = (data.get("hash") or "").strip()
+                if not commit:
+                    self.send_json({"error":"缺少 hash"}, 400)
+                    return
+                ok, msg = restore_workspace_to_commit(commit, force=True)
+                self.send_json({"ok": ok, "msg": msg})
+
+            elif p == "/api/diff_commit":
+                logger.info("处理 /api/diff_commit 请求")
+                if not self._require_repo():
+                    return
+                commit = qget("hash")
+                if not commit:
+                    self.send_json({"error":"缺少 hash"}, 400)
+                    return
+                try:
+                    out, err, code = run_git(["diff", "--name-status", commit], timeout=120)
+                    if code != 0:
+                        self.send_json({"ok": False, "error": err or "获取差异失败"}, 500)
+                        return
+                    
+                    files = []
+                    added = 0
+                    removed = 0
+                    modified = 0
+                    
+                    if out:
+                        for line in out.strip().split('\n'):
+                            line = line.strip()
+                            if not line:
+                                continue
+                            parts = line.split('\t', 2)
+                            if len(parts) >= 2:
+                                status = parts[0]
+                                path = parts[-1]
+                                files.append({"status": status, "path": path})
+                                if status == 'A':
+                                    added += 1
+                                elif status == 'D':
+                                    removed += 1
+                                elif status == 'M':
+                                    modified += 1
+                    
+                    self.send_json({
+                        "ok": True,
+                        "files": files,
+                        "added": added,
+                        "removed": removed,
+                        "modified": modified,
+                        "total": len(files)
+                    })
+                except Exception as e:
+                    logger.error(f"获取差异失败: {e}")
+                    self.send_json({"ok": False, "error": str(e)}, 500)
 
             elif p == "/api/revert_commit":
                 logger.info("处理 /api/revert_commit 请求")
