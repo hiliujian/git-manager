@@ -2065,8 +2065,49 @@ flex-shrink:0;cursor:pointer;
     [data-theme="light"] .ai-drag-overlay .txt{background:rgba(255,255,255,0.8);}
     [data-theme="light"] .ai-composer{background:var(--bg3);}
     [data-theme="light"] .ai-composer:focus-within{border-color:var(--accent);}
-    .ai-input{flex:1;min-height:36px;max-height:300px;resize:none;border:none;outline:none;background:transparent;
+    .ai-input{flex:1;min-height:48px;max-height:300px;resize:none;border:none;outline:none;background:transparent;
       color:var(--text);padding:6px;margin:0;line-height:1.5;font-size:12px;font-family:inherit;}
+    /* contenteditable-specific behavior for aiChatInput (chip-enabled composer) */
+    .ai-input[contenteditable]{overflow-y:auto;white-space:pre-wrap;word-wrap:break-word;word-break:break-word;
+      cursor:text;-webkit-user-select:text;user-select:text;}
+    .ai-input[contenteditable]:empty::before{content:attr(data-placeholder);color:var(--text3);
+      pointer-events:none;display:inline;}
+    .ai-input[contenteditable] br{line-height:1.5;}
+
+    /* Smart chip tokens (recognized links / repos), rendered inline like Claude's composer */
+    .ai-chip{display:inline-flex;align-items:center;gap:4px;max-width:280px;height:20px;padding:0 6px 0 4px;
+      margin:0 1px;border-radius:6px;background:var(--bg4);border:1px solid var(--border2);
+      color:var(--text);font-size:11px;line-height:18px;font-family:inherit;vertical-align:-4px;
+      white-space:nowrap;cursor:pointer;user-select:none;-webkit-user-select:none;transition:all .12s ease;}
+    .ai-chip:hover{border-color:var(--accent);background:var(--bg5);}
+    .ai-chip.is-invalid{opacity:.6;border-style:dashed;}
+    .ai-chip-icon{width:13px;height:13px;flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;
+      border-radius:3px;overflow:hidden;color:var(--text2);}
+    .ai-chip-icon svg{width:13px;height:13px;display:block;}
+    .ai-chip-icon img{width:13px;height:13px;display:block;object-fit:contain;border-radius:2px;}
+    .ai-chip-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px;font-weight:500;}
+    .ai-chip-sub{color:var(--text2);font-weight:400;}
+    .ai-chip-del{flex:0 0 auto;width:13px;height:13px;margin-left:1px;border-radius:50%;display:inline-flex;
+      align-items:center;justify-content:center;color:var(--text2);font-size:12px;line-height:1;}
+    .ai-chip-del:hover{background:rgba(242,114,114,0.18);color:var(--danger);}
+
+    /* Chip detail/edit popover */
+    .ai-chip-pop{position:fixed;z-index:9999;min-width:260px;max-width:340px;padding:10px;border-radius:10px;
+      background:var(--bg3);border:1px solid var(--border2);box-shadow:0 12px 32px rgba(0,0,0,0.4);
+      display:none;font-size:12px;color:var(--text);}
+    .ai-chip-pop.show{display:block;}
+    .ai-chip-pop-hd{display:flex;align-items:center;gap:6px;margin-bottom:8px;}
+    .ai-chip-pop-hd .ai-chip-icon{width:16px;height:16px;}
+    .ai-chip-pop-hd .ai-chip-icon svg,.ai-chip-pop-hd .ai-chip-icon img{width:16px;height:16px;}
+    .ai-chip-pop-title{font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+    .ai-chip-pop-type{font-size:10px;color:var(--text2);border:1px solid var(--border);border-radius:999px;
+      padding:1px 6px;flex:0 0 auto;}
+    .ai-chip-pop-url{display:block;width:100%;box-sizing:border-box;padding:5px 7px;margin-bottom:8px;
+      border-radius:6px;background:var(--bg2);border:1px solid var(--border);color:var(--text);
+      font-family:'JetBrains Mono',monospace;font-size:11px;outline:none;}
+    .ai-chip-pop-url:focus{border-color:var(--accent);}
+    .ai-chip-pop-row{display:flex;gap:6px;justify-content:flex-end;}
+    .ai-chip-pop-row .btn{padding:3px 10px;font-size:11px;}
     .ai-send-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;
       padding:6px;border-radius:6px;font-size:12px;font-weight:600;
       white-space:nowrap;background:var(--accent);color:var(--on-accent);border:none;
@@ -3202,7 +3243,7 @@ flex-shrink:0;cursor:pointer;
               </div>
               <div class="ai-composer">
                 <span class="ai-composer-counter" id="aiSendCounter" title="UndoSteps/Turns">0/0</span>
-                <textarea id="aiChatInput" class="ai-input" placeholder="Ask Hivo anything..."></textarea>
+                <div id="aiChatInput" class="ai-input" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="Ask Hivo anything..." spellcheck="false"></div>
                 <button class="ai-send-btn" data-action="sendAiChat">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <line x1="22" y1="2" x2="11" y2="13"></line>
@@ -6225,6 +6266,7 @@ flex-shrink:0;cursor:pointer;
           } catch (e2) {}
         });
       }
+      try { __gmAiChipInit(aiChatInput); } catch (eChipInit) {}
 
       const aiAttachInput = document.getElementById('aiAttachInput');
       if (aiAttachInput && !aiAttachInput.__gmBound) {
@@ -17023,6 +17065,586 @@ flex-shrink:0;cursor:pointer;
 
   function newAiSession() {
     createAiSession();
+  }
+
+  // ==========================================================================
+  // Smart Chip module for #aiChatInput
+  // --------------------------------------------------------------------------
+  // Recognizes GitHub/GitLab repo links, git SSH refs, and generic URLs as the
+  // user types or pastes them, and renders them as compact inline chips
+  // (icon + short label) instead of the raw link text — similar to Claude's
+  // composer. Chips are deletable, editable and clickable, and the underlying
+  // `.value` (plus `.selectionStart` / `.selectionEnd` / `.setSelectionRange`)
+  // are shimmed directly onto the DOM element so every other place in this
+  // file that already does `ta.value`, `ta.setSelectionRange(...)`, etc.
+  // keeps working unmodified — chips are transparently expanded back to their
+  // original raw URL text whenever `.value` is read (e.g. on send).
+  // ==========================================================================
+  const __gmAiChipZW = '\u200B';
+
+  function __gmAiChipUrlRegex() {
+    return /(https?:\/\/[^\s<>"'\)\]]+)|(\bgit@[\w.\-]+:[\w.\-]+\/[\w.\-]+(?:\.git)?\b)/g;
+  }
+
+  function __gmAiChipTrimTrailingPunct(rawIn) {
+    let s = String(rawIn || '');
+    const m = s.match(/^(.*?)([)\]\}>,.;:!?'"]+)$/);
+    if (m && m[1]) {
+      const opens = (m[1].match(/\(/g) || []).length;
+      const closes = (m[1].match(/\)/g) || []).length;
+      if (!(m[2].charAt(0) === ')' && opens > closes)) s = m[1];
+    }
+    return s;
+  }
+
+  function __gmAiChipClassify(rawIn) {
+    const raw = __gmAiChipTrimTrailingPunct(String(rawIn || '').trim());
+    if (!raw) return null;
+    try {
+      let m = raw.match(/^git@([\w.\-]+):([^\/\s]+)\/([^\/\s]+?)(?:\.git)?\/?$/i);
+      if (m) {
+        const platform = /gitlab/i.test(m[1]) ? 'gitlab' : (/github/i.test(m[1]) ? 'github' : 'git');
+        return { type: 'git', platform, host: m[1], owner: m[2], repo: m[3], raw, ref: '' };
+      }
+      if (!/^https?:\/\//i.test(raw)) return null;
+      let u;
+      try { u = new URL(raw); } catch (eU) { return null; }
+      const host = u.hostname.replace(/^www\./i, '');
+      const parts = u.pathname.split('/').filter(Boolean);
+      if ((host === 'github.com' || host === 'gitlab.com' || /gitlab\./i.test(host)) && parts.length >= 2) {
+        const owner = decodeURIComponent(parts[0]);
+        const repo = decodeURIComponent(parts[1]).replace(/\.git$/i, '');
+        let ref = '';
+        if (parts.length >= 4 && (parts[2] === 'tree' || parts[2] === 'blob' || parts[2] === '-')) {
+          ref = decodeURIComponent(parts[3] || '');
+        }
+        return { type: 'git', platform: (host === 'github.com' ? 'github' : 'gitlab'), host, owner, repo, raw, ref };
+      }
+      return { type: 'url', platform: 'url', host, domain: host, raw, title: '' };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function __gmAiChipIconSvg(kind) {
+    if (kind === 'github') {
+      return '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>';
+    }
+    if (kind === 'gitlab') {
+      return '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 14.75 10.6 6.8H5.4L8 14.75Z"/><path d="M8 14.75 5.4 6.8H1.6L8 14.75Z" opacity=".7"/><path d="M8 14.75 10.6 6.8h4L8 14.75Z" opacity=".7"/><path d="M1.6 6.8.3 10.7a.8.8 0 0 0 .29.9L8 14.75 1.6 6.8Z" opacity=".45"/><path d="M1.6 6.8h3.8L3.9 1.7a.35.35 0 0 0-.67 0L1.6 6.8Z"/><path d="M14.6 6.8 15.9 10.7a.8.8 0 0 1-.29.9L8 14.75l6.6-7.95Z" opacity=".45"/><path d="M14.6 6.8h-3.8L12.1 1.7a.35.35 0 0 1 .67 0l1.83 5.1Z"/></svg>';
+    }
+    if (kind === 'git') {
+      return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="3" r="2"/><circle cx="6" cy="15" r="2"/><circle cx="18" cy="15" r="2"/><path d="M12 5v4a4 4 0 0 1-4 4H8"/><path d="M12 9v2a4 4 0 0 0 4 4h0"/></svg>';
+    }
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>';
+  }
+
+  function __gmAiChipIconKind(info) {
+    if (!info) return 'url';
+    if (info.type === 'git') return (info.platform === 'github') ? 'github' : ((info.platform === 'gitlab') ? 'gitlab' : 'git');
+    return 'url';
+  }
+
+  function __gmAiChipMakeIconEl(info) {
+    const icon = document.createElement('span');
+    icon.className = 'ai-chip-icon';
+    if (info.type === 'git') {
+      icon.innerHTML = __gmAiChipIconSvg(__gmAiChipIconKind(info));
+    } else {
+      const img = document.createElement('img');
+      img.src = 'https://www.google.com/s2/favicons?sz=32&domain=' + encodeURIComponent(info.domain || '');
+      img.alt = '';
+      try { img.referrerPolicy = 'no-referrer'; } catch (e0) {}
+      img.onerror = function () { try { icon.innerHTML = __gmAiChipIconSvg('url'); } catch (e) {} };
+      icon.appendChild(img);
+    }
+    return icon;
+  }
+
+  function __gmAiChipLabelText(info) {
+    if (!info) return '';
+    if (info.type === 'git') {
+      return String(info.owner || '') + '/' + String(info.repo || '') + (info.ref ? ('@' + info.ref) : '');
+    }
+    return String(info.title || info.domain || info.raw || '');
+  }
+
+  // Best-effort async page-title lookup for generic URL chips. This will
+  // silently no-op for cross-origin pages without CORS headers (the vast
+  // majority), in which case the domain name remains as the chip label.
+  function __gmAiChipTryFetchTitle(span, info) {
+    try {
+      if (!info || info.type !== 'url' || !info.raw) return;
+      const ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+      const t = ctrl ? setTimeout(() => { try { ctrl.abort(); } catch (e) {} }, 4000) : 0;
+      fetch(info.raw, { method: 'GET', mode: 'cors', signal: ctrl ? ctrl.signal : undefined })
+        .then(r => (r && r.ok) ? r.text() : '')
+        .then(html => {
+          if (t) clearTimeout(t);
+          if (!html || !span.isConnected) return;
+          const m = String(html).match(/<title[^>]*>([^<]*)<\/title>/i);
+          const title = m ? String(m[1] || '').replace(/\s+/g, ' ').trim() : '';
+          if (!title) return;
+          info.title = title.slice(0, 80);
+          try { span.dataset.chipMeta = JSON.stringify(info); } catch (e2) {}
+          const label = span.querySelector('.ai-chip-label');
+          if (label) label.textContent = __gmAiChipLabelText(info);
+          span.title = info.raw + (info.title ? (' — ' + info.title) : '');
+        })
+        .catch(() => { if (t) clearTimeout(t); });
+    } catch (e) {}
+  }
+
+  function __gmAiChipBuildNode(info) {
+    const span = document.createElement('span');
+    span.className = 'ai-chip';
+    span.setAttribute('contenteditable', 'false');
+    span.dataset.chipType = info.type;
+    span.dataset.chipRaw = info.raw;
+    try { span.dataset.chipMeta = JSON.stringify(info); } catch (e) {}
+    span.appendChild(__gmAiChipMakeIconEl(info));
+    const label = document.createElement('span');
+    label.className = 'ai-chip-label';
+    label.textContent = __gmAiChipLabelText(info);
+    span.appendChild(label);
+    const del = document.createElement('span');
+    del.className = 'ai-chip-del';
+    del.title = '删除';
+    del.textContent = '×';
+    span.appendChild(del);
+    span.title = info.raw;
+    __gmAiChipTryFetchTitle(span, info);
+    return span;
+  }
+
+  // Shared tokenizer: scans `text` for recognizable URLs and returns a flat
+  // array of DOM nodes (plain text nodes interleaved with chip nodes, each
+  // chip followed by a zero-width marker for caret continuity). Used by both
+  // the `.value` setter (full rebuild) and caret/paste insertion, so the
+  // URL-scanning logic only lives in one place.
+  function __gmAiChipTextToNodes(text) {
+    const s = String(text || '');
+    const nodes = [];
+    if (!s) return nodes;
+    const re = __gmAiChipUrlRegex();
+    let last = 0, m;
+    while ((m = re.exec(s))) {
+      const raw = m[0];
+      const start = m.index;
+      if (start > last) nodes.push(document.createTextNode(s.slice(last, start)));
+      const info = __gmAiChipClassify(raw);
+      if (info) {
+        nodes.push(__gmAiChipBuildNode(info));
+        nodes.push(document.createTextNode(__gmAiChipZW));
+      } else {
+        nodes.push(document.createTextNode(raw));
+      }
+      last = start + raw.length;
+    }
+    if (last < s.length) nodes.push(document.createTextNode(s.slice(last)));
+    return nodes;
+  }
+
+  // Rebuild the *entire* contents of `container` from a plain text string,
+  // re-detecting and re-chipping any recognizable URLs. Used by the `.value`
+  // setter shim so drafts / undo / @mention insertion / clearing all keep
+  // chips intact (or re-create them) transparently.
+  function __gmAiChipRebuildFromText(container, text) {
+    container.innerHTML = '';
+    const nodes = __gmAiChipTextToNodes(text);
+    if (!nodes.length) return;
+    const frag = document.createDocumentFragment();
+    nodes.forEach(n => frag.appendChild(n));
+    container.appendChild(frag);
+  }
+
+  // Serialize DOM content back to plain text, expanding chips to their raw
+  // URL/link text so the rest of the app (send pipeline, drafts, etc.) always
+  // sees the original, complete data.
+  function __gmAiChipSerialize(container) {
+    let out = '';
+    const walk = (n) => {
+      const kids = n.childNodes;
+      for (let i = 0; i < kids.length; i++) {
+        const child = kids[i];
+        if (child.nodeType === Node.TEXT_NODE) {
+          out += String(child.nodeValue || '').split(__gmAiChipZW).join('');
+        } else if (child.nodeType === Node.ELEMENT_NODE) {
+          if (child.classList && child.classList.contains('ai-chip')) {
+            out += String(child.dataset.chipRaw || child.getAttribute('title') || '');
+          } else if (child.tagName === 'BR') {
+            out += '\n';
+          } else if (child.tagName === 'DIV' || child.tagName === 'P') {
+            if (out && !out.endsWith('\n')) out += '\n';
+            walk(child);
+          } else {
+            walk(child);
+          }
+        }
+      }
+    };
+    walk(container);
+    return out;
+  }
+
+  function __gmAiChipNodeOffsetToTextOffset(el, node, nodeOffset) {
+    if (node === el) {
+      let total = 0;
+      const kids = Array.prototype.slice.call(el.childNodes, 0, nodeOffset);
+      for (const child of kids) {
+        if (child.nodeType === Node.TEXT_NODE) total += String(child.nodeValue || '').split(__gmAiChipZW).join('').length;
+        else if (child.classList && child.classList.contains('ai-chip')) total += String(child.dataset.chipRaw || '').length;
+        else if (child.tagName === 'BR') total += 1;
+        else total += String(child.textContent || '').length;
+      }
+      return total;
+    }
+    let total = 0, found = null;
+    const walk = (n) => {
+      for (const child of n.childNodes) {
+        if (found !== null) return;
+        if (child === node) {
+          if (child.nodeType === Node.TEXT_NODE) {
+            total += String(child.nodeValue || '').slice(0, nodeOffset).split(__gmAiChipZW).join('').length;
+          }
+          found = total;
+          return;
+        }
+        if (child.nodeType === Node.TEXT_NODE) {
+          total += String(child.nodeValue || '').split(__gmAiChipZW).join('').length;
+        } else if (child.nodeType === Node.ELEMENT_NODE) {
+          if (child.classList && child.classList.contains('ai-chip')) {
+            total += String(child.dataset.chipRaw || '').length;
+          } else if (child.tagName === 'BR') {
+            total += 1;
+          } else {
+            walk(child);
+            if (found !== null) return;
+          }
+        }
+      }
+    };
+    walk(el);
+    return found === null ? total : found;
+  }
+
+  function __gmAiChipGetCaretOffset(el, wantStart) {
+    try {
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0) return __gmAiChipSerialize(el).length;
+      const range = sel.getRangeAt(0);
+      if (range.startContainer !== el && !el.contains(range.startContainer)) return __gmAiChipSerialize(el).length;
+      const a = __gmAiChipNodeOffsetToTextOffset(el, range.startContainer, range.startOffset);
+      const b = __gmAiChipNodeOffsetToTextOffset(el, range.endContainer, range.endOffset);
+      return wantStart ? Math.min(a, b) : Math.max(a, b);
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  function __gmAiChipOffsetToPosition(el, offset) {
+    let remaining = Math.max(0, offset);
+    const kids = Array.prototype.slice.call(el.childNodes);
+    for (let i = 0; i < kids.length; i++) {
+      const child = kids[i];
+      if (child.nodeType === Node.TEXT_NODE) {
+        const raw = String(child.nodeValue || '');
+        const cleanLen = raw.split(__gmAiChipZW).join('').length;
+        if (remaining <= cleanLen) {
+          let seen = 0, rawIdx = 0;
+          for (; rawIdx < raw.length; rawIdx++) {
+            if (seen >= remaining) break;
+            if (raw[rawIdx] !== __gmAiChipZW) seen++;
+          }
+          return { node: child, offset: rawIdx };
+        }
+        remaining -= cleanLen;
+      } else if (child.nodeType === Node.ELEMENT_NODE) {
+        if (child.classList && child.classList.contains('ai-chip')) {
+          const len = String(child.dataset.chipRaw || '').length;
+          if (remaining <= 0) return { node: el, offset: i };
+          if (remaining < len) return (remaining <= len / 2) ? { node: el, offset: i } : { node: el, offset: i + 1 };
+          remaining -= len;
+        } else if (child.tagName === 'BR') {
+          if (remaining <= 0) return { node: el, offset: i };
+          remaining -= 1;
+        } else {
+          const len = String(child.textContent || '').length;
+          if (remaining <= len) return { node: el, offset: i };
+          remaining -= len;
+        }
+      }
+    }
+    return { node: el, offset: kids.length };
+  }
+
+  function __gmAiChipSetSelectionRange(el, start, end) {
+    try {
+      const s = Math.max(0, Number(start) || 0);
+      const e = Math.max(0, Number(end) || 0);
+      const p1 = __gmAiChipOffsetToPosition(el, Math.min(s, e));
+      const p2 = (s === e) ? p1 : __gmAiChipOffsetToPosition(el, Math.max(s, e));
+      const range = document.createRange();
+      range.setStart(p1.node, p1.offset);
+      range.setEnd(p2.node, p2.offset);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+    } catch (e2) {}
+  }
+
+  function __gmAiChipInstallValueShim(el) {
+    if (!el || el.__gmChipShimmed) return;
+    el.__gmChipShimmed = true;
+    try {
+      Object.defineProperty(el, 'value', {
+        configurable: true,
+        get() { return __gmAiChipSerialize(el); },
+        set(v) { __gmAiChipRebuildFromText(el, v); }
+      });
+      Object.defineProperty(el, 'selectionStart', {
+        configurable: true,
+        get() { return __gmAiChipGetCaretOffset(el, true); },
+        set(v) { __gmAiChipSetSelectionRange(el, Number(v) || 0, __gmAiChipGetCaretOffset(el, false)); }
+      });
+      Object.defineProperty(el, 'selectionEnd', {
+        configurable: true,
+        get() { return __gmAiChipGetCaretOffset(el, false); },
+        set(v) { __gmAiChipSetSelectionRange(el, __gmAiChipGetCaretOffset(el, true), Number(v) || 0); }
+      });
+      el.setSelectionRange = function (s, e2) { __gmAiChipSetSelectionRange(el, Number(s) || 0, Number(e2) || 0); };
+    } catch (e) {}
+  }
+
+  function __gmAiChipInsertTextAtCaret(el, text) {
+    const sel = window.getSelection();
+    let range;
+    if (sel && sel.rangeCount > 0 && (sel.getRangeAt(0).startContainer === el || el.contains(sel.getRangeAt(0).startContainer))) {
+      range = sel.getRangeAt(0);
+    } else {
+      range = document.createRange();
+      range.selectNodeContents(el);
+      range.collapse(false);
+    }
+    range.deleteContents();
+    const nodes = __gmAiChipTextToNodes(text);
+    if (!nodes.length) return;
+    const frag = document.createDocumentFragment();
+    nodes.forEach(n => frag.appendChild(n));
+    const lastNode = nodes[nodes.length - 1];
+    range.insertNode(frag);
+    try {
+      const r2 = document.createRange();
+      r2.setStartAfter(lastNode);
+      r2.collapse(true);
+      const sel2 = window.getSelection();
+      sel2.removeAllRanges();
+      sel2.addRange(r2);
+    } catch (e3) {}
+  }
+
+  function __gmAiChipHandlePaste(e, el) {
+    try {
+      const cd = e && e.clipboardData;
+      if (!cd) return;
+      const text = cd.getData('text/plain');
+      if (!text) return; // no plain text — let the existing file-paste handler manage it
+      e.preventDefault();
+      __gmAiChipInsertTextAtCaret(el, text);
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    } catch (e2) {}
+  }
+
+  // Auto-detects a URL just typed once a boundary character (space/newline)
+  // follows it, converting it into a chip — mirrors Claude's live-as-you-type
+  // link recognition. Ignored while an IME composition (e.g. Chinese pinyin)
+  // is in progress so it never interferes with normal typing.
+  function __gmAiChipHandleInput(e, el) {
+    try {
+      if (e && e.isComposing) return;
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0 || !sel.isCollapsed) return;
+      const range = sel.getRangeAt(0);
+      const node = range.startContainer;
+      if (node.nodeType !== Node.TEXT_NODE || !el.contains(node)) return;
+      const offset = range.startOffset;
+      const nodeText = String(node.nodeValue || '');
+      const before = nodeText.slice(0, offset);
+      if (!/\s$/.test(before)) return;
+      const trimmed = before.replace(/\s+$/, '');
+      const m = trimmed.match(/(https?:\/\/\S+|git@[\w.\-]+:[\w.\-]+\/[\w.\-]+(?:\.git)?)$/);
+      if (!m) return;
+      const raw = m[0];
+      const info = __gmAiChipClassify(raw);
+      if (!info) return;
+      const matchEnd = trimmed.length;
+      const tokenStart = matchEnd - raw.length;
+      const headNode = document.createTextNode(nodeText.slice(0, tokenStart));
+      const chipNode = __gmAiChipBuildNode(info);
+      const zwNode = document.createTextNode(__gmAiChipZW);
+      const tailNode = document.createTextNode(nodeText.slice(matchEnd));
+      const parent = node.parentNode;
+      if (!parent) return;
+      parent.insertBefore(headNode, node);
+      parent.insertBefore(chipNode, node);
+      parent.insertBefore(zwNode, node);
+      parent.insertBefore(tailNode, node);
+      parent.removeChild(node);
+      const newOffset = Math.max(0, offset - matchEnd);
+      try {
+        const r = document.createRange();
+        r.setStart(tailNode, Math.min(newOffset, tailNode.nodeValue.length));
+        r.collapse(true);
+        const s2 = window.getSelection();
+        s2.removeAllRanges();
+        s2.addRange(r);
+      } catch (e2) {}
+    } catch (e3) {}
+  }
+
+  function __gmAiChipFindAdjacentChip(el, range, dir) {
+    const node = range.startContainer;
+    const offset = range.startOffset;
+    if (node.nodeType === Node.TEXT_NODE) {
+      const text = String(node.nodeValue || '');
+      if (dir < 0) {
+        let o = offset;
+        while (o > 0 && text[o - 1] === __gmAiChipZW) o--;
+        if (o > 0) return null;
+        const prev = node.previousSibling;
+        return (prev && prev.nodeType === Node.ELEMENT_NODE && prev.classList && prev.classList.contains('ai-chip')) ? prev : null;
+      }
+      let o = offset;
+      while (o < text.length && text[o] === __gmAiChipZW) o++;
+      if (o < text.length) return null;
+      const next = node.nextSibling;
+      return (next && next.nodeType === Node.ELEMENT_NODE && next.classList && next.classList.contains('ai-chip')) ? next : null;
+    }
+    if (node === el) {
+      const kids = Array.prototype.slice.call(el.childNodes);
+      const idx = dir < 0 ? offset - 1 : offset;
+      const cand = kids[idx];
+      return (cand && cand.nodeType === Node.ELEMENT_NODE && cand.classList && cand.classList.contains('ai-chip')) ? cand : null;
+    }
+    return null;
+  }
+
+  function __gmAiChipRemoveNode(el, chip) {
+    try {
+      const next = chip.nextSibling;
+      if (next && next.nodeType === Node.TEXT_NODE && next.nodeValue === __gmAiChipZW) next.remove();
+      chip.remove();
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    } catch (e) {}
+  }
+
+  // Safety net for chip deletion: modern browsers already treat a
+  // contenteditable="false" child as an atomic unit for Backspace/Delete, but
+  // this guarantees consistent behavior across engines.
+  function __gmAiChipHandleKeydownCapture(e, el) {
+    try {
+      if (e.key !== 'Backspace' && e.key !== 'Delete') return;
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0 || !sel.isCollapsed) return;
+      const range = sel.getRangeAt(0);
+      const target = __gmAiChipFindAdjacentChip(el, range, e.key === 'Backspace' ? -1 : 1);
+      if (target) {
+        e.preventDefault();
+        __gmAiChipRemoveNode(el, target);
+      }
+    } catch (e2) {}
+  }
+
+  let __gmAiChipPopEl = null;
+  function __gmAiChipEnsurePop() {
+    if (__gmAiChipPopEl) return __gmAiChipPopEl;
+    const d = document.createElement('div');
+    d.className = 'ai-chip-pop';
+    document.body.appendChild(d);
+    __gmAiChipPopEl = d;
+    document.addEventListener('mousedown', (e) => {
+      if (!__gmAiChipPopEl || !__gmAiChipPopEl.classList.contains('show')) return;
+      if (__gmAiChipPopEl.contains(e.target)) return;
+      if (e.target.closest && e.target.closest('.ai-chip')) return;
+      __gmAiChipClosePop();
+    });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') __gmAiChipClosePop(); });
+    return d;
+  }
+  function __gmAiChipClosePop() { if (__gmAiChipPopEl) __gmAiChipPopEl.classList.remove('show'); }
+
+  function __gmAiChipOpenPopover(chipEl) {
+    const pop = __gmAiChipEnsurePop();
+    let info = {};
+    try { info = JSON.parse(chipEl.dataset.chipMeta || '{}'); } catch (e) {}
+    const raw = String(chipEl.dataset.chipRaw || info.raw || '');
+    const typeLabel = info.type === 'git'
+      ? (info.platform === 'github' ? 'GitHub 仓库' : (info.platform === 'gitlab' ? 'GitLab 仓库' : 'Git 仓库'))
+      : '链接';
+    const iconHtml = '<span class="ai-chip-icon">' + __gmAiChipIconSvg(__gmAiChipIconKind(info)) + '</span>';
+    pop.innerHTML = ''
+      + '<div class="ai-chip-pop-hd">' + iconHtml
+      + '<div class="ai-chip-pop-title">' + esc(__gmAiChipLabelText(info)) + '</div>'
+      + '<div class="ai-chip-pop-type">' + esc(typeLabel) + '</div></div>'
+      + '<input class="ai-chip-pop-url" type="text" value="' + esc(raw) + '" />'
+      + '<div class="ai-chip-pop-row">'
+      + '<button type="button" class="btn" data-act="open">打开</button>'
+      + '<button type="button" class="btn red" data-act="del">删除</button>'
+      + '<button type="button" class="btn" data-act="save">保存</button>'
+      + '</div>';
+    const rect = chipEl.getBoundingClientRect();
+    pop.style.left = Math.max(8, Math.min((window.innerWidth || 800) - 350, rect.left)) + 'px';
+    pop.style.top = (rect.bottom + 6) + 'px';
+    pop.classList.add('show');
+    const urlInput = pop.querySelector('.ai-chip-pop-url');
+    const container = chipEl.closest('.ai-input');
+    pop.querySelector('[data-act="open"]').onclick = () => {
+      const u = __gmSafeUrl(String(urlInput.value || '').trim());
+      if (u) window.open(u, '_blank', 'noopener');
+    };
+    pop.querySelector('[data-act="del"]').onclick = () => {
+      __gmAiChipRemoveNode(container || chipEl.parentNode, chipEl);
+      __gmAiChipClosePop();
+    };
+    pop.querySelector('[data-act="save"]').onclick = () => {
+      const newRaw = String(urlInput.value || '').trim();
+      const newInfo = __gmAiChipClassify(newRaw);
+      if (newInfo) {
+        chipEl.replaceWith(__gmAiChipBuildNode(newInfo));
+      } else if (newRaw) {
+        chipEl.replaceWith(document.createTextNode(newRaw));
+      } else {
+        chipEl.remove();
+      }
+      __gmAiChipClosePop();
+      if (container) container.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+  }
+
+  function __gmAiChipHandleClick(e, el) {
+    const delBtn = e.target && e.target.closest ? e.target.closest('.ai-chip-del') : null;
+    if (delBtn) {
+      e.preventDefault(); e.stopPropagation();
+      const chip = delBtn.closest('.ai-chip');
+      if (chip) __gmAiChipRemoveNode(el, chip);
+      try { el.focus(); } catch (e0) {}
+      return;
+    }
+    const chip = e.target && e.target.closest ? e.target.closest('.ai-chip') : null;
+    if (chip) {
+      e.preventDefault(); e.stopPropagation();
+      __gmAiChipOpenPopover(chip);
+    }
+  }
+
+  function __gmAiChipInit(el) {
+    if (!el || el.__gmChipInit) return;
+    el.__gmChipInit = true;
+    __gmAiChipInstallValueShim(el);
+    el.addEventListener('paste', (e) => __gmAiChipHandlePaste(e, el));
+    el.addEventListener('input', (e) => __gmAiChipHandleInput(e, el));
+    el.addEventListener('click', (e) => __gmAiChipHandleClick(e, el));
+    el.addEventListener('keydown', (e) => __gmAiChipHandleKeydownCapture(e, el), true);
   }
 
   function aiChatInputKeydown(e) {
