@@ -1154,6 +1154,29 @@
       text-transform:uppercase;
       letter-spacing:0.5px;
       font-weight:600;
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:8px;
+    }
+    .recent-files-clear-all{
+      flex-shrink:0;
+      padding:3px 10px;
+      border-radius:5px;
+      border:1px solid var(--border);
+      background:var(--bg3, rgba(255,255,255,.04));
+      color:var(--text2, var(--text3));
+      cursor:pointer;
+      font-size:11px;
+      font-weight:600;
+      text-transform:none;
+      letter-spacing:normal;
+      transition:all .12s;
+    }
+    .recent-files-clear-all:hover{
+      background:rgba(242,114,114,.15);
+      border-color:rgba(242,114,114,.35);
+      color:var(--danger);
     }
     .recent-files-list{
       max-height:350px;
@@ -5720,6 +5743,7 @@ flex-shrink:0;cursor:pointer;
       if (act === 'openRepoRecentFile') return openRepoRecentFile(Number(el.getAttribute('data-idx')));
       if (act === 'selectFileFromRecent') return selectFileFromRecent(Number(el.getAttribute('data-idx')));
       if (act === 'removeRecentFileByPath') return removeRecentFileByPath(String(el.getAttribute('data-path') || ''));
+      if (act === 'clearRecentFiles') return clearRecentFiles();
     });
   }
 
@@ -5963,12 +5987,6 @@ flex-shrink:0;cursor:pointer;
           }
 
           if (act === 'showRecentFilesDropdown') { e.preventDefault(); try { e.stopPropagation(); } catch (e3) {} showRecentFilesDropdown(); return; }
-          if (act === 'removeRecentFileByPath') {
-            e.preventDefault();
-            try { e.stopPropagation(); } catch (e3) {}
-            removeRecentFileByPath(String(el.getAttribute('data-path') || ''));
-            return;
-          }
 
           if (act === 'closeActiveFromRecent') {
             e.preventDefault();
@@ -6323,7 +6341,7 @@ flex-shrink:0;cursor:pointer;
       return;
     }
 
-    let html = '<div class="recent-files-header">最近打开的文件 (点击切换)</div>';
+    let html = '<div class="recent-files-header"><span>最近打开的文件 (点击切换)</span><button class="recent-files-clear-all" title="清空最近打开的文件列表" data-action="clearRecentFiles">清空</button></div>';
     html += '<div class="recent-files-list">';
 
     recentFiles.forEach((file, idx) => {
@@ -6430,6 +6448,41 @@ flex-shrink:0;cursor:pointer;
   async function selectFileFromRecent(index) {
     hideRecentFilesDropdown();
     await selectFile(index, { forceReopen: true });
+  }
+
+  async function clearRecentFiles() {
+    try {
+      if (!Array.isArray(recentFiles) || recentFiles.length === 0) return;
+
+      const wasActiveExternal = !!(window.__plainEditorFilename && window.__plainEditorIsExternal);
+      const wasActiveRepo = (curFile !== null && curFile !== undefined);
+      const wasActiveLog = !!curLogFile;
+
+      recentFiles = [];
+      updateRecentFilesDropdown();
+      hideRecentFilesDropdown();
+
+      if (wasActiveExternal) {
+        try { performCloseEditor(String(window.__plainEditorFilename || '')); } catch (e2) {}
+      }
+      if (wasActiveRepo) {
+        try {
+          curFile = null;
+          curHunks = [];
+          curFileContent = '';
+          clearDiff();
+          renderFileList();
+        } catch (e3) {}
+      }
+      if (wasActiveLog) {
+        try {
+          curLogFile = null;
+          curHunks = [];
+          clearDiff();
+          document.querySelectorAll('.lf').forEach((el) => el.classList.remove('active'));
+        } catch (e4) {}
+      }
+    } catch (e) {}
   }
 
   async function removeRecentFileByPath(path) {
