@@ -8,7 +8,7 @@ import json
 import time
 import re
 from collections import deque, OrderedDict
-import subprocess, os, sys, logging, threading, hashlib, difflib, shutil, mimetypes, base64
+import subprocess, os, sys, logging, logging.handlers, threading, hashlib, difflib, shutil, mimetypes, base64, tempfile
 import queue
 from pathlib import Path
 import urllib.request
@@ -20,7 +20,6 @@ import ssl
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs, unquote
 from datetime import datetime, timedelta, timezone
-import re
 try:
     from websockets.sync.server import serve as ws_serve, ServerConnection
     WEBSOCKET_AVAILABLE = True
@@ -52,12 +51,40 @@ except Exception:
     sync_playwright = None
 
 # ════════════════════════════════════════════════════════
-#  日志系统配置
+#  日志系统配置（带自动轮转和过期清理）
 # ════════════════════════════════════════════════════════
+
+# 日志轮转参数
+_LOG_MAX_BYTES = 10 * 1024 * 1024   # 单个日志文件最大 10MB
+_LOG_BACKUP_COUNT = 5               # 每种日志最多保留 5 个备份
+_LOG_RETENTION_DAYS = 30            # 超过 30 天的日志文件自动清理
 
 # 创建日志目录
 LOG_DIR = Path(__file__).parent / "logs"
 LOG_DIR.mkdir(exist_ok=True)
+
+
+def _cleanup_old_logs():
+    """清理超过 _LOG_RETENTION_DAYS 天的旧日志文件"""
+    try:
+        now = time.time()
+        cutoff = now - _LOG_RETENTION_DAYS * 86400
+        removed = 0
+        for f in LOG_DIR.glob("*.log*"):
+            try:
+                if f.stat().st_mtime < cutoff:
+                    f.unlink()
+                    removed += 1
+            except Exception:
+                pass
+        if removed > 0:
+            print(f"[日志清理] 已清除 {removed} 个过期日志文件（超过 {_LOG_RETENTION_DAYS} 天）")
+    except Exception:
+        pass
+
+
+# 启动时清理旧日志
+_cleanup_old_logs()
 
 # 配置日志格式
 log_format = logging.Formatter(
@@ -75,16 +102,20 @@ console_handler.setLevel(logging.INFO)
 console_handler.setFormatter(log_format)
 logger.addHandler(console_handler)
 
-# 文件处理器 - 记录所有级别的日志
+# 文件处理器 - 按大小轮转，记录所有级别的日志
 log_file = LOG_DIR / f"git_manager_{datetime.now().strftime('%Y%m%d')}.log"
-file_handler = logging.FileHandler(log_file, encoding='utf-8')
+file_handler = logging.handlers.RotatingFileHandler(
+    log_file, encoding='utf-8', maxBytes=_LOG_MAX_BYTES, backupCount=_LOG_BACKUP_COUNT
+)
 file_handler.setLevel(logging.DEBUG)
 file_handler.setFormatter(log_format)
 logger.addHandler(file_handler)
 
-# 错误日志文件处理器 - 只记录 ERROR 及以上级别
+# 错误日志文件处理器 - 按大小轮转，只记录 ERROR 及以上级别
 error_log_file = LOG_DIR / f"errors_{datetime.now().strftime('%Y%m%d')}.log"
-error_handler = logging.FileHandler(error_log_file, encoding='utf-8')
+error_handler = logging.handlers.RotatingFileHandler(
+    error_log_file, encoding='utf-8', maxBytes=_LOG_MAX_BYTES, backupCount=_LOG_BACKUP_COUNT
+)
 error_handler.setLevel(logging.ERROR)
 error_handler.setFormatter(log_format)
 logger.addHandler(error_handler)
@@ -93,6 +124,7 @@ logger.info("=" * 60)
 logger.info("Git Manager Backend 启动初始化...")
 logger.info(f"日志文件: {log_file}")
 logger.info(f"错误日志文件: {error_log_file}")
+logger.info(f"日志轮转: 单文件最大 {_LOG_MAX_BYTES // (1024*1024)}MB, 保留 {_LOG_BACKUP_COUNT} 个备份, {_LOG_RETENTION_DAYS} 天后自动清理")
 logger.info("=" * 60)
 
 # ════════════════════════════════════════════════════════
@@ -1026,6 +1058,10 @@ def notify_files_updated():
 _file_last_encoding = {}
 _file_decode_lossy = {}
 
+# 文件内容内存缓存：(path, mtime) → (content, encoding)。LRU 淘汰，单次运行内有效。
+_file_content_cache = OrderedDict()  # type: OrderedDict[tuple, tuple]
+_FILE_CONTENT_CACHE_MAX = 120
+
 # ════════════════════════════════════════════════════════
 #  WebSocket 实时通信
 # ════════════════════════════════════════════════════════
@@ -1364,10 +1400,6 @@ def _hivo_status_message(cfg: dict, stage: str, **kwargs):
             base = st
 
         if st == "thinking":
-            ri = kwargs.get("round_i")
-            mr = kwargs.get("max_rounds")
-            if isinstance(ri, int) and isinstance(mr, int) and mr > 0:
-                return f"{base} (round {ri}/{mr})"
             return base
 
         if st == "executing":
@@ -1503,9 +1535,58 @@ def _hivo_mem_conf(cfg: dict):
     }
 
 
-def _hivo_summarize_for_long_term(messages: list, max_chars: int = 3500):
+def _hivo_summarize_for_long_term(messages: list, max_chars: int = 3500, profile_id: str = ""):
+    """Generate a long-term summary from older messages.
+    Uses LLM when profile_id is provided; falls back to heuristic otherwise.
+    """
     try:
         arr = messages if isinstance(messages, list) else []
+        if not arr:
+            return ""
+        
+        # Format messages for the prompt (truncate each to 300 chars to fit budget)
+        formatted = []
+        for m in arr:
+            if not isinstance(m, dict):
+                continue
+            role = str(m.get("role") or "").strip()
+            if role not in ("user", "assistant"):
+                continue
+            c = str(m.get("content") or "").strip()
+            if not c:
+                continue
+            c = c[:300].replace("\n", " ").strip()
+            formatted.append(f"[{role}] {c}")
+        
+        if not formatted:
+            return ""
+        
+        history_text = "\n".join(formatted[-40:])  # Last 40 messages max
+        
+        # Try LLM summarization if profile_id is available
+        if profile_id:
+            try:
+                prompt = (
+                    "以下是一段对话历史，请按中文简要总结（控制在" + str(max(200, int(max_chars))) + "个字符以内）：\n"
+                    "1) 用户的主要目标和需求\n"
+                    "2) AI 已完成的操作和结论\n"
+                    "3) 当前进展状态\n\n"
+                    "对话历史：\n"
+                    + history_text
+                )
+                msgs = [{"role": "user", "content": prompt}]
+                ok, msg, result = ai_chat(msgs, profile_id=profile_id, timeout_s=15, stream=False)
+                if ok and result and isinstance(result.get("content"), str):
+                    summary = result["content"].strip()
+                    if len(summary) > 50:
+                        summary = "【长期摘要记忆】\n" + summary
+                        if len(summary) > int(max_chars):
+                            summary = summary[:int(max_chars)]
+                        return summary
+            except Exception:
+                pass  # Fall through to heuristic
+        
+        # Heuristic fallback: first line of each message, keyword classification
         items = []
         for m in arr:
             if not isinstance(m, dict):
@@ -1525,7 +1606,6 @@ def _hivo_summarize_for_long_term(messages: list, max_chars: int = 3500):
 
         goal = []
         status = []
-        ops = []
         for role, head in items:
             if role == "user":
                 if re.search(r"(目标|需求|希望|请|实现|修复|优化)", head):
@@ -1547,10 +1627,6 @@ def _hivo_summarize_for_long_term(messages: list, max_chars: int = 3500):
         if status:
             lines.append("【进展/结论】")
             for x in status[-12:]:
-                lines.append(f"- {x}")
-        if ops:
-            lines.append("【已执行操作】")
-            for x in ops[-12:]:
                 lines.append(f"- {x}")
         out = "\n".join(lines).strip()
         if len(out) > int(max_chars):
@@ -1654,7 +1730,21 @@ def _hivo_format_tool_memory_block(tool_log: list, limit: int = 60):
         picked = arr[-max(0, int(limit)) :]
         if not picked:
             return ""
-        payload = {"recent_tool_calls": picked}
+        # Compact entries to avoid token blowup: keep type/ok/path, truncate long payloads
+        compact = []
+        for entry in picked:
+            if not isinstance(entry, dict):
+                compact.append(entry)
+                continue
+            c = {"type": entry.get("type"), "ok": entry.get("ok")}
+            path = entry.get("path")
+            if path:
+                c["path"] = str(path)
+            msg = entry.get("msg")
+            if msg:
+                c["msg"] = str(msg)[:200]
+            compact.append(c)
+        payload = {"recent_tool_calls": compact}
         s = json.dumps(payload, ensure_ascii=False, indent=2)
         return "【工具执行记忆（用于避免重复调用/支持结果复用）】\n" + s
     except Exception:
@@ -2568,7 +2658,7 @@ def get_file_state_hash():
         return None
     try:
         # 轻量级状态：基于 git status porcelain 输出 + 相关文件 mtime
-        # 仅用 status 输出会导致“持续编辑但状态不变（一直是 M）”时无法触发推送。
+        # 仅用 status 输出会导致"持续编辑但状态不变（一直是 M）"时无法触发推送。
         # 这里额外叠加 mtime，避免触发昂贵的 git diff 统计。
         out, err, code = run_git(["status", "--porcelain=v1", "-u", "-z"], timeout=30)
         if code != 0:
@@ -3062,6 +3152,30 @@ def get_file_content(filepath: str, return_encoding=False):
         full = _safe_repo_abspath(filepath)
         if not full or (not os.path.exists(full)) or os.path.isdir(full):
             return (None, None) if return_encoding else None
+        
+        # Check file content cache (keyed by path + mtime)
+        try:
+            mtime = int(os.path.getmtime(full))
+            cache_key = (full, mtime)
+            if cache_key in _file_content_cache:
+                cached = _file_content_cache[cache_key]
+                _file_content_cache.move_to_end(cache_key)  # LRU: touch
+                return (cached[0], cached[1]) if return_encoding else cached[0]
+        except Exception:
+            cache_key = None
+
+        # Helper: store decoded result into in-memory cache then return
+        def _store_and_return(content, enc):
+            try:
+                if cache_key and content is not None:
+                    _file_content_cache[cache_key] = (content, enc)
+                    if len(_file_content_cache) > _FILE_CONTENT_CACHE_MAX:
+                        try: _file_content_cache.popitem(last=False)
+                        except Exception: pass
+            except Exception:
+                pass
+            return (content, enc) if return_encoding else content
+        
         with open(full, "rb") as f:
             data = f.read()
         
@@ -3081,7 +3195,7 @@ def get_file_content(filepath: str, return_encoding=False):
                 _file_decode_lossy[filepath] = False
             except Exception as e:
                 logger.debug(f"Exception ignored: {e}")
-            return (result, detected_encoding) if return_encoding else result
+            return _store_and_return(result, detected_encoding)
         except UnicodeDecodeError:
             pass
 
@@ -3094,7 +3208,7 @@ def get_file_content(filepath: str, return_encoding=False):
                 _file_decode_lossy[filepath] = False
             except Exception as e:
                 logger.debug(f"Exception ignored: {e}")
-            return (result, detected_encoding) if return_encoding else result
+            return _store_and_return(result, detected_encoding)
         except UnicodeDecodeError:
             pass
 
@@ -3109,12 +3223,12 @@ def get_file_content(filepath: str, return_encoding=False):
                     _file_decode_lossy[filepath] = False
                 except Exception as e:
                     logger.debug(f"Exception ignored: {e}")
-                return (result, detected_encoding) if return_encoding else result
+                return _store_and_return(result, detected_encoding)
             except UnicodeDecodeError:
                 continue
 
         # UTF-8 严格解码失败：探测编码（gbk/gb2312/gb18030 等），用于前端显示。
-        # 注意：这里仅用于“读取展示”，保存仍由 save_file_content() 决定编码，避免扩大损害。
+        # 注意：这里仅用于"读取展示"，保存仍由 save_file_content() 决定编码，避免扩大损害。
         try:
             enc = _detect_text_encoding_from_bytes(data)
             detected_encoding = enc
@@ -3132,7 +3246,7 @@ def get_file_content(filepath: str, return_encoding=False):
                 _file_decode_lossy[filepath] = bool(lossy)
             except Exception as e:
                 logger.debug(f"Exception ignored: {e}")
-            return (result, detected_encoding) if return_encoding else result
+            return _store_and_return(result, detected_encoding)
         except Exception as e:
             logger.warning(f"文件 {filepath} 编码探测/解码失败: {e}，回退 UTF-8+replace")
 
@@ -3143,7 +3257,7 @@ def get_file_content(filepath: str, return_encoding=False):
             _file_decode_lossy[filepath] = True
         except Exception as e:
             logger.debug(f"Exception ignored: {e}")
-        return (result, detected_encoding) if return_encoding else result
+        return _store_and_return(result, detected_encoding)
     except Exception as e:
         logger.error(f"读取文件内容失败: {filepath} - {e}")
         return (None, None) if return_encoding else None
@@ -3178,7 +3292,7 @@ def _detect_text_encoding_from_bytes(data: bytes):
                 
                 if confidence > 0.5:
                     detected_enc_lower = detected_enc.lower()
-                    # 避免单字节编码误判：这类编码几乎总能“解码成功”，但中文会变成乱码
+                    # 避免单字节编码误判：这类编码几乎总能"解码成功"，但中文会变成乱码
                     if (
                         detected_enc_lower in ('latin-1', 'iso-8859-1') or
                         detected_enc_lower.startswith('windows-125') or
@@ -7082,6 +7196,7 @@ def ai_chat(messages: list, temperature: float | None = None, profile_id: str | 
             if stream:
                 # OpenAI-compatible streaming: SSE lines like "data: {json}\n\n" and terminator "data: [DONE]".
                 parts = []
+                finish_reason = ""
                 while True:
                     try:
                         line_b = resp.readline()
@@ -7102,18 +7217,23 @@ def ai_chat(messages: list, temperature: float | None = None, profile_id: str | 
                     except Exception:
                         continue
                     try:
-                        delta = (((j.get("choices") or [{}])[0].get("delta") or {}).get("content"))
+                        choice = (j.get("choices") or [{}])[0]
+                        delta = (choice.get("delta") or {})
+                        delta_content = delta.get("content")
+                        fr = str(choice.get("finish_reason") or "")
+                        if fr:
+                            finish_reason = fr
                     except Exception:
-                        delta = None
-                    if delta:
-                        parts.append(str(delta))
+                        delta_content = None
+                    if delta_content:
+                        parts.append(str(delta_content))
                         try:
                             if callable(on_delta):
-                                on_delta(str(delta))
+                                on_delta(str(delta_content))
                         except Exception as e:
                             logger.debug(f"Exception ignored: {e}")
                 content = "".join(parts)
-                return True, "", {"content": content, "raw": {"stream": True}}
+                return True, "", {"content": content, "raw": {"stream": True}, "finish_reason": finish_reason}
 
             raw = resp.read().decode("utf-8", errors="replace")
             try:
@@ -7135,13 +7255,14 @@ def ai_chat(messages: list, temperature: float | None = None, profile_id: str | 
 
     try:
         content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-        return True, "", {"content": content, "raw": data}
+        finish_reason = str(data.get("choices", [{}])[0].get("finish_reason") or "")
+        return True, "", {"content": content, "raw": data, "finish_reason": finish_reason}
     except Exception:
         return False, "解析响应失败", None
 
 
-def _ai_build_system_context_text():
-    """构建系统提示词（强约束）"""
+def _ai_build_system_context_text(cfg=None):
+    """构建系统提示词（强约束）。可传入 cfg 避免重复 _hivo_load_cfg()。"""
     try:
         spec = get_capabilities_spec()
     except Exception:
@@ -7195,24 +7316,21 @@ def _ai_build_system_context_text():
     tool_registry = "TOOL_REGISTRY_JSON:\n" + json.dumps(slim, ensure_ascii=False, indent=2)
 
     try:
-        cfg0 = _hivo_load_cfg()
+        cfg0 = cfg if isinstance(cfg, dict) and cfg else _hivo_load_cfg()
         extra = str((cfg0.get("system_context_extra") if isinstance(cfg0, dict) else "") or "").strip()
     except Exception:
         extra = ""
 
     strong = (
         "你是 Hivo，Git Manager 系统的智能助手，负责帮助用户管理 Git 仓库和文件操作。\n\n"
-        
         "# 核心原则\n"
         "1. **工具驱动**：通过调用工具完成实际操作，而非仅描述步骤\n"
         "2. **结果导向**：基于工具返回的真实结果回复用户，不臆造结果\n"
         "3. **清晰沟通**：用自然语言解释操作结果，隐藏技术细节\n\n"
-
         "# 术语（避免歧义，必须严格遵守）\n"
         "- **暂存（stash）**：指 `git stash` 的暂存栈；对应工具 `stash_and_pull` / `stash_and_switch`，恢复用 `stash_pop`。\n"
         "- **暂存区（staged / index）**：指 `git add` 后进入 index 的暂存区；对应工具如 `stage_file`、以及提交流程中的 add/commit。\n"
         "- 当用户说“暂存后更新/暂存后切换”时，在本系统语境下默认指 **stash**（不是 git add）。\n\n"
-
         "# 关键交互约束（必须遵守）\n"
         "- 当用户要执行 Git 操作（如 pull / switch / commit / stash）时，你必须先用 `status` 确认当前是否已打开仓库。\n"
         "  - 若 `status` 显示仓库未打开：你只能提示用户选择仓库路径并调用 `open_repo`；不要在仓库已打开时重复要求打开。\n"
@@ -7221,7 +7339,6 @@ def _ai_build_system_context_text():
         "  - 切换分支：`提交后切换` / `暂存后切换` / `直接切换` / `取消`\n"
         "- **用户未明确选择前，禁止执行会改变仓库状态的工具调用**（例如 commit/pull/switch/stash）。\n"
         "- 若需要提交信息，必须在对话中向用户索要提交信息后再执行。\n\n"
-
         "# 复合操作后的状态说明与后续选择（必须遵守）\n"
         "- 当你执行了以下任一复合工具后，你必须在同一轮回复中：\n"
         "  1) 用一句话说明：做了什么 + 是否成功 + 当前仓库处于什么状态；\n"
@@ -7231,50 +7348,34 @@ def _ai_build_system_context_text():
         "  - 如果没有 stash（stashed=false）：也要说明“无需 stash”。\n"
         "- `commit_and_pull` / `commit_and_switch` 完成后：\n"
         "  - 必须提示用户选择：`继续推送（push）` / `暂不推送` / `查看提交记录（commits）` / `取消`。\n\n"
-        
         "# 输出规范\n\n"
-        
         "## 对话回复\n"
         "- 使用 Markdown 格式（段落、列表、标题、代码块）\n"
         "- 代码使用三个反引号包裹，指定语言类型\n"
         "- 图片使用 `![描述](URL)` 格式\n"
+        "- **可执行命令**：当你输出用户可以在终端中直接运行的命令时，使用 `run-` 前缀的语言标签（例如 ````run-bash`、`run-cmd`、`run-powershell`、`run-python`），前端会自动渲染运行按钮\n"
+        "  - 支持：run-bash / run-shell / run-zsh / run-cmd / run-powershell / run-python / run-py / run-git / run-docker / run-npm / run-pnpm / run-yarn / run-pip / run-sql / run-curl / run-go 等\n"
+        "  - 纯展示性代码块继续使用普通标签（bash、python 等），不要加 run- 前缀\n"
+        "- **命令执行反馈**：当用户在对话中发送以 `【用户已执行命令】` 开头的消息时，表示用户已通过前端的运行按钮执行了命令，消息中包含命令内容和终端输出\n"
+        "  - 你必须分析执行结果（成功/失败），基于输出内容给出下一步建议\n"
+        "  - 如果命令执行失败，分析错误原因并提供修正后的命令（使用 run- 代码块）\n"
+        "  - 如果命令执行成功，基于输出内容继续推进当前任务\n"
+        "  - 不要在收到此类消息后重复执行已运行的命令，直接基于输出内容工作\n"
         "- 保持自然对话风格，避免僵硬模板\n\n"
-        
         "## 工具调用格式\n"
-        "**位置**：工具 JSON 必须放在回复末尾，独占一行  \n"
-        "**数量**：每次回复最多 3 个工具调用  \n"
-        "**格式**：严格的 JSON（双引号、无注释、无尾逗号）  \n"
-        "**时机**：只在需要执行操作时输出，纯对话不输出工具\n\n"
-        
-        "✅ 正确示例：\n"
-        "```\n"
-        "我来帮你找到这个文件并查看内容。\n\n"
-        "{\"type\": \"find_files\", \"name\": \"server.py\"}\n"
-        "{\"type\": \"file_content\", \"path\": \"server.py\"}\n"
-        "```\n\n"
-        
-        "❌ 错误示例：\n"
-        "```\n"
-        "我已经打开了文件（实际未调用 open_file）\n"
-        "让我执行 {\"type\": \"save_file\", ...}（不要用\"让我\"等描述）\n"
-        "```\n\n"
-        
+        "严格遵循系统开头的工具调用协议：JSON 格式、每轮最多 3 个、末尾独占一行。\n\n"
         "# 工具使用指南\n\n"
-
         "## Action Card（前端联动执行）\n"
         "- 当你需要调用工具（例如 save_file / delete_file / run_cmd 等）并且需要用户确认时：\n"
         "  1) **直接输出一个 JSON 代码块**，内容为工具调用对象：`{\"type\": \"<tool>\", ...}`\n"
         "  2) 前端会自动识别并渲染 **Action Card**，用户点击卡片按钮即可执行\n"
         "- 不要让用户回复“确认/yes”来触发工具，也不要输出“等待确认后我将执行 save_file”这类流程描述\n\n"
-        
         "## 必须遵循的规则\n"
         "1. **单一真源**：只使用 TOOL_REGISTRY_JSON 中定义的工具\n"
         "2. **参数完整**：确保 `required` 字段都已提供\n"
         "3. **等待回执**：工具调用后等待系统返回结果再进行下一步\n"
         "4. **单一职责**：每个工具调用只做一件事\n\n"
-        
         "## 常用工具速查\n\n"
-        
         "### 文件操作\n"
         "- `save_file` - 创建或修改文件（统一接口）\n"
         "- `file_content` - 读取完整文件内容\n"
@@ -7282,12 +7383,10 @@ def _ai_build_system_context_text():
         "- `delete_file` - 删除文件\n"
         "- `rename_file` - 重命名或移动文件\n"
         "- `raw_file` - 前端预览/下载用（工具链不调用）\n\n"
-        
         "### 文件查找\n"
         "- `find_files` - 按文件名搜索（支持模糊匹配）\n"
         "- `search_code` - 按内容搜索（支持正则）\n"
         "- `list_dir_tree` - 列出目录结构\n\n"
-        
         "### 版本控制\n"
         "- `diff_file` - 查看文件变更详情\n"
         "- `revert_file` - 撤销整个文件的修改\n"
@@ -7295,7 +7394,6 @@ def _ai_build_system_context_text():
         "- `revert_line` - 撤销单行修改\n"
         "- `revert_multi_lines` - 撤销多行修改\n"
         "- `undo_last_turn` - 撤销上一轮操作\n\n"
-        
         "### Git 操作\n"
         "- `stage_file` - 暂存文件\n"
         "- `commit` - 提交更改\n"
@@ -7307,39 +7405,33 @@ def _ai_build_system_context_text():
         "- `stash_and_switch` - 暂存修改并切换分支（完成后可用 stash_pop 恢复）\n"
         "- `commit_and_switch` - 提交并切换分支\n"
         "- `stash_pop` - 恢复暂存的修改\n\n"
-        
         "### 信息查询\n"
         "- `status` - 查看仓库状态\n"
         "- `workspace_context` - 获取工作区概览\n"
         "- `branches` - 列出分支\n"
         "- `commits` - 查看提交历史\n"
         "- `staged_files` - 查看已暂存文件\n\n"
-        
         "### 特殊工具\n"
         "- `open_file` - 在 IDE 中打开文件  \n"
         "  视图模式：`editor`/`change`/`split`/`unified`\n"
         "- `verify_python` - 编译检查 Python 语法\n"
         "- `api_request` - 调用底层 API（仅当无专用工具时）\n"
         "- `run_cmd` - 执行底层终端命令（最后手段，单行命令；注意跨平台差异）\n\n"
-        
         "## 工具选择优先级\n"
         "1. **专用工具优先**：如 `file_content` 而非 `api_request`\n"
         "2. **避免 run_cmd**：除非确实没有其他工具；并且命令必须按当前平台生成（Windows vs Linux/macOS）\n"
         "3. **参数明确时直接调用**：用户已提供完整参数时，直接执行\n\n"
-        
         "## 路径处理规则\n"
         "- 只有文件名（如 `server.py`）→ 先用 `find_files` 定位\n"
         "- 完整路径（如 `src/server.py`）→ 直接使用\n"
         "- 多个同名文件 → 列出选项让用户选择\n\n"
-        
         "# 多步骤任务处理流程\n\n"
         "1. **理解需求** - 确认用户意图和所需参数\n"
         "2. **规划步骤** - 心里分解任务（不向用户描述）\n"
         "3. **依次执行** - 按依赖顺序调用工具（最多3个）\n"
         "4. **等待结果** - 每轮工具调用后等待系统返回\n"
         "5. **汇报结论** - 基于实际结果向用户说明完成情况\n\n"
-        
-        "**示例**：用户说\"帮我找到 config.json 并修改端口为 8080\"  \n"
+        "**示例**：用户说“帮我找到 config.json 并修改端口为 8080”  \n"
         "回复：\n"
         "```\n"
         "好的，我来帮你定位并修改配置文件。\n\n"
@@ -7347,30 +7439,24 @@ def _ai_build_system_context_text():
         "{\"type\": \"file_content\", \"path\": \"config.json\"}\n"
         "```\n"
         "（等待工具返回后，根据文件内容构造修改内容，再调用 save_file）\n\n"
-        
         "# 错误处理\n"
         "- 工具调用失败 → 解释原因并提供替代方案\n"
         "- 参数不足 → 礼貌询问缺失信息（一次1-2个问题）\n"
         "- 遇到系统限制 → 说明约束并建议调整需求\n\n"
-        
         "# 禁止事项\n"
         "❌ 臆造工具执行结果（必须等待实际回执）  \n"
         "❌ 向用户输出工具回执原文（如 `{\"ok\": true}`）  \n"
-        "❌ 使用\"让我调用XXX工具\"等技术性描述  \n"
+        "❌ 使用“让我调用XXX工具”等技术性描述  \n"
         "❌ 重复调用相同参数的工具  \n"
         "❌ 使用 TOOL_REGISTRY_JSON 之外的工具名称\n\n"
-        
         "# 重要说明\n\n"
-        
         "**save_file 统一接口**  \n"
         "创建和修改使用同一个工具，系统自动处理，无需区分 create_file/update_file\n\n"
-        
         "**open_file 视图参数**  \n"
         "- `editor` - 纯文本编辑视图  \n"
         "- `change` - 单栏变更视图（推荐快速查看修改）  \n"
         "- `split` - 双栏对比视图（左旧右新）  \n"
         "- `unified` - 统一 diff 视图（传统 git diff）\n\n"
-        
         "**raw_file 用途**  \n"
         "仅供前端图片/媒体预览与文件下载，不用于 AI 工具链。\n"
     )
@@ -7426,7 +7512,7 @@ def _hivo_extract_tool_calls(text: str, max_calls: int = 3):
         return calls
 
     # 1) Fast path: whole output is a JSON object or JSON array.
-    #    Note: system prompt允许“单个 JSON 对象或 JSON 数组”，这里必须支持数组，否则多指令不会被执行。
+    #    Note: system prompt允许"单个 JSON 对象或 JSON 数组"，这里必须支持数组，否则多指令不会被执行。
     try:
         whole = json.loads(s)
         if isinstance(whole, dict):
@@ -8370,7 +8456,7 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
                 return True, "", {"ok": True, "current": cur2, "message": f"成功切换到分支 {cur2}"}
             return True, "", {"ok": False, "error": err_msg or "切换分支失败", "output": out_msg or ""}
 
-        # 有本地修改：尝试切换，失败时解析“会覆盖”的受影响文件列表
+        # 有本地修改：尝试切换，失败时解析"会覆盖"的受影响文件列表
         if is_remote and (not want_detached):
             return True, "", {
                 "ok": False,
@@ -8664,12 +8750,10 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
     except Exception:
         hist = []
 
-    # Short-term memory window (keep last N turns = 2N messages)
-    try:
-        short_turns = int(mem_conf.get("short_term_turns") or 6)
-    except Exception:
-        short_turns = 6
-    keep_n = max(6, min(24, int(short_turns) * 2))
+    # Short-term memory window: use max_visible_history (capped to avoid token overflow)
+    keep_n = max_hist if max_hist > 0 else 80
+    # Ensure a sane upper bound (max 160 messages = 80 turns) to prevent token overflow
+    keep_n = max(6, min(160, int(keep_n)))
     if keep_n > 0 and len(hist) > keep_n:
         hist = hist[-keep_n:]
 
@@ -8679,8 +8763,7 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
         不抛异常，始终返回字符串。"""
         try:
             try:
-                cfg0 = _hivo_load_cfg()
-                lim0 = cfg0.get("limits") if isinstance(cfg0.get("limits"), dict) else {}
+                lim0 = cfg.get("limits") if isinstance(cfg, dict) and isinstance(cfg.get("limits"), dict) else {}
                 mc = int(lim0.get("ocr_text_max_chars") or 4000)
                 max_chars = max(200, min(20000, mc))
             except Exception:
@@ -8746,7 +8829,7 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
             pass
         return False
     attachments_present = _has_meaningful_attachments(atts)
-    # 预置回执：即便模型未调用任何工具，但用户本轮携带了附件，也生成一条摘要回执便于前端展示“工具摘要”按钮
+    # 预置回执：即便模型未调用任何工具，但用户本轮携带了附件，也生成一条摘要回执便于前端展示"工具摘要"按钮
     pre_receipts: list[dict] = []
     try:
         if attachments_present:
@@ -8761,7 +8844,7 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
 
     if user_text:
         if atts:
-            # 统一采用现有“查看文件”工具链：不再注入 image_url，多模态改为通过工具按需读取。
+            # 统一采用现有"查看文件"工具链：不再注入 image_url，多模态改为通过工具按需读取。
             # 1) 系统提示：声明附件并说明查看方式（含可用链接）
             try:
                 lines = []
@@ -8792,7 +8875,7 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
                 lines = []
             sys_hint = (
                 "【附件说明】本轮对话包含用户上传的附件。请基于附件内容回答问题。\n"
-                "如需查看具体内容，请使用系统提供的‘查看文件’工具（get_file）并传 path 字段读取上列文件；\n"
+                "如需查看具体内容，请使用系统提供的'查看文件'工具（get_file）并传 path 字段读取上列文件；\n"
                 "若模型或当前环境不支持工具调用，请明确告知受限之处，并仅基于可见信息给出分析。"
             )
             if lines:
@@ -8849,7 +8932,7 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
         sys_text = ""
     # Always append tool registry so custom prompts never hide available tools (e.g. run_cmd)
     try:
-        tool_ctx = _ai_build_system_context_text()
+        tool_ctx = _ai_build_system_context_text(cfg)
     except Exception:
         tool_ctx = ""
     if sys_text.strip() and tool_ctx:
@@ -8905,11 +8988,11 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
         msgs.append({"role": "system", "content": tool_mem_block})
     if dyn_context and str(dyn_context).strip():
         msgs.append({"role": "system", "content": str(dyn_context)})
-    # 若存在附件：补充一条系统指导，鼓励按需使用“查看文件”工具读取附件内容，避免幻觉。
+    # 若存在附件：补充一条系统指导，鼓励按需使用"查看文件"工具读取附件内容，避免幻觉。
     if attachments_present:
         try:
             attach_sys = (
-                "【附件读取指引】当前会话包含附件。你可以在需要时调用系统的‘查看文件’工具来读取附件内容，再基于真实内容回答；"
+                "【附件读取指引】当前会话包含附件。你可以在需要时调用系统的'查看文件'工具来读取附件内容，再基于真实内容回答；"
                 "若工具不可用，请说明限制并基于已知信息回答，避免编造文件内容。"
             )
             msgs.append({"role": "system", "content": attach_sys})
@@ -8961,13 +9044,13 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
                 # roll older into summary when needed
                 if memory_enabled and len(st_chat) > keep_n:
                     older = st_chat[:-keep_n]
-                    s2 = _hivo_summarize_for_long_term(older, max_chars=int(mem_conf.get("long_term_summary_chars") or 3500))
+                    s2 = _hivo_summarize_for_long_term(older, max_chars=int(mem_conf.get("long_term_summary_chars") or 3500), profile_id=profile_id)
                     if s2:
                         st["summary"] = s2
         except Exception as e:
             logger.debug(f"Exception ignored: {e}")
         _hivo_ws_emit(run_id, session_id, "done", _hivo_status_message(cfg, "done"))
-        _hivo_ws_emit_final(run_id, session_id, content, ok=True, extra={"rounds": 1, "tool_receipts": pre_receipts})
+        _hivo_ws_emit_final(run_id, session_id, content, ok=True, extra={"rounds": 1, "tool_receipts": pre_receipts, "finish_reason": (result or {}).get("finish_reason", "")})
         return True, content, run_id
 
     tool_sig_hist = []
@@ -9010,13 +9093,33 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
             return False, err, run_id
 
         content = str((result or {}).get("content") or "")
+        finish_reason = str((result or {}).get("finish_reason") or "")
         if not content.strip():
             err = "模型未返回任何内容，请重试或更换模型。"
             _hivo_ws_emit(run_id, session_id, "error", err)
             _hivo_ws_emit_final(run_id, session_id, err, ok=False, extra={"rounds": round_i + 1})
             return False, err, run_id
+        # ── finish_reason 感知：根据 LLM 返回的结束原因增强终端判断 ──
+        if finish_reason == "length" and round_i == 0:
+            # 首轮即因 token 限制被截断 → 几乎肯定丢失了工具调用或关键内容
+            trunc_err = "模型回复因 token 限制被截断（finish_reason=length）。请缩短上下文或提高 max_tokens 后重试。"
+            _hivo_ws_emit(run_id, session_id, "error", trunc_err)
+            _hivo_ws_emit_final(run_id, session_id, trunc_err, ok=False,
+                extra={"rounds": round_i + 1, "can_continue": True, "continue_reason": "truncated", "finish_reason": finish_reason})
+            return False, trunc_err, run_id
+        if finish_reason == "length" and round_i > 0:
+            # 后续轮次被截断：可能丢失了工具调用链，但注入提示引导模型收束
+            _trunc_warn = "\n\n[系统提示] 上一轮回复因 token 限制被截断，若干工具调用可能不完整。请在当前轮优先给出阶段性结论，必要时使用更少的工具（≤2个）完成剩余任务。"
+            content += _trunc_warn
         calls = _hivo_extract_tool_calls(content, max_calls=max_calls)
-        # 允许在首轮即按需调用“查看文件”等工具读取附件内容，避免因抑制导致无法查看附件。
+        # ── finish_reason 二次校验：LLM 表示有工具调用但未提取到有效调用 ──
+        if not calls and finish_reason == "tool_calls":
+            parse_err = "模型请求了工具调用 (finish_reason=tool_calls)，但未能解析出有效的工具调用 JSON。这可能是因为模型输出格式不符合预期，请重试。"
+            _hivo_ws_emit(run_id, session_id, "error", parse_err)
+            _hivo_ws_emit_final(run_id, session_id, parse_err, ok=False,
+                extra={"rounds": round_i + 1, "can_continue": True, "continue_reason": "tool_calls_parse_error", "finish_reason": finish_reason})
+            return False, parse_err, run_id
+        # 允许在首轮即按需调用"查看文件"等工具读取附件内容，避免因抑制导致无法查看附件。
         allow = agent_conf.get("tools")
         if isinstance(allow, list) and allow:
             allow_set = set(str(x).strip() for x in allow if str(x).strip())
@@ -9031,13 +9134,13 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
                         st["chat"] = st_chat[-max_hist:]
                     if memory_enabled and len(st_chat) > keep_n:
                         older = st_chat[:-keep_n]
-                        s2 = _hivo_summarize_for_long_term(older, max_chars=int(mem_conf.get("long_term_summary_chars") or 3500))
+                        s2 = _hivo_summarize_for_long_term(older, max_chars=int(mem_conf.get("long_term_summary_chars") or 3500), profile_id=profile_id)
                         if s2:
                             st["summary"] = s2
             except Exception as e:
                 logger.debug(f"Exception ignored: {e}")
             _hivo_ws_emit(run_id, session_id, "done", _hivo_status_message(cfg, "done"))
-            _hivo_ws_emit_final(run_id, session_id, content, ok=True, extra={"rounds": round_i + 1, "tool_receipts": (pre_receipts + last_tool_receipts) if pre_receipts else last_tool_receipts})
+            _hivo_ws_emit_final(run_id, session_id, content, ok=True, extra={"rounds": round_i + 1, "tool_receipts": (pre_receipts + last_tool_receipts) if pre_receipts else last_tool_receipts, "finish_reason": finish_reason})
             return True, content, run_id
 
         sig = _hivo_repeat_signature(calls, mode=rep_sig_mode)
@@ -9164,9 +9267,7 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
         # (open/click/type) but no screenshot was taken, append one extra receipt.
         try:
             try:
-                cfgS = _hivo_load_cfg()
-                featS = cfgS.get("features") if isinstance(cfgS, dict) else None
-                featS = featS if isinstance(featS, dict) else {}
+                featS = cfg.get("features") if isinstance(cfg, dict) and isinstance(cfg.get("features"), dict) else {}
                 auto_enabled = bool(featS.get("browser_auto_screenshot", False))
             except Exception:
                 auto_enabled = False
@@ -9196,7 +9297,30 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
 
         receipt_lines = ["【工具回执(真实执行结果)】"]
         total_payload_chars = 0
-        max_total_payload_chars = 24000
+        # Per-tool payload caps (chars) to prevent any single tool flooding the receipt
+        _TOOL_PAYLOAD_CAPS = {
+            "file_content": 20000,
+            "read_file_range": 20000,
+            "get_file": 12000,
+            "run_cmd": 15000,
+            "web_search": 16000,
+            "web_fetch": 12000,
+            "browser_text": 12000,
+            "browser_screenshot": 8000,
+            "browser_eval": 8000,
+        }
+        try:
+            limits = (cfg or {}).get("limits") if isinstance(cfg, dict) else {}
+            if limits and isinstance(limits, dict):
+                server_input = int(limits.get("ai_max_input_tokens") or 0)
+                if server_input > 0:
+                    max_total_payload_chars = max(12000, min(80000, int(server_input * 0.25)))
+                else:
+                    max_total_payload_chars = 24000
+            else:
+                max_total_payload_chars = 24000
+        except Exception:
+            max_total_payload_chars = 24000
         for r in receipts:
             nm = str(r.get("type") or "")
             ok1 = bool(r.get("ok"))
@@ -9274,6 +9398,10 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
                             payload = ""
 
                 if payload:
+                    # Apply per-tool-type payload cap if one exists
+                    tool_cap = _TOOL_PAYLOAD_CAPS.get(nm, 0)
+                    if tool_cap > 0 and len(payload) > tool_cap:
+                        payload = payload[:tool_cap] + f"\n...（已截断，原文{len(payload)}字）..."
                     if total_payload_chars >= max_total_payload_chars:
                         continue
                     room = max_total_payload_chars - total_payload_chars
@@ -11261,6 +11389,107 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception as e:
                     logger.error(f"执行命令失败: {cmd} - {e}", exc_info=True)
                     self.send_json({"ok": False, "msg": str(e), "exit_code": 1, "stdout": "", "stderr": ""}, 500)
+
+            elif p == "/api/run_cmd_script":
+                logger.info("处理 /api/run_cmd_script 请求")
+                if not self._require_repo():
+                    return
+                cmds = data.get("cmds")
+                if not isinstance(cmds, list) or len(cmds) == 0:
+                    script_text = str(data.get("script") or "").strip()
+                    if not script_text:
+                        self.send_json({"ok": False, "msg": "缺少 cmds 或 script"}, 400)
+                        return
+                    cmds = [l.strip() for l in script_text.split('\n') if l.strip() and not l.strip().startswith('#')]
+                if not cmds:
+                    self.send_json({"ok": False, "msg": "没有有效命令"}, 400)
+                    return
+
+                timeout = int(data.get("timeout") or 120)
+                timeout = max(10, min(600, timeout))
+
+                cwd = REPO_PATH
+                cwd_raw = data.get("cwd")
+                if cwd_raw:
+                    safe = _safe_repo_abspath(str(cwd_raw).strip())
+                    if safe and os.path.isdir(safe):
+                        cwd = safe
+
+                undo_gid = (self.headers.get("X-Undo-Group") or "").strip()
+                pre_map, pre_snaps = _undo_prepare_cmd_snapshots(undo_gid)
+
+                fd, script_path = tempfile.mkstemp(suffix='.bat', prefix='gm_script_', dir=REPO_PATH)
+                try:
+                    with os.fdopen(fd, 'w', encoding='utf-8', newline='') as f:
+                        f.write('@echo off\r\n')
+                        f.write('setlocal enabledelayedexpansion\r\n')
+                        for i, cmd in enumerate(cmds):
+                            c = cmd.strip()
+                            if not c:
+                                continue
+                            f.write(f'{c}\r\n')
+                            f.write(f'echo [GM:EXIT:{i}:!ERRORLEVEL!]\r\n')
+                        f.write('endlocal\r\n')
+
+                    try:
+                        r = subprocess.run(
+                            ["cmd.exe", "/c", script_path],
+                            cwd=cwd,
+                            capture_output=True,
+                            text=True,
+                            timeout=timeout,
+                            encoding='utf-8',
+                            errors='replace',
+                        )
+                        try:
+                            logger.warning(f"run_cmd_script 完成 (ok={1 if r.returncode == 0 else 0}, cmds={len(cmds)})")
+                        except Exception as e:
+                            logger.debug(f"Exception ignored: {e}")
+
+                        try:
+                            _undo_finalize_cmd_snapshots(undo_gid, pre_map, pre_snaps)
+                            invalidate_changed_files_cache()
+                            notify_files_updated()
+                        except Exception as e:
+                            logger.debug(f"Exception ignored: {e}")
+
+                        full_output = (r.stdout or "")
+                        outputs = []
+                        exit_matches = re.findall(r'\[GM:EXIT:(\d+):(-?\d+)\]', full_output)
+                        parts = re.split(r'\[GM:EXIT:\d+:-?\d+\]', full_output)
+
+                        for idx, match in enumerate(exit_matches):
+                            cmd_idx = int(match[0])
+                            exit_code = int(match[1])
+                            out_text = (parts[idx].strip() if idx < len(parts) else "")
+                            outputs.append({
+                                "idx": cmd_idx,
+                                "cmd": cmds[cmd_idx] if cmd_idx < len(cmds) else "",
+                                "ok": exit_code == 0,
+                                "exit_code": exit_code,
+                                "output": out_text,
+                            })
+
+                        self.send_json({
+                            "ok": r.returncode == 0,
+                            "exit_code": r.returncode,
+                            "stdout": r.stdout or "",
+                            "stderr": r.stderr or "",
+                            "outputs": outputs,
+                        })
+                    except subprocess.TimeoutExpired:
+                        self.send_json({"ok": False, "msg": f"脚本执行超时({timeout}秒)", "exit_code": 124, "stdout": "", "stderr": ""}, 500)
+                    except Exception as e:
+                        logger.error(f"执行脚本失败 - {e}", exc_info=True)
+                        self.send_json({"ok": False, "msg": str(e), "exit_code": 1, "stdout": "", "stderr": ""}, 500)
+                except Exception as e:
+                    logger.error(f"创建脚本失败: {e}", exc_info=True)
+                    self.send_json({"ok": False, "msg": f"创建脚本失败: {e}"}, 500)
+                finally:
+                    try:
+                        os.unlink(script_path)
+                    except Exception:
+                        pass
 
             elif p == "/api/rename_file":
                 logger.info("处理 /api/rename_file 请求")

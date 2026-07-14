@@ -76,7 +76,7 @@
         try {
           const mime = String(a && a.mime || '');
           if (mime.startsWith('image/') && DATA_URL_MAX_BYTES > 0 && size > DATA_URL_MAX_BYTES) {
-            toast(`提示：图片“${String(a.name||'图片')}”体积较大（${((size)/1024/1024).toFixed(1)}MB），发送给 AI 时可能被截断（阈值 ${(DATA_URL_MAX_BYTES/1024/1024).toFixed(1)}MB）。建议压缩后再上传。`, 'warn');
+            toast(`提示：图片"${String(a.name||'图片')}"体积较大（${((size)/1024/1024).toFixed(1)}MB），发送给 AI 时可能被截断（阈值 ${(DATA_URL_MAX_BYTES/1024/1024).toFixed(1)}MB）。建议压缩后再上传。`, 'warn');
           }
         } catch (e) {}
       }
@@ -196,8 +196,6 @@
       const k1t = '__gm_ai_att_cache_' + ts;
       const k2f = '__gm_ai_att_by_content_' + fs;
       const k2t = '__gm_ai_att_by_content_' + ts;
-      const k3f = '__gm_ai_att_recent_' + fs;
-      const k3t = '__gm_ai_att_recent_' + ts;
       
 
       const mapMerge = (kf, kt) => {
@@ -210,21 +208,9 @@
           __gmDbg('migrated map', { from: kf, to: kt, size: Object.keys(m||{}).length });
         } catch {}
       };
-      const arrMerge = (kf, kt) => {
-        try {
-          const a = (() => { try { return JSON.parse(localStorage.getItem(kf) || '[]') || []; } catch { return []; } })();
-          const b = (() => { try { return JSON.parse(localStorage.getItem(kt) || '[]') || []; } catch { return []; } })();
-          const m = [...b, ...a];
-          while (m.length > 50) m.shift();
-          localStorage.setItem(kt, JSON.stringify(m));
-          localStorage.removeItem(kf);
-          __gmDbg('migrated arr', { from: kf, to: kt, size: (m||[]).length });
-        } catch {}
-      };
 
       mapMerge(k1f, k1t);
       mapMerge(k2f, k2t);
-      arrMerge(k3f, k3t);
       __gmDbg('migrate att caches done', { from: fs, to: ts });
     } catch {}
   }
@@ -292,36 +278,7 @@
       localStorage.setItem(key, JSON.stringify(map));
     } catch (e) {}
   }
-  
-  function __gmAiRecentMetaKey(sessionId) {
-    const s0 = (sessionId != null ? String(sessionId) : '').trim();
-    const s1 = (typeof __gmAiActiveSessionId !== 'undefined' ? String(__gmAiActiveSessionId || '') : '').trim();
-    const s2 = (typeof __gmAiLastSendSessionId !== 'undefined' ? String(__gmAiLastSendSessionId || '') : '').trim();
-    const sid = s0 || s1 || s2 || '__fallback__';
-    return '__gm_ai_att_recent_' + sid;
-  }
-  function __gmAiPushRecentMeta(sessionId, metaArr) {
-    try {
-      const key = __gmAiRecentMetaKey(sessionId);
-      if (!key) return;
-      const arr = (() => { try { return JSON.parse(localStorage.getItem(key) || '[]') || []; } catch (e) { return []; }})();
-      if (Array.isArray(metaArr) && metaArr.length) arr.push(metaArr);
-      // 只保留最近 50 条
-      while (arr.length > 50) arr.shift();
-      localStorage.setItem(key, JSON.stringify(arr));
-    } catch (e) {}
-  }
-  function __gmAiShiftRecentMeta(sessionId) {
-    try {
-      const key = __gmAiRecentMetaKey(sessionId);
-      if (!key) return null;
-      const arr = (() => { try { return JSON.parse(localStorage.getItem(key) || '[]') || []; } catch (e) { return []; }})();
-      if (!arr.length) return null;
-      const first = arr.shift();
-      localStorage.setItem(key, JSON.stringify(arr));
-      return Array.isArray(first) ? first : null;
-    } catch (e) { return null; }
-  }
+
   function __gmAiHydrateAttachmentsFromCache() {
     try {
       const key = __gmAiAttCacheKey(__gmAiActiveSessionId);
@@ -394,20 +351,7 @@
               try { __gmDbg('hydrate content-key miss', { key: k.slice(0, 120), hasKey: Object.prototype.hasOwnProperty.call(map2||{}, k) }); } catch (eDbg2m) {}
             }
           }
-          // final fallback: ordered recent meta queue (best-effort) — do NOT apply to user messages to avoid carryover
-          if ((!Array.isArray(m._attMeta) || !m._attMeta.length) && String(m.role||'') !== 'user') {
-            const metaQ = __gmAiShiftRecentMeta(__gmAiActiveSessionId);
-            if (Array.isArray(metaQ) && metaQ.length) {
-              m._attMeta = metaQ.map(a => {
-                const o = { name: String(a && a.name || 'file'), mime: String(a && a.mime || ''), size: Number(a && a.size || 0) };
-                const u = String(a && a.url || ''); if (u) o.url = u; return o;
-              });
-              if ((!Array.isArray(m.attachments) || !m.attachments.length) && m._attMeta.some(x=>x && x.url)) {
-                m.attachments = m._attMeta.map(x=>({ name: String(x && x.name || 'file'), mime: String(x && x.mime || ''), size: Number(x && x.size || 0), url: String(x && x.url || '') }));
-              }
-              try { __gmDbg('hydrate via recent-queue', { meta: (m._attMeta||[]).length, name0: (m._attMeta&&m._attMeta[0]&&m._attMeta[0].name)||'' }); } catch (eDbg3) {}
-            }
-          }
+
           // If attachments still empty but _attMeta currently contains url, synthesize attachments from _attMeta
           try {
             if ((!Array.isArray(m.attachments) || !m.attachments.length) && Array.isArray(m._attMeta) && m._attMeta.length && m._attMeta.some(x=>x && x.url)) {
@@ -2117,6 +2061,10 @@ flex-shrink:0;cursor:pointer;
       align-items:center;justify-content:center;color:var(--text2);font-size:12px;line-height:1;}
     .ai-chip-del:hover{background:rgba(242,114,114,0.18);color:var(--danger);}
 
+    .ai-md .ai-chip{text-decoration:none;max-width:180px;vertical-align:-3px;cursor:pointer;}
+    .ai-md .ai-chip:hover{text-decoration:none;border-color:var(--accent);background:var(--bg5);}
+    .ai-md .ai-chip .ai-chip-label{max-width:130px;}
+
     /* Chip detail/edit popover */
     .ai-chip-pop{position:fixed;z-index:9999;min-width:260px;max-width:340px;padding:10px;border-radius:10px;
       background:var(--bg3);border:1px solid var(--border2);box-shadow:0 12px 32px rgba(0,0,0,0.4);
@@ -2142,11 +2090,12 @@ flex-shrink:0;cursor:pointer;
     .ai-send-btn:hover{opacity:0.9;transform:translateY(-1px);}
     .ai-send-btn:active{transform:translateY(0);}
     .ai-send-btn.is-cancelling svg{animation:gm-rot 0.9s linear infinite;}
+    .ai-send-btn.is-stop{opacity:0.85;}
     @keyframes gm-rot{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
 
     .ai-continue-btn{display:none;align-items:center;justify-content:center;gap:6px;
       padding:6px 10px;border-radius:6px;font-size:12px;font-weight:600;
-      white-space:nowrap;background:transparent;color:var(--text);border:1px solid var(--line);
+      white-space:nowrap;background:transparent;color:var(--text);border:1px solid var(--border);
       cursor:pointer;transition:all 0.15s ease;}
     .ai-continue-btn:hover{background:rgba(127,127,127,0.08);transform:translateY(-1px);}
     .ai-continue-btn:active{transform:translateY(0);}
@@ -2237,7 +2186,7 @@ flex-shrink:0;cursor:pointer;
     .ai-model-menu{position:fixed;z-index:2200;min-width:var(--ai-menu-minw);max-width:var(--ai-menu-maxw);display:none;
       background:rgba(26,28,36,.96);border:1px solid rgba(61,66,98,.85);border-radius:12px;
       box-shadow:0 22px 60px rgba(0,0,0,0.55);padding:6px;backdrop-filter: blur(10px);
-      overflow:auto;}
+      overflow-y:auto;overflow-x:hidden;}
     .ai-model-menu.show{display:block;}
     [data-theme="light"] .ai-model-menu{background:rgba(255,255,255,.96);border:1px solid rgba(206,212,218,.9);
       box-shadow:0 22px 60px rgba(0,0,0,0.15);}
@@ -2261,7 +2210,7 @@ flex-shrink:0;cursor:pointer;
     .ai-empty-card{width:100%;max-width:560px;border-radius:14px;padding:18px 16px;
       background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.08);
       display:flex;flex-direction:column;align-items:center;gap:10px;}
-    [data-theme="light"] .ai-empty-card{background:rgba(0,0,0,0.015);border:1px solid rgba(0,0,0,0.10);}
+    [data-theme="light"] .ai-empty-card{background:rgba(0,0,0,0.03);border:1px solid rgba(0,0,0,0.12);}
     .ai-empty-ic{width:42px;height:42px;border-radius:12px;display:flex;align-items:center;justify-content:center;
       background:rgba(110,168,254,0.10);border:1px solid rgba(110,168,254,0.18);color:var(--accent);}
     [data-theme="light"] .ai-empty-ic{background:rgba(76,166,255,0.10);border-color:rgba(76,166,255,0.18);}
@@ -2302,21 +2251,29 @@ flex-shrink:0;cursor:pointer;
     .ai-md .ai-code-copy:hover{background:rgba(0,0,0,0.52);border-color:rgba(255,255,255,0.24);}
     [data-theme="light"] .ai-md .ai-code-copy{background:rgba(255,255,255,0.75);border-color:rgba(0,0,0,0.14);}
     [data-theme="light"] .ai-md .ai-code-copy:hover{background:rgba(255,255,255,0.92);border-color:rgba(0,0,0,0.22);}
-    .ai-md .ai-code-run{position:absolute;top:8px;right:56px;z-index:2;
-      font-size:inherit;line-height:1; padding:6px 8px; border-radius:8px;
-      border:1px solid rgba(255,255,255,0.16); background:rgba(0,0,0,0.35);
-      color:var(--text); cursor:pointer; user-select:none; opacity:0;
-      transition:opacity 0.15s ease, background 0.15s ease, border-color 0.15s ease;}
-    .ai-md pre:hover .ai-code-run{opacity:1;}
-    .ai-md .ai-code-run:hover{background:rgba(0,0,0,0.52);border-color:rgba(255,255,255,0.24);}
-    [data-theme="light"] .ai-md .ai-code-run{background:rgba(255,255,255,0.75);border-color:rgba(0,0,0,0.14);}
-    [data-theme="light"] .ai-md .ai-code-run:hover{background:rgba(255,255,255,0.92);border-color:rgba(0,0,0,0.22);}
     .ai-md .ai-action-log{margin-top:8px;padding:8px 10px;border-radius:10px;
       border:1px solid rgba(255,255,255,0.10);background:rgba(0,0,0,0.22);
       color:var(--text2);font-size:11px;white-space:pre-wrap;word-break:break-word;}
     [data-theme="light"] .ai-md .ai-action-log{border-color:rgba(0,0,0,0.10);background:rgba(0,0,0,0.04);}
     .ai-md .ai-action-log.ok{border-color:rgba(80,220,140,0.22);}
     .ai-md .ai-action-log.err{border-color:rgba(255,80,80,0.22);}
+
+    /* ---- Command execution result bubble (user side, colored) ---- */
+    .ai-msg.cmd-result{align-self:flex-end;max-width:75%;}
+    .ai-msg.cmd-result .ai-bubble.cmd-ok{background:rgba(80,220,140,0.16)!important;border-color:rgba(80,220,140,0.22)!important;}
+    .ai-msg.cmd-result .ai-bubble.cmd-err{background:rgba(255,80,80,0.16)!important;border-color:rgba(255,80,80,0.22)!important;}
+    [data-theme="light"] .ai-msg.cmd-result .ai-bubble.cmd-ok{background:rgba(46,174,106,0.12)!important;border-color:rgba(80,220,140,0.18)!important;}
+    [data-theme="light"] .ai-msg.cmd-result .ai-bubble.cmd-err{background:rgba(220,60,60,0.12)!important;border-color:rgba(255,80,80,0.18)!important;}
+    .ai-msg.cmd-result .ai-meta{color:var(--text2);font-size:9px;}
+    .ai-msg.cmd-result .ai-cmd-icon{display:inline;opacity:0.5;margin-right:4px;vertical-align:middle;font-family:'JetBrains Mono','Consolas',monospace;}
+    .ai-msg.cmd-result .ai-cmd-out{margin-top:8px;padding:8px 10px;border-radius:8px;white-space:pre-wrap;word-break:break-word;
+      max-height:200px;overflow-y:auto;font-family:'JetBrains Mono','Consolas',monospace;font-size:11px;line-height:1.5;}
+    .ai-msg.cmd-result .ai-cmd-out.cmd-ok{border:1px solid rgba(80,220,140,0.35);background:rgba(0,0,0,0.2);color:#7ee8b8;}
+    .ai-msg.cmd-result .ai-cmd-out.cmd-err{border:1px solid rgba(255,80,80,0.35);background:rgba(0,0,0,0.2);color:#f59e9e;}
+    [data-theme="light"] .ai-msg.cmd-result .ai-cmd-out.cmd-ok{background:rgba(80,220,140,0.06);}
+    [data-theme="light"] .ai-msg.cmd-result .ai-cmd-out.cmd-err{background:rgba(255,80,80,0.06);}
+    .ai-msg.cmd-result .ai-cmd-name{display:inline;color:var(--text2);opacity:0.7;}
+
     .ai-md .ai-action-card{margin-top:10px;border-radius:12px;overflow:hidden;
       border:1px solid rgba(255,255,255,0.10);background:rgba(0,0,0,0.14);}
     [data-theme="light"] .ai-md .ai-action-card{border-color:rgba(0,0,0,0.10);background:rgba(0,0,0,0.03);}
@@ -2333,6 +2290,18 @@ flex-shrink:0;cursor:pointer;
     .ai-md .ai-action-step .st{width:70px;text-align:right;opacity:0.9;}
     .ai-md .ai-action-shot{padding:0 10px 10px 10px;}
     .ai-md .ai-action-shot img{max-width:100%;height:auto;border-radius:10px;}
+
+    /* ---- Inline Run button for LLM-marked actionable code blocks (run-bash etc.) ---- */
+    .ai-md .ai-code-run{position:absolute;top:8px;right:56px;z-index:2;
+      font-size:inherit;line-height:1; padding:6px 8px; border-radius:8px;
+      border:1px solid rgba(255,255,255,0.16); background:rgba(0,0,0,0.35);
+      color:var(--text); cursor:pointer; user-select:none; opacity:0;
+      transition:opacity 0.15s ease, background 0.15s ease, border-color 0.15s ease;}
+    .ai-md pre:hover .ai-code-run{opacity:1;}
+    .ai-md .ai-code-run:hover{background:rgba(0,0,0,0.52);border-color:rgba(255,255,255,0.24);}
+    [data-theme="light"] .ai-md .ai-code-run{background:rgba(255,255,255,0.75);border-color:rgba(0,0,0,0.14);}
+    [data-theme="light"] .ai-md .ai-code-run:hover{background:rgba(255,255,255,0.92);border-color:rgba(0,0,0,0.22);}
+
     .ai-md blockquote{margin:8px 0;padding:6px 10px;border-left:3px solid rgba(110,168,254,0.45);
       color:var(--text2);background:rgba(110,168,254,0.06);border-radius:10px;}
     [data-theme="light"] .ai-md blockquote{background:rgba(76,166,255,0.08);}
@@ -2387,6 +2356,7 @@ flex-shrink:0;cursor:pointer;
     [data-theme="light"] .ai-bubble{border:1px solid rgba(0,0,0,0.10);background:rgba(0,0,0,0.02);}
     [data-theme="light"] .ai-msg.user .ai-bubble{background:linear-gradient(135deg, rgba(76,166,255,0.14), rgba(177,151,252,0.10));
       border-color:rgba(76,166,255,0.20);}
+    [data-theme="light"] .ai-msg.assistant .ai-bubble{background:rgba(0,0,0,0.03);}
 
     @keyframes __gmAiUserGlow {
       0%{box-shadow:0 0 0 rgba(110,180,247,0.0), 0 0 0 rgba(177,151,252,0.0);}
@@ -2397,6 +2367,8 @@ flex-shrink:0;cursor:pointer;
 
     .ai-bubble.pending .ai-msg-actions{display:none;}
     .ai-bubble.pending .ai-md{min-height:18px;animation:__gmAiDots var(--gm-ai-pulse-dur) ease-in-out infinite;}
+    .ai-msg.assistant .ai-bubble.ai-error{border-color:rgba(255,90,90,0.25);background:rgba(255,90,90,0.06);}
+    [data-theme="light"] .ai-msg.assistant .ai-bubble.ai-error{border-color:rgba(220,60,60,0.30);background:rgba(255,200,200,0.18);}
     @keyframes __gmAiDots{
       0%{opacity:.60;}
       50%{opacity:1;}
@@ -2443,6 +2415,8 @@ flex-shrink:0;cursor:pointer;
     .ai-form label{font-size:12px;color:var(--text2);}
     .ai-form input{width:100%;}
     .ai-row{display:flex;gap:8px;align-items:center;}
+    .ai-config-row{display:flex;gap:8px;align-items:center;}
+    .ai-config-label{font-size:12px;color:var(--text2);white-space:nowrap;}
 
     .ai-model-suggest{position:fixed;z-index:2305;display:none;max-height:240px;overflow:auto;
       background:var(--bg3);border:1px solid var(--border);border-radius:10px;
@@ -3587,12 +3561,7 @@ flex-shrink:0;cursor:pointer;
   })();
   const DEBUG_MODE = false; // 设置为 true 启用详细日志
 
-  function __gmDbg(){
-    try {
-      if (!(DEBUG_MODE || window.__gmDebugEnabled)) return;
-      const args = Array.from(arguments);
-    } catch (e) {}
-  }
+  // __gmDbg is redefined later in AI module with richer logic; keep window alias.
   try { window.__gmDbg = __gmDbg; } catch (e) {}
   
   const BASE = 'http://localhost:7842';
@@ -4188,10 +4157,51 @@ flex-shrink:0;cursor:pointer;
       const pid = String(__gmAiSelectedProfileId || (__gmAiConfig && __gmAiConfig.active_profile_id) || '');
       if (pid) {
         setTimeout(() => {
-          try { loadAiChatHistory(pid).catch(()=>{}); } catch (e0) {}
+          try { loadAiChatHistory(pid, '', { restoreDraft: false, restoreContinue: false }).catch(()=>{}); } catch (e0) {}
         }, 0);
       }
     } catch (e) {}
+  }
+
+  // Extract actual commands from code block text, stripping comments, empty lines,
+  // and handling line continuations (backslash at end of line).
+  function __gmAiExtractCommands(rawText) {
+    try {
+      const lines = String(rawText || '').split('\n');
+      const result = [];
+      let continuation = '';
+      for (let i = 0; i < lines.length; i++) {
+        const raw = lines[i];
+        const trimmed = raw.trim();
+        // Flush continuation on blank lines
+        if (!trimmed) {
+          if (continuation) { result.push(continuation.trim()); continuation = ''; }
+          continue;
+        }
+        // Skip comment lines: # (shell/python/ruby), // (JS/TS), -- (SQL/Lua), REM/rem (batch), :: (batch)
+        if (/^(#|\/\/|--|REM\b|rem\b|::)/.test(trimmed)) {
+          if (continuation) { result.push(continuation.trim()); continuation = ''; }
+          continue;
+        }
+        // Line continuation: trailing backslash joins with the next line
+        if (trimmed.endsWith('\\')) {
+          continuation += (continuation ? ' ' : '') + trimmed.slice(0, -1).trim();
+          continue;
+        }
+        if (continuation) {
+          continuation += ' ' + trimmed;
+          result.push(continuation.trim());
+          continuation = '';
+        } else {
+          result.push(trimmed);
+        }
+      }
+      if (continuation) { result.push(continuation.trim()); }
+      return result;
+    } catch (e) {
+      const t = String(rawText || '').trim();
+      return t ? [t] : [];
+    }
   }
 
   function __gmAiEnhanceCodeBlocks(root) {
@@ -4221,16 +4231,9 @@ flex-shrink:0;cursor:pointer;
             } catch (e) { return ''; }
           };
 
-          const isRunnableLang = (lang) => {
+          const isActionableLang = (lang) => {
             const s = String(lang || '').toLowerCase();
-            return s === 'bash' || s === 'sh' || s === 'shell' || s === 'cmd' || s === 'bat' || s === 'powershell' || s === 'ps1' || s === 'git';
-          };
-
-          const isSingleLineCmd = (txt) => {
-            const t = String(txt || '');
-            if (!t) return false;
-            if (t.includes('\n')) return false;
-            return true;
+            return s.startsWith('run-') || s.startsWith('exec-');
           };
 
           const __gmAiTryParseBrowserSteps = () => {
@@ -4626,6 +4629,118 @@ flex-shrink:0;cursor:pointer;
             } catch (e) {}
           };
 
+          // Simplified run button + log area for code blocks marked with run-* / exec-* language tag.
+          const __gmAiAddCmdRunButton = (preEl, rawText) => {
+            try {
+              if (!preEl || !rawText) return;
+              if (preEl.getAttribute('data-has-cmd-run') === '1') return;
+              preEl.setAttribute('data-has-cmd-run', '1');
+
+              // Log area — placed below the code block
+              const logEl = document.createElement('div');
+              logEl.className = 'ai-action-log';
+              logEl.style.display = 'none';
+
+              // Run button — overlays top-right corner (left of the copy button)
+              const runBtn = document.createElement('button');
+              runBtn.type = 'button';
+              runBtn.className = 'ai-code-run';
+              runBtn.textContent = '\u8fd0\u884c';
+              runBtn.title = '\u6267\u884c\u5168\u90e8\u547d\u4ee4\uff08\u811a\u672c\u6a21\u5f0f\uff09';
+
+              runBtn.addEventListener('click', async (ev) => {
+                try { ev.preventDefault(); ev.stopPropagation(); } catch (e0) {}
+
+                const cmds = __gmAiExtractCommands(rawText);
+                if (!cmds || !cmds.length) { toast('\u6ca1\u6709\u53ef\u6267\u884c\u7684\u547d\u4ee4', 'err'); return; }
+
+                const preview = cmds.length === 1 ? cmds[0] : cmds.map((c, i) => (i + 1) + '. ' + c).join('\n');
+                try {
+                  const ok = await showConfirm({
+                    title: '\u786e\u8ba4\u6267\u884c' + (cmds.length > 1 ? ' ' + cmds.length + ' \u6761' : '') + '\u547d\u4ee4',
+                    message: preview,
+                    okText: '\u6267\u884c', cancelText: '\u53d6\u6d88', danger: true,
+                  });
+                  if (!ok) return;
+                } catch (eC) {}
+
+                runBtn.disabled = true;
+                runBtn.textContent = '\u6267\u884c\u4e2d';
+                logEl.classList.remove('ok', 'err');
+                logEl.textContent = '\u6267\u884c\u4e2d...';
+                logEl.style.display = '';
+
+                try {
+                  const isMulti = cmds.length > 1;
+                  const r = isMulti
+                    ? await POST('/api/run_cmd_script', { cmds: cmds, timeout: 300 })
+                    : await POST('/api/run_cmd', { cmd: cmds[0], timeout: 120 });
+
+                  const ok1 = !!(r && r.ok);
+                  let displayOut = '';
+
+                  if (isMulti && Array.isArray(r.outputs) && r.outputs.length) {
+                    displayOut = r.outputs.map((o, i) => {
+                      const mark = o.ok ? '\u2713' : '\u2717';
+                      return '[' + mark + ' ' + (i + 1) + '] ' + (o.output || '(\u65e0\u8f93\u51fa)');
+                    }).join('\n');
+                  } else {
+                    displayOut = String((r && r.stdout) || (r && r.output) || (r && r.result) || '');
+                    if (!displayOut) displayOut = String((r && r.stderr) || '');
+                    if (!displayOut) displayOut = ok1 ? '\u2713 \u6267\u884c\u6210\u529f' : '\u6267\u884c\u5931\u8d25';
+                  }
+
+                  logEl.classList.toggle('ok', ok1);
+                  logEl.classList.toggle('err', !ok1);
+                  logEl.textContent = displayOut;
+
+                  // Auto-send command result to AI
+                  try {
+                    const cmdLabel = isMulti ? cmds.join(' && ') : cmds[0];
+                    const outShort = String(displayOut || '').slice(0, 5000);
+                    const okStr = ok1 ? '\u2713 \u6267\u884c\u6210\u529f' : '\u2717 \u6267\u884c\u5931\u8d25';
+                    const ctxMsg = [
+                      '\u3010\u7528\u6237\u5df2\u6267\u884c\u547d\u4ee4\u3011',
+                      '\u547d\u4ee4: ' + cmdLabel,
+                      '\u72b6\u6001: ' + okStr,
+                      '\u8f93\u51fa:',
+                      outShort || '(\u65e0\u8f93\u51fa)',
+                      '',
+                      '\u8bf7\u57fa\u4e8e\u4ee5\u4e0a\u6267\u884c\u7ed3\u679c\u7ee7\u7eed\u5904\u7406\u3002'
+                    ].join('\n');
+                    try { const ta = document.getElementById('aiChatInput'); if (ta) ta.value = ctxMsg; } catch (eTa) {}
+                    if (!__gmAiIsResponding) { try { __gmAiSendAgentNow(); } catch (eSend) {} }
+                  } catch (eAuto) {}
+                } catch (e3) {
+                  logEl.classList.add('err');
+                  const errTxt = String((e3 && e3.message) || e3 || '\u6267\u884c\u5931\u8d25');
+                  logEl.textContent = errTxt;
+                  // Auto-send error to AI
+                  try {
+                    const cmdLabel = Array.isArray(cmds) ? cmds.join(' && ') : String(cmds || '');
+                    const ctxMsg = [
+                      '\u3010\u7528\u6237\u5df2\u6267\u884c\u547d\u4ee4\u3011',
+                      '\u547d\u4ee4: ' + cmdLabel,
+                      '\u72b6\u6001: \u2717 \u6267\u884c\u5931\u8d25 (\u7f51\u7edc\u9519\u8bef)',
+                      '\u8f93\u51fa:',
+                      errTxt,
+                      '',
+                      '\u8bf7\u57fa\u4e8e\u4ee5\u4e0a\u6267\u884c\u7ed3\u679c\u7ee7\u7eed\u5904\u7406\u3002'
+                    ].join('\n');
+                    try { const ta = document.getElementById('aiChatInput'); if (ta) ta.value = ctxMsg; } catch (eTa) {}
+                    if (!__gmAiIsResponding) { try { __gmAiSendAgentNow(); } catch (eSend) {} }
+                  } catch (eAuto) {}
+                } finally {
+                  runBtn.disabled = false;
+                  runBtn.textContent = '\u8fd0\u884c';
+                }
+              });
+
+              preEl.appendChild(logEl);
+              preEl.insertBefore(runBtn, preEl.firstChild);
+            } catch (e) {}
+          };
+
           try {
             if (pre.getAttribute('data-pre-wrapped') !== '1') {
               const wrap = document.createElement('div');
@@ -4644,76 +4759,8 @@ flex-shrink:0;cursor:pointer;
           try {
             const lang = getLang();
             const txt = getCmdText();
-            const allowRun = isRunnableLang(lang) && isSingleLineCmd(txt);
-            if (allowRun) {
-              const runBtn = document.createElement('button');
-              runBtn.type = 'button';
-              runBtn.className = 'ai-code-run';
-              runBtn.textContent = '运行';
-              runBtn.title = '执行命令（单行）';
-              runBtn.addEventListener('click', async (ev) => {
-                try { ev.preventDefault(); ev.stopPropagation(); } catch (e0) {}
-
-                const cmd0 = getCmdText();
-                if (!cmd0 || !isSingleLineCmd(cmd0)) {
-                  toast('只支持单行命令', 'err');
-                  return;
-                }
-
-                try {
-                  const ok = await showConfirm({
-                    title: '确认执行命令',
-                    message: cmd0,
-                    okText: '执行',
-                    cancelText: '取消',
-                    danger: true,
-                  });
-                  if (!ok) return;
-                } catch (eC) {}
-
-                let logEl = null;
-                try {
-                  logEl = pre.querySelector('.ai-action-log');
-                  if (!logEl) {
-                    logEl = document.createElement('div');
-                    logEl.className = 'ai-action-log';
-                    pre.appendChild(logEl);
-                  }
-                  logEl.classList.remove('ok');
-                  logEl.classList.remove('err');
-                  logEl.textContent = '执行中...';
-                } catch (e1) {}
-
-                try {
-                  runBtn.disabled = true;
-                  runBtn.textContent = '运行中';
-                } catch (e2) {}
-
-                try {
-                  const r = await POST('/api/run_cmd', { cmd: cmd0, timeout: 60 });
-                  const ok1 = !!(r && r.ok);
-                  const out = String((r && (r.output || r.stdout || r.result || r.msg)) || '');
-                  if (logEl) {
-                    logEl.classList.toggle('ok', ok1);
-                    logEl.classList.toggle('err', !ok1);
-                    logEl.textContent = out || (ok1 ? '✓ 执行成功（无输出）' : (String((r && (r.error || r.msg)) || '执行失败') || '执行失败'));
-                  }
-                  if (!ok1) {
-                    __gmToastApiError('执行失败', r, String((r && (r.msg || r.error)) || '执行失败'));
-                  }
-                } catch (e3) {
-                  if (logEl) {
-                    logEl.classList.add('err');
-                    logEl.textContent = String((e3 && e3.message) || e3 || '执行失败');
-                  }
-                } finally {
-                  try {
-                    runBtn.disabled = false;
-                    runBtn.textContent = '运行';
-                  } catch (e4) {}
-                }
-              });
-              pre.insertBefore(runBtn, pre.firstChild);
+            if (isActionableLang(lang) && txt && pre.getAttribute('data-has-cmd-run') !== '1') {
+              __gmAiAddCmdRunButton(pre, txt);
             }
           } catch (eRun) {}
 
@@ -4746,6 +4793,95 @@ flex-shrink:0;cursor:pointer;
           pre.setAttribute('data-has-copy', '1');
         } catch (e2) {}
       }
+    } catch (e) {}
+  }
+
+  function __gmAiEnhanceLinkChips(root) {
+    try {
+      const host = root && root.querySelector ? root : document;
+      const md = host.querySelector ? host.querySelector('.ai-md') : null;
+      if (!md) return;
+
+      const skipTags = { CODE: true, PRE: true, A: true, SCRIPT: true, STYLE: true, BUTTON: true };
+
+      const msgUrlRe = /https?:\/\/[^\s<>"'\)\]\`\u4e00-\u9fa5\u3000-\u303f\uff00-\uffef]+/g;
+
+      const buildMsgChip = (info) => {
+        const a = document.createElement('a');
+        a.href = info.raw;
+        a.target = '_blank';
+        a.rel = 'noreferrer';
+        a.className = 'ai-chip';
+        a.dataset.chipType = info.type;
+        a.dataset.chipRaw = info.raw;
+        a.title = info.raw;
+
+        a.appendChild(__gmAiChipMakeIconEl(info));
+
+        const label = document.createElement('span');
+        label.className = 'ai-chip-label';
+        label.textContent = __gmAiChipLabelText(info);
+        a.appendChild(label);
+
+        return a;
+      };
+
+      const walk = (node) => {
+        if (!node) return;
+        if (node.nodeType === Node.TEXT_NODE) {
+          const text = String(node.nodeValue || '');
+          if (!text) return;
+          if (!/https?:\/\//i.test(text)) return;
+
+          const parent = node.parentNode;
+          if (!parent) return;
+          const pname = parent.tagName || '';
+          if (skipTags[pname]) return;
+
+          const re = msgUrlRe;
+
+          const frag = document.createDocumentFragment();
+          let last = 0, m, hasChip = false;
+          while ((m = re.exec(text))) {
+            const raw = m[0];
+            const start = m.index;
+            if (start > last) frag.appendChild(document.createTextNode(text.slice(last, start)));
+            const info = __gmAiChipClassify(raw);
+            if (info) {
+              frag.appendChild(buildMsgChip(info));
+              hasChip = true;
+            } else {
+              frag.appendChild(document.createTextNode(raw));
+            }
+            last = start + raw.length;
+          }
+          if (!hasChip) return;
+          if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+          parent.replaceChild(frag, node);
+          return;
+        }
+        if (node.nodeType !== Node.ELEMENT_NODE) return;
+        const tag = node.tagName || '';
+        if (tag === 'PRE') return;
+        if (tag === 'CODE') {
+          const inPre = node.parentNode && node.parentNode.tagName === 'PRE';
+          if (inPre) return;
+          const txt = String(node.textContent || '').trim();
+          if (!/^https?:\/\//i.test(txt)) return;
+          const m = txt.match(msgUrlRe);
+          if (!m || m[0] !== txt) return;
+          const info = __gmAiChipClassify(txt);
+          if (!info) return;
+          const chip = buildMsgChip(info);
+          if (node.parentNode) node.parentNode.replaceChild(chip, node);
+          return;
+        }
+        if (skipTags[tag]) return;
+        const children = Array.from(node.childNodes);
+        for (const child of children) walk(child);
+      };
+
+      walk(md);
     } catch (e) {}
   }
 
@@ -5182,9 +5318,21 @@ flex-shrink:0;cursor:pointer;
         else rest.push(item);
       }
 
-      const MAX_TOTAL_CHARS = 90000;
-      const MAX_ONE_MSG_CHARS = 16000;
+
+      // Read server token limits via config; fallback to conservative defaults
+      let maxInputTokens = 64000;  // default fallback
+      try {
+        const cfgLimits = (__gmAiConfig && __gmAiConfig.limits);
+        if (cfgLimits && typeof cfgLimits === 'object') {
+          const serverMaxInput = parseInt(cfgLimits.ai_max_input_tokens, 10) || 0;
+          if (serverMaxInput > 0) maxInputTokens = serverMaxInput;
+        }
+      } catch (eL) {}
+      // Estimate chars from tokens (avg ~2 chars/token for mixed content)
+      const MAX_TOTAL_CHARS = Math.max(90000, Math.floor(maxInputTokens * 2));
+      const MAX_ONE_MSG_CHARS = Math.min(16000, Math.floor(MAX_TOTAL_CHARS * 0.2));
       const KEEP_LAST = 24;
+
 
       const trunc = (s, maxLen) => {
         const t = String(s || '');
@@ -5325,13 +5473,14 @@ flex-shrink:0;cursor:pointer;
       }
     } catch(_) {}
     try {
-      const _attMetaSnap = Array.isArray(__gmAiPendingAttachments) ? __gmAiPendingAttachments.map((a) => {
+      const _attMeta0 = Array.isArray(attachmentsBackup) ? attachmentsBackup : [];
+      const _attMetaSnap = _attMeta0.length > 0 ? _attMeta0.map((a) => {
         const o = { name: String(a && a.name || 'file'), mime: String(a && a.mime || ''), size: Number(a && a.size || 0) };
         if (a && a.url) o.url = String(a.url);
         if (!o.url && a && a.path) o.path = String(a.path).replace(/\\/g, '/');
         return o;
-      }) : (_attMeta || []);
-      pending._attMeta = Array.isArray(_attMeta) ? _attMeta : _attMetaSnap;
+      }) : [];
+      pending._attMeta = _attMetaSnap.length ? _attMetaSnap : [];
     } catch (eSnap0) {}
 
     // Persist history after snapshot exists
@@ -6344,7 +6493,7 @@ flex-shrink:0;cursor:pointer;
       return;
     }
 
-    let html = '<div class="recent-files-header"><span>最近打开的文件 (点击切换)</span><button class="recent-files-clear-all" title="清空最近打开的文件列表" data-action="clearRecentFiles"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button></div>';
+    let html = '<div class="recent-files-header"><span>最近打开的文件 (点击切换)</span><button class="recent-files-clear-all" title="清空最近打开的文件列表" data-action="clearRecentFiles"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button></div>';
     html += '<div class="recent-files-list">';
 
     recentFiles.forEach((file, idx) => {
@@ -7083,15 +7232,6 @@ flex-shrink:0;cursor:pointer;
     try { updateFindMeta(); } catch (e5) {}
   }
 
-  function __gmEscapeHtml(s) {
-    return String(s || '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
-  }
-
   function __gmClearFindOverlays() {
     try {
       if (__gmFindOverlayScrollHandlers && __gmFindOverlayScrollHandlers.length) {
@@ -7621,7 +7761,7 @@ flex-shrink:0;cursor:pointer;
       h.undo = Array.isArray(window.__gmEditUndoStack) ? window.__gmEditUndoStack.slice() : [];
       h.redo = Array.isArray(window.__gmEditRedoStack) ? window.__gmEditRedoStack.slice() : [];
       try {
-        // 旧快照可能没有 scopeKey，补齐为当前文件 scope，避免后续被误认为可跨文件恢复导致“跳视图”。
+        // 旧快照可能没有 scopeKey，补齐为当前文件 scope，避免后续被误认为可跨文件恢复导致"跳视图"。
         h.undo = h.undo.map(s => {
           try {
             if (!s) return s;
@@ -8188,7 +8328,7 @@ flex-shrink:0;cursor:pointer;
           const snapScopeKey = (snap.scopeKey !== undefined && snap.scopeKey !== null) ? String(snap.scopeKey) : null;
           const scopeOk = !!(curScopeKey && snapScopeKey && snapScopeKey === curScopeKey);
 
-          // 仅在 scope 匹配时恢复 diff 数据；避免跨文件/跨视图 undo 还原 files 等全局状态导致“跳转”。
+          // 仅在 scope 匹配时恢复 diff 数据；避免跨文件/跨视图 undo 还原 files 等全局状态导致"跳转"。
           if (scopeOk) {
             if (snap.hunks !== undefined && snap.hunks !== null) {
               try { curHunks = JSON.parse(JSON.stringify(snap.hunks || [])); } catch (e4) { curHunks = snap.hunks; }
@@ -8283,7 +8423,7 @@ flex-shrink:0;cursor:pointer;
         
         try { setupEditableLineEditing(); } catch (e2) {}
 
-        // 先同步恢复一次滚动，避免撤销时出现“先跳到顶部再恢复”的可见闪跳。
+        // 先同步恢复一次滚动，避免撤销时出现"先跳到顶部再恢复"的可见闪跳。
         try { __gmRestoreDiffScrollState(host, prevScroll); } catch (e2) {}
         
         // 还原滚动与光标定位延迟到下一帧，避免 innerHTML 重建 + 行号更新导致视图跳到顶部。
@@ -9779,7 +9919,7 @@ flex-shrink:0;cursor:pointer;
             return;
           }
 
-          // 折叠光标：在行首 Backspace / 行尾 Delete 时，阻止浏览器向结构元素“吃”过去
+          // 折叠光标：在行首 Backspace / 行尾 Delete 时，阻止浏览器向结构元素"吃"过去
           const node = r.startContainer;
           const el = node ? ((node.nodeType === Node.ELEMENT_NODE) ? node : (node.parentElement || null)) : null;
           let dl = (el && el.closest) ? el.closest('.dl') : null;
@@ -10270,7 +10410,7 @@ flex-shrink:0;cursor:pointer;
           const t = e.target;
           if (!t || !t.closest) return;
           
-          // 左侧“原始版本”面板是只读区域：允许正常选择/复制，不要把焦点重定向到可编辑行
+          // 左侧"原始版本"面板是只读区域：允许正常选择/复制，不要把焦点重定向到可编辑行
           // 否则会导致点击后滚动跳回顶部、无法选中文本等异常。
           const sp = t.closest('.sp');
           if (sp && sp.classList && sp.classList.contains('sp-readonly')) {
@@ -10505,7 +10645,7 @@ flex-shrink:0;cursor:pointer;
 
           // 修复：在存在选区时，Backspace/Delete 应删除选中内容（多行/跨行）。
           // 注意：ce-host 下浏览器默认删除会直接改 DOM，且可能误伤 UI 列；这里复用现有的
-          // __handleMultiLineSelectionReplace('') 做“受控删除”。
+          // __handleMultiLineSelectionReplace('') 做"受控删除"。
           if (isDestructive && !sel.isCollapsed) {
             try {
               const ok = __handleMultiLineSelectionReplace('');
@@ -11961,7 +12101,7 @@ flex-shrink:0;cursor:pointer;
           return true;
         }
         if (k === 'Enter') {
-          // 选区回车：应当替换选区（清空选区并插入换行/拆行），否则用户感觉“回车删除无效”。
+          // 选区回车：应当替换选区（清空选区并插入换行/拆行），否则用户感觉"回车删除无效"。
           e.__gmSelHandled = true;
           e.preventDefault();
           const host = document.getElementById('diffView');
@@ -13479,7 +13619,7 @@ flex-shrink:0;cursor:pointer;
         if (cur && cur.length) {
           const ok = await showConfirm({
             title: '确认撤销撤回',
-            message: '检测到你在撤回后又产生了新的未提交修改。\n\n继续“撤销撤回”会用快照内容覆盖当前工作区文件，可能导致你刚才的新修改丢失。\n\n是否继续？',
+            message: '检测到你在撤回后又产生了新的未提交修改。\n\n继续"撤销撤回"会用快照内容覆盖当前工作区文件，可能导致你刚才的新修改丢失。\n\n是否继续？',
             okText: '继续撤销',
             cancelText: '取消',
             danger: true,
@@ -14273,7 +14413,7 @@ flex-shrink:0;cursor:pointer;
           for (let i = __gmAiChatMessages.length - 1; i >= 0; i--) {
             const m = __gmAiChatMessages[i];
             if (m && m.role === 'assistant' && m.pending && String(m.run_id || '') === runId) {
-              // First delta should replace any pending status text (e.g. "思考中...(round x/y)").
+              // First delta should replace any pending status text (e.g. "思考中...").
               if (!m.stream_started) {
                 m.stream_started = true;
                 m.content = delta;
@@ -14281,8 +14421,17 @@ flex-shrink:0;cursor:pointer;
                 m.content = String(m.content || '') + delta;
               }
               m.stage = 'streaming';
-              __gmAiRenderChat();
-              try { __gmAiRefreshSendCounter(); } catch (eC2) {}
+              // RAF-coalesced render: schedule at most one render per animation frame
+              if (window.__gmAiDeltaRenderRid) {
+                try { cancelAnimationFrame(window.__gmAiDeltaRenderRid); } catch(_) {}
+              }
+              window.__gmAiDeltaRenderRid = requestAnimationFrame(() => {
+                try {
+                  window.__gmAiDeltaRenderRid = 0;
+                  __gmAiRenderChat();
+                  try { __gmAiRefreshSendCounter(); } catch (eC2) {}
+                } catch(e) {}
+              });
               break;
             }
           }
@@ -14309,13 +14458,22 @@ flex-shrink:0;cursor:pointer;
                 m.stage = 'aborted';
                 try { m.stream_started = false; } catch(_) {}
                 if (!m.content) m.content = '已请求取消（后台将尽快中止）';
-                try { /* removed debug log: ignore final after cancel */ } catch(_) {}
               } else {
                 m.stage = (data.ok === false) ? 'error' : 'done';
                 try { m.stream_started = false; } catch(_) {}
-                m.content = String(data.content || '');
+                const finalContent = String(data.content || '');
+                if (finalContent) m.content = finalContent;
+                // If no content in final event but streaming already delivered content, keep it.
+                if (!m.content) m.content = '对话已完成（无内容）';
               }
               try { if (Array.isArray(data.tool_receipts)) m.tool_receipts = data.tool_receipts; } catch(_){ }
+              // Flush any pending RAF render from streaming deltas before final render
+              try {
+                if (window.__gmAiDeltaRenderRid) {
+                  cancelAnimationFrame(window.__gmAiDeltaRenderRid);
+                  window.__gmAiDeltaRenderRid = 0;
+                }
+              } catch(_) {}
               __gmAiRenderChat();
               try { __gmAiRefreshSendCounter(); } catch (eC3) {}
               __gmAiIsResponding = false;
@@ -14420,7 +14578,7 @@ flex-shrink:0;cursor:pointer;
   let shouldAutoRefreshDiff = true;
 
   // 一次性跳过下一次由 WebSocket 推送触发的自动 diff 刷新
-  // 用于在撤回/保存成功后（前端已主动刷新 diff）避免二次 loadDiff 造成的“加载中”闪烁
+  // 用于在撤回/保存成功后（前端已主动刷新 diff）避免二次 loadDiff 造成的"加载中"闪烁
   let skipNextAutoDiffRefresh = false;
 
   // 临时禁用自动刷新diff的函数
@@ -14725,23 +14883,52 @@ flex-shrink:0;cursor:pointer;
   let branchMenuQuery = '';
   let __gmRefreshEpoch = 0;
 
-  let __gmAiConfigLoadedOnce = false;
+  // ── Hivo AI: Panel & Display ──
   let __gmAiPanel = 'chat';
-  let __gmAiChatMessages = [];
-  let __gmAiLastSendSessionId = '';
+  let __gmAiIsResponding = false;
+
+  // ── Hivo AI: Config & Profiles ──
+  let __gmAiConfigLoadedOnce = false;
   let __gmAiConfig = { active_profile_id: '', profiles: [] };
   let __gmAiSelectedProfileId = '';
   let __gmAiEditingProfileId = '';
+
+  // ── Hivo AI: Sessions & Messages ──
+  let __gmAiSessions = [];
+  let __gmAiActiveSessionId = '';
+  let __gmAiChatMessages = [];
+  let __gmAiLastSendSessionId = '';
+  let __gmAiEphemeralSessionPrefix = '__local__';
+
+  // ── Hivo AI: Run Lifecycle ──
   let __gmAiActiveTurnUndoGroupId = '';
   let __gmAiRunStatusCache = new Map();
-  let __gmAiPendingAttachments = [];
   let __gmAiIsCancelling = false;
   let __gmAiCancelledRunIds = new Set();
   let __gmAiCancelWatchTimer = 0;
+  let __gmAiLastUndoSteps = 0;
+  let __gmAiUndoStatsReqSeq = 0;
+  // Runtime-only Continue state (not persisted)
+  let __gmAiContinueState = { on: false, reason: '' };
+  // One-shot resume hint for next request (runtime only; not persisted)
+  window.__gmAiResumeHint = (window.__gmAiResumeHint && typeof window.__gmAiResumeHint === 'object')
+    ? window.__gmAiResumeHint
+    : { on: false, from_message_id: '', reason: '', run_id: '' };
+
+  // ── Hivo AI: Attachments & Drafts ──
+  let __gmAiPendingAttachments = [];
+  let __gmAiDraftPersistTimer = 0;
+  // In-memory per-session drafts (not persisted): { [sessionId]: { text: string, atts: array } }
+  window.__gmAiSessionDrafts = window.__gmAiSessionDrafts && typeof window.__gmAiSessionDrafts === 'object' ? window.__gmAiSessionDrafts : {};
+
+  // ── Hivo AI: Models & Capabilities ──
+  let __gmAiModels = [];
+  let __gmAiModelsMeta = { base_url: '', api_key: '' };
+  let __gmAiModelRefreshTimer = 0;
   let __gmAiCapabilitiesText = '';
   let __gmAiCapabilitiesSpec = null;
-  let __gmAiSessions = [];
-  let __gmAiActiveSessionId = '';
+
+  // ── Hivo AI: Debug ──
   let __gmAiDebug = false;
   try { __gmAiDebug = (String(localStorage.getItem('gm_ai_debug') || '') === '1'); } catch (eDbgInit) {}
   function __gmDbg(...args) {
@@ -14751,22 +14938,6 @@ flex-shrink:0;cursor:pointer;
       if (on && console && console.warn) console.warn('[GM-AI]', ...args);
     } catch (e) {}
   }
-  let __gmAiEphemeralSessionPrefix = '__local__';
-  let __gmAiModels = [];
-  let __gmAiModelsMeta = { base_url: '', api_key: '' };
-  let __gmAiModelRefreshTimer = 0;
-  let __gmAiIsResponding = false;
-  let __gmAiLastUndoSteps = 0;
-  let __gmAiUndoStatsReqSeq = 0;
-  let __gmAiDraftPersistTimer = 0;
-  // Runtime-only Continue state (not persisted)
-  let __gmAiContinueState = { on: false, reason: '' };
-  // One-shot resume hint for next request (runtime only; not persisted)
-  window.__gmAiResumeHint = (window.__gmAiResumeHint && typeof window.__gmAiResumeHint === 'object')
-    ? window.__gmAiResumeHint
-    : { on: false, from_message_id: '', reason: '', run_id: '' };
-  // In-memory per-session drafts (not persisted): { [sessionId]: { text: string, atts: array } }
-  window.__gmAiSessionDrafts = window.__gmAiSessionDrafts && typeof window.__gmAiSessionDrafts === 'object' ? window.__gmAiSessionDrafts : {};
 
   function __gmAiSaveSessionDraft(sessionId) {
     try {
@@ -14791,45 +14962,11 @@ flex-shrink:0;cursor:pointer;
     } catch (e) {}
   }
 
-  function __gmAiDraftStorageKey(profileId, sessionId) {
-    try {
-      const pid = String(profileId || '').trim();
-      const sid = String(sessionId || '').trim();
-      if (!pid || !sid) return '';
-      return `gm_ai_input_draft:${pid}:${sid}`;
-    } catch (e) {
-      return '';
-    }
-  }
-
-  function __gmAiPersistDraftForActiveSession() {
-    try {
-      const ta = document.getElementById('aiChatInput');
-      if (!ta) return;
-      const pid = String(__gmAiSelectedProfileId || __gmAiConfig.active_profile_id || '').trim();
-      const sid = String(__gmAiActiveSessionId || '').trim();
-      const k = __gmAiDraftStorageKey(pid, sid);
-      if (!k) return;
-      // Draft should NOT be persisted. Clean legacy persisted value if any.
-      try { localStorage.removeItem(k); } catch (e2) {}
-    } catch (e) {}
-  }
-
-  function __gmAiRestoreDraftForActiveSession() {
-    try {
-      const ta = document.getElementById('aiChatInput');
-      if (!ta) return;
-      // Draft should NOT be restored across reloads/sessions.
-      ta.value = '';
-    } catch (e) {}
-  }
-
+  // Draft persistence: intentionally disabled (no-op). Session drafts are kept in memory only via __gmAiSessionDrafts.
+  function __gmAiPersistDraftForActiveSession() { /* no-op: drafts not persisted */ }
+  function __gmAiRestoreDraftForActiveSession() { /* no-op: drafts not persisted */ }
   function __gmAiSchedulePersistDraft() {
-    try {
-      if (__gmAiDraftPersistTimer) clearTimeout(__gmAiDraftPersistTimer);
-      // Draft should NOT be persisted. Keep as no-op (still clears pending timers).
-      __gmAiDraftPersistTimer = 0;
-    } catch (e) {}
+    try { if (__gmAiDraftPersistTimer) { clearTimeout(__gmAiDraftPersistTimer); __gmAiDraftPersistTimer = 0; } } catch (e) {}
   }
 
   
@@ -15132,6 +15269,27 @@ flex-shrink:0;cursor:pointer;
     try { await POST('/api/ai_config', { config: __gmAiConfig }); } catch (e) {}
   }
 
+  function __gmAiParseCmdResult(content) {
+    try {
+      if (!content || !content.startsWith('\u3010\u7528\u6237\u5df2\u6267\u884c\u547d\u4ee4\u3011')) return null;
+      const lines = content.split('\n');
+      let cmd = '', ok = true, outStart = -1;
+      for (let i = 0; i < lines.length; i++) {
+        const l = lines[i];
+        if (l.startsWith('\u547d\u4ee4: ')) cmd = l.slice(4).trim();
+        else if (l.startsWith('\u72b6\u6001: ')) { const s = l.slice(4).trim(); ok = s.includes('\u2713') || /\u6210\u529f/.test(s); }
+        else if (l === '\u8f93\u51fa:' || l.startsWith('\u8f93\u51fa:')) { outStart = i + 1; break; }
+      }
+      if (outStart === -1 || !cmd) return null;
+      let outEnd = lines.length;
+      for (let i = lines.length - 1; i >= outStart; i--) {
+        if (lines[i].trim() === '\u8bf7\u57fa\u4e8e\u4ee5\u4e0a\u6267\u884c\u7ed3\u679c\u7ee7\u7eed\u5904\u7406\u3002') { outEnd = i; break; }
+      }
+      const output = lines.slice(outStart, outEnd).join('\n').trim();
+      return { cmd, ok, output };
+    } catch (e) { return null; }
+  }
+
   function __gmAiRenderChat() {
     try {
       
@@ -15191,14 +15349,15 @@ flex-shrink:0;cursor:pointer;
         const isHidden = Boolean(m && m.hidden);
         const isUser = role === 'user';
         const isPending = Boolean(m && m.pending);
+        const isError = !isPending && String(m && m.stage) === 'error';
         const userLoading = Boolean(isUser && lastIsPendingAssistant && idx === lastUserIdx);
-        const attShownSig = (Number(m && m._attShown) || 0);
-        const baseForSig = attachments.length ? attachments : metaArr0;
-        const attNamesSig = baseForSig && baseForSig.length
+        const attShownSig = isUser ? (Number(m && m._attShown) || 0) : 0;
+        const baseForSig = isUser ? (attachments.length ? attachments : metaArr0) : [];
+        const attNamesSig = (isUser && baseForSig && baseForSig.length)
           ? baseForSig.map(a => String(a && a.name || '')).join('|').slice(0, 200)
           : '';
-        const effAttLen = attachments.length ? attachments.length : metaLen0;
-        const sig = `${role}|${isPending ? 1 : 0}|${userLoading ? 1 : 0}|${isHidden ? 1 : 0}|${content}|${effAttLen}|${attShownSig}|${attNamesSig}`;
+        const effAttLen = isUser ? (attachments.length ? attachments.length : metaLen0) : 0;
+        const sig = `${role}|${isPending ? 1 : 0}|${isError ? 1 : 0}|${userLoading ? 1 : 0}|${isHidden ? 1 : 0}|${content}|${effAttLen}|${attShownSig}|${attNamesSig}`;
         nextCache.push(sig);
         try { if (__gmAiDebug && isUser) { __gmDbg('render sig', { idx, effAttLen, metaLen0, attLen: attachments.length, attNamesSig, shown: attShownSig, hidden: isHidden }); } } catch (eDbgRS) {}
 
@@ -15211,8 +15370,9 @@ flex-shrink:0;cursor:pointer;
             node.innerHTML = '';
           }
         } else if (prevSig === sig) {
-          if (node.className !== ('ai-msg ' + (isUser ? 'user' : 'assistant'))) {
-            node.className = 'ai-msg ' + (isUser ? 'user' : 'assistant');
+          const expectedCls = node.dataset.cmdResult === '1' ? 'ai-msg cmd-result' : ('ai-msg ' + (isUser ? 'user' : 'assistant'));
+          if (node.className !== expectedCls) {
+            node.className = expectedCls;
           }
         } else {
           node.className = 'ai-msg ' + (isUser ? 'user' : 'assistant');
@@ -15272,55 +15432,6 @@ flex-shrink:0;cursor:pointer;
               attachmentsHtml = tiles ? `<div style=\"margin-bottom:8px;display:flex;flex-wrap:wrap;\">${tiles}</div>` : '';
               try { if (__gmAiDebug) { __gmDbg('render att', { idx, total, end, hasMore, rem }); } } catch (eDbgRA) {}
             }
-          } else {
-            // Assistant attachments: paginate like user, with +N tile and hover title
-            const metaA = Array.isArray(m && m._attMeta) ? m._attMeta : [];
-            const baseA = attachments.length ? attachments : metaA;
-            if (baseA && baseA.length) {
-              const totalA = baseA.length;
-              let shownA = 0;
-              try {
-                const msgA = (__gmAiChatMessages && __gmAiChatMessages[idx]) || null;
-                const prevA = Number(msgA && msgA._attShown);
-                shownA = Number.isFinite(prevA) && prevA > 0 ? prevA : (totalA > 5 ? 5 : totalA);
-                if (msgA) msgA._attShown = shownA;
-              } catch (_eShownA) { shownA = totalA > 5 ? 5 : totalA; }
-
-              const endA = Math.min(shownA, totalA);
-              const tilesA = baseA.slice(0, endA).map((a, aiIdx) => {
-                const k = __gmAiAttachmentKind(a);
-                let imgSrc = '';
-                if (k === 'image') {
-                  const u = (a && a.url) ? String(a.url) : '';
-                  const p = (a && a.path) ? String(a.path).replace(/\\/g, '/') : '';
-                  if (u && !/^data:/i.test(u)) {
-                    imgSrc = u;
-                  } else if (p) {
-                    imgSrc = '/api/raw_file?path=' + encodeURIComponent(p);
-                  }
-                }
-                const hasImg = Boolean(imgSrc);
-                const clickable = `data-action="aiChatOpenPreview" data-msg-idx="${idx}" data-att-idx="${aiIdx}" onclick="__gmAiOnPreviewClick(event,this)" role="button" tabindex="0" style="cursor:pointer;pointer-events:auto;position:relative;z-index:2;"`;
-                const inner = hasImg
-                  ? `<img src="${esc(imgSrc)}" alt="" style="width:100%;height:100%;object-fit:cover;display:block;border-radius:4px;" />`
-                  : `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:var(--text2);">${__gmAiAttachmentIcon(k)}</div>`;
-                const nm = String(a && a.name || '').trim();
-                const titleText = nm || String((a && (a.url || a.path)) || '').trim();
-                const cap = nm || (hasImg ? '' : '资源已失效');
-                const capHtml = cap ? `<div style=\"margin-top:2px;font-size:11px;color:var(--text2);width:40px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;\">${esc(cap)}</div>` : '';
-                return `<span ${clickable} title=\"${esc(titleText)}\" style=\"display:inline-block;width:auto;vertical-align:top;margin-right:6px;margin-bottom:6px;\">`
-                  + `<span style=\"display:inline-block;width:40px;height:40px;border-radius:4px;overflow:hidden;background:rgba(0,0,0,0.05);vertical-align:top;\">${inner}</span>`
-                  + `${capHtml}`
-                  + `</span>`;
-              }).join('');
-              const hasMoreA = endA < totalA;
-              const remA = Math.max(0, totalA - endA);
-              const moreTileA = hasMoreA
-                ? `<span data-action=\"aiMoreAtt\" data-idx=\"${idx}\" title=\"展开更多\" style=\"display:inline-block;width:40px;height:40px;border-radius:4px;overflow:hidden;margin-right:4px;margin-bottom:6px;background:rgba(0,0,0,0.05);vertical-align:top;cursor:pointer;\"><span style=\"width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:var(--text2);font-weight:800;\">＋${remA}</span></span>`
-                : '';
-              const tilesWrapA = tilesA + moreTileA;
-              attachmentsHtml = tilesWrapA ? `<div style=\"margin-bottom:8px;display:flex;flex-wrap:wrap;\">${tilesWrapA}</div>` : '';
-            }
           }
           
           // 仅当存在非 attachments 的工具调用时显示按钮；若当前没有，则回退到相邻消息
@@ -15336,8 +15447,24 @@ flex-shrink:0;cursor:pointer;
           const toolBtn = hasRealTools
             ? `<button title="工具摘要" data-action="aiShowToolSummary" data-idx="${idx}">☰</button>`
             : '';
-          node.innerHTML = `<div class="ai-meta">${esc(isUser ? '你' : 'AI')}</div><div class="ai-bubble${userLoading ? ' user-loading' : ''}${isPending ? ' pending' : ''}"><div class="ai-msg-actions">${toolBtn}<button title="删除" data-action="aiDeleteMsg" data-idx="${idx}">×</button></div>${attachmentsHtml}<div class="ai-md">${isPending ? esc(content) : aiRenderMarkdown(content)}</div></div>`;
+          // Check if this user message is a command execution result → render compact card
+          const cmdRes = (!isPending && isUser && content.startsWith('\u3010\u7528\u6237\u5df2\u6267\u884c\u547d\u4ee4\u3011')) ? __gmAiParseCmdResult(content) : null;
+          if (cmdRes) {
+            const stCls = 'cmd-' + (cmdRes.ok ? 'ok' : 'err');
+            node.className = 'ai-msg cmd-result';
+            node.dataset.cmdResult = '1';
+            node.innerHTML = '<div class="ai-meta">\u547d\u4ee4\u7ed3\u679c</div><div class="ai-bubble ' + stCls + '">'
+              +'<div class="ai-msg-actions"><button title="\u5220\u9664" data-action="aiDeleteMsg" data-idx="' + idx + '">\u00d7</button></div>'
+              +'<div class="ai-md">'
+              +'<span class="ai-cmd-icon">&gt;_</span>'
+              +'<span class="ai-cmd-name">' + esc(cmdRes.cmd) + '</span>'
+              +'<div class="ai-cmd-out ' + stCls + '">' + esc(cmdRes.output || '(\u65e0\u8f93\u51fa)') + '</div>'
+              +'</div></div>';
+          } else {
+          node.innerHTML = `<div class="ai-meta">${esc(isUser ? '你' : 'AI')}</div><div class="ai-bubble${userLoading ? ' user-loading' : ''}${isPending ? ' pending' : ''}${isError ? ' ai-error' : ''}"><div class="ai-msg-actions">${toolBtn}<button title="删除" data-action="aiDeleteMsg" data-idx="${idx}">×</button></div>${attachmentsHtml}<div class="ai-md">${isPending ? esc(content) : aiRenderMarkdown(content)}</div></div>`;
+          }
           try { __gmAiEnhanceCodeBlocks(node); } catch (eEnh) {}
+          try { if (!isPending) __gmAiEnhanceLinkChips(node); } catch (eChip) {}
           
         }
       }
@@ -15347,7 +15474,18 @@ flex-shrink:0;cursor:pointer;
       }
       list.__gmAiMsgCache = nextCache;
       const outer = document.getElementById('aiChatList');
-      if (outer) outer.scrollTop = outer.scrollHeight;
+      // Smart scroll: only auto-scroll if user is near the bottom (within 120px)
+      if (outer) {
+        try {
+          const isNearBottom = (outer.scrollHeight - outer.scrollTop - outer.clientHeight) < 120;
+          const isPending = lastIsPendingAssistant;
+          if (isPending || isNearBottom) {
+            outer.scrollTop = outer.scrollHeight;
+          }
+        } catch (eScroll) {
+          outer.scrollTop = outer.scrollHeight;
+        }
+      }
     } catch (e) {}
   }
 
@@ -15380,14 +15518,6 @@ flex-shrink:0;cursor:pointer;
                 });
                 if (metaOut.length) item._attMeta = metaOut;
               } else if (role === 'assistant') {
-                const metaA = Array.isArray(m && m._attMeta) ? m._attMeta : [];
-                if (metaA.length) item._attMeta = metaA.map(a => ({
-                  name: String(a && a.name || 'file'),
-                  mime: String(a && a.mime || ''),
-                  size: Number(a && a.size || 0),
-                  ...(a && a.url ? { url: String(a.url) } : {}),
-                  ...(a && a.path ? { path: String(String(a.path).replace(/\\/g,'/')) } : {}),
-                }));
                 try {
                   const st = String(m && m.stage || '');
                   if (st) item.stage = st;
@@ -15600,6 +15730,7 @@ flex-shrink:0;cursor:pointer;
         const md = mdLines.join('\n');
         try { const html = aiRenderMarkdown(md); holder.innerHTML = html; } catch(_){ holder.textContent = md; }
       try { __gmAiEnhanceCodeBlocks(holder); } catch(_){ }
+      try { __gmAiEnhanceLinkChips(holder); } catch(_){ }
         try {
           const pres = holder.querySelectorAll('pre');
           pres.forEach(p => {
@@ -16081,6 +16212,7 @@ flex-shrink:0;cursor:pointer;
     }
   }
 
+  // [UNUSED] Kept for reference — current agent path uses server-side _ai_trim_messages_to_budget.
   function __gmAiBuildContextManagedMessages(sysText, baseMessages) {
     try {
       const cleaned = (baseMessages || []).filter(m => !(m && m.pending));
@@ -16145,11 +16277,6 @@ flex-shrink:0;cursor:pointer;
       if (sysText) return ([{ role: 'system', content: sysText }].concat(cleaned));
       return cleaned;
     }
-  }
-
-  function __gmAiBuildMessagesForApi(sysText) {
-    const base = Array.isArray(__gmAiChatMessages) ? __gmAiChatMessages : [];
-    return __gmAiBuildContextManagedMessages(sysText, base);
   }
 
   function __gmAiEnsureMentionMenu() {
@@ -18541,7 +18668,6 @@ flex-shrink:0;cursor:pointer;
         return {
           dyn_context: `【工作区信息】\n${ws}`
             + (contextPoolJsonBlock ? (`\n\n${contextPoolJsonBlock}`) : '')
-            + execSummaryBlock
             + capBlock,
           context_refs: Array.isArray(refsIndex) ? refsIndex : [],
         };
@@ -18551,7 +18677,6 @@ flex-shrink:0;cursor:pointer;
         return {
           dyn_context: `【当前文件】\n${path}\n\n【工作区信息】\n${ws}`
             + (contextPoolJsonBlock ? (`\n\n${contextPoolJsonBlock}`) : '')
-            + execSummaryBlock
             + capBlock,
           context_refs: Array.isArray(refsIndex) ? refsIndex : [],
         };
@@ -18563,7 +18688,6 @@ flex-shrink:0;cursor:pointer;
       return {
         dyn_context: sys
           + (contextPoolJsonBlock ? (`\n\n${contextPoolJsonBlock}`) : '')
-          + execSummaryBlock
           + capBlock,
         context_refs: Array.isArray(refsIndex) ? refsIndex : [],
       };
@@ -21253,7 +21377,7 @@ flex-shrink:0;cursor:pointer;
             cb.checked = true;  // 半选状态视觉上显示为已勾选
           } else {
             cb.classList.remove('indet');
-            // 全选或全不选时：勾选展示以“用户意图 desired”和文件级 checkedSet 为准。
+            // 全选或全不选时：勾选展示以"用户意图 desired"和文件级 checkedSet 为准。
             // 行级 set 只用于 indeterminate，不应在渲染阶段反向决定文件级是否选中。
             if (desired === true) cb.checked = true;
             else if (desired === false) cb.checked = false;
@@ -23235,7 +23359,7 @@ flex-shrink:0;cursor:pointer;
         rightDone = true;
       }
     } else if (effectiveMode === 'unified') {
-      // 统一视图：只展示一列（以“当前版本”视角为主），但删除行仍需可撤回
+      // 统一视图：只展示一列（以"当前版本"视角为主），但删除行仍需可撤回
       const leftLines = [];
       const rightLines = [];
 
@@ -24135,7 +24259,7 @@ flex-shrink:0;cursor:pointer;
                   // 保存时必须保留行结构：
                   // - 正常情况下每个 .lc 是一行，不应该包含 \n
                   // - 但某些浏览器/场景(粘贴/撤销还原/折叠UI)可能把 \n 留在同一个 .lc 内
-                  //   这里必须 split 成多行，否则会出现“界面多行、保存后合并单行”。
+                  //   这里必须 split 成多行，否则会出现"界面多行、保存后合并单行"。
                   const normalized = String(txt || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
                   const parts = normalized.split('\n');
                   for (let i = 0; i < parts.length; i++) {
@@ -25338,7 +25462,7 @@ flex-shrink:0;cursor:pointer;
     }
 
     if (!line) {
-      // 局部索引已失效，走后端按签名匹配，避免前端报“无法找到该行”
+      // 局部索引已失效，走后端按签名匹配，避免前端报"无法找到该行"
       const sig = (fallbackSig && typeof fallbackSig === 'object') ? fallbackSig : null;
       if (!sig) {
         __gmToastError('撤回失败', '无法找到该行');
@@ -28597,7 +28721,7 @@ flex-shrink:0;cursor:pointer;
       if (typeof ctor !== 'function') return null;
       const md = ctor({
         html: true,
-        linkify: true,
+        linkify: false,
         breaks: true,
       });
 
@@ -29375,7 +29499,7 @@ flex-shrink:0;cursor:pointer;
         let overlay = document.getElementById('dragDropOverlay');
         if (overlay) return overlay;
 
-        // diffView 可能在“空态渲染”时被整体 innerHTML 覆盖，从而丢失 overlay。
+        // diffView 可能在"空态渲染"时被整体 innerHTML 覆盖，从而丢失 overlay。
         // 这里动态补齐，保证任意空态下拖拽都可显示提示。
         overlay = document.createElement('div');
         overlay.className = 'drag-drop-overlay';
@@ -29882,7 +30006,7 @@ flex-shrink:0;cursor:pointer;
         }
       }
       
-      // 无句柄时：优先让用户选择“原文件”并写回，避免保存为新文件
+      // 无句柄时：优先让用户选择"原文件"并写回，避免保存为新文件
       if (window.showOpenFilePicker) {
         try {
           const handles = await window.showOpenFilePicker({ multiple: false });
@@ -30787,7 +30911,7 @@ flex-shrink:0;cursor:pointer;
             const m = line.match(/^[\t ]*/);
             const indentLen = m ? String(m[0] || '').length : 0;
             const firstNonWs = lineStart + indentLen;
-            // 光标在“行首缩进区域”内也算行首（更符合用户感知）
+            // 光标在"行首缩进区域"内也算行首（更符合用户感知）
             return pos <= firstNonWs;
           } catch (e) {
             return false;
@@ -30958,7 +31082,7 @@ flex-shrink:0;cursor:pointer;
                   else if (dt < 160) boost = Math.min(16, boost + 0.7);
                   else boost = Math.max(0, boost - 2.5);
 
-                  // 对触控板常见的小幅高频输入降低加速，避免“抖/飘”
+                  // 对触控板常见的小幅高频输入降低加速，避免"抖/飘"
                   const mag = Math.abs(Number(ddy) || 0);
                   const isSmall = mag > 0 && mag < 45;
                   const smallPenalty = isSmall ? 0.55 : 1;
@@ -30975,7 +31099,7 @@ flex-shrink:0;cursor:pointer;
                 } catch (e3) {}
               }
 
-              // Alt 键不改变滚动方向：仍按正常纵向滚动处理，避免出现“按住 Alt 就无法滚动”的问题
+              // Alt 键不改变滚动方向：仍按正常纵向滚动处理，避免出现"按住 Alt 就无法滚动"的问题
               if (Number.isFinite(ddy) && ddy) dv.scrollTop += ddy;
               if (Number.isFinite(ddx) && ddx) dv.scrollLeft += ddx;
               try { syncScroll(); } catch (e2) {}
