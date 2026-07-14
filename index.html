@@ -1161,14 +1161,17 @@
     }
     .recent-files-clear-all{
       flex-shrink:0;
-      padding:3px 10px;
+      width:22px;
+      height:22px;
+      padding:0;
       border-radius:5px;
       border:1px solid var(--border);
       background:var(--bg3, rgba(255,255,255,.04));
       color:var(--text2, var(--text3));
       cursor:pointer;
-      font-size:11px;
-      font-weight:600;
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
       text-transform:none;
       letter-spacing:normal;
       transition:all .12s;
@@ -6341,7 +6344,7 @@ flex-shrink:0;cursor:pointer;
       return;
     }
 
-    let html = '<div class="recent-files-header"><span>最近打开的文件 (点击切换)</span><button class="recent-files-clear-all" title="清空最近打开的文件列表" data-action="clearRecentFiles">清空</button></div>';
+    let html = '<div class="recent-files-header"><span>最近打开的文件 (点击切换)</span><button class="recent-files-clear-all" title="清空最近打开的文件列表" data-action="clearRecentFiles"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button></div>';
     html += '<div class="recent-files-list">';
 
     recentFiles.forEach((file, idx) => {
