@@ -8,7 +8,7 @@ import json
 import time
 import re
 from collections import deque, OrderedDict
-import subprocess, os, sys, logging, logging.handlers, threading, hashlib, difflib, shutil, mimetypes, base64, tempfile
+import subprocess, os, sys, logging, logging.handlers, threading, hashlib, difflib, shutil, mimetypes, base64, tempfile, shlex, atexit
 import queue
 from pathlib import Path
 import urllib.request
@@ -272,6 +272,26 @@ _pw_runtime = {
 }
 
 
+def _pw_cleanup():
+    """Clean up all Playwright resources (browser + playwright). Safe to call multiple times."""
+    with _pw_lock:
+        pw = _pw_runtime.pop("pw", None)
+        browser = _pw_runtime.pop("browser", None)
+    for obj in (browser, pw):
+        try:
+            if obj is not None:
+                obj.close()
+        except Exception:
+            pass
+    try:
+        _pw_runtime["sessions"].clear()
+    except Exception:
+        pass
+
+
+atexit.register(_pw_cleanup)
+
+
 def _pw_is_available():
     return sync_playwright is not None
 
@@ -460,6 +480,7 @@ _hivo_agent_run_lock = threading.Lock()
 _hivo_agent_run_state: dict = {}  # run_id -> {session_id:str, started_at:float, cancel:bool, done:bool}
 _hivo_agent_session_active: dict = {}  # session_id -> run_id
 _hivo_agent_run_proc: dict = {}  # run_id -> subprocess.Popen
+_hivo_agent_proc_lock = threading.Lock()
 undo_lock = threading.Lock()
 # Serialize revert/undo apply operations to prevent race conditions on rapid consecutive actions
 _apply_revert_lock = threading.Lock()
@@ -470,6 +491,7 @@ _changed_files_cache = {
     "ts": 0.0,
     "files": None,
 }
+_changed_files_lock = threading.Lock()
 
 
 def _undo_repo_key():
@@ -1031,8 +1053,9 @@ def _undo_apply_actions(actions: list):
 
 def invalidate_changed_files_cache():
     try:
-        _changed_files_cache["ts"] = 0.0
-        _changed_files_cache["files"] = None
+        with _changed_files_lock:
+            _changed_files_cache["ts"] = 0.0
+            _changed_files_cache["files"] = None
     except Exception as e:
         logger.debug(f"Exception ignored: {e}")
 
@@ -1057,9 +1080,11 @@ def notify_files_updated():
 # 但若发生替换，文本已无法无损还原原始字节，此时必须阻止保存以免写坏文件。
 _file_last_encoding = {}
 _file_decode_lossy = {}
+_file_encoding_lock = threading.Lock()
 
 # 文件内容内存缓存：(path, mtime) → (content, encoding)。LRU 淘汰，单次运行内有效。
 _file_content_cache = OrderedDict()  # type: OrderedDict[tuple, tuple]
+_file_content_cache_lock = threading.Lock()
 _FILE_CONTENT_CACHE_MAX = 120
 
 # ════════════════════════════════════════════════════════
@@ -2721,18 +2746,20 @@ def get_changed_files_cached(max_age_sec=1.0):
     - WebSocket 初始化/按需请求
     """
     now = time.time()
-    try:
-        ts = float(_changed_files_cache.get("ts") or 0.0)
-    except Exception:
-        ts = 0.0
+    with _changed_files_lock:
+        try:
+            ts = float(_changed_files_cache.get("ts") or 0.0)
+        except Exception:
+            ts = 0.0
 
-    cached = _changed_files_cache.get("files")
-    if cached is not None and (now - ts) <= float(max_age_sec):
-        return cached
+        cached = _changed_files_cache.get("files")
+        if cached is not None and (now - ts) <= float(max_age_sec):
+            return cached
 
     files = get_changed_files()
-    _changed_files_cache["ts"] = now
-    _changed_files_cache["files"] = files
+    with _changed_files_lock:
+        _changed_files_cache["ts"] = now
+        _changed_files_cache["files"] = files
     return files
 
 
@@ -3157,10 +3184,11 @@ def get_file_content(filepath: str, return_encoding=False):
         try:
             mtime = int(os.path.getmtime(full))
             cache_key = (full, mtime)
-            if cache_key in _file_content_cache:
-                cached = _file_content_cache[cache_key]
-                _file_content_cache.move_to_end(cache_key)  # LRU: touch
-                return (cached[0], cached[1]) if return_encoding else cached[0]
+            with _file_content_cache_lock:
+                if cache_key in _file_content_cache:
+                    cached = _file_content_cache[cache_key]
+                    _file_content_cache.move_to_end(cache_key)  # LRU: touch
+                    return (cached[0], cached[1]) if return_encoding else cached[0]
         except Exception:
             cache_key = None
 
@@ -3168,10 +3196,11 @@ def get_file_content(filepath: str, return_encoding=False):
         def _store_and_return(content, enc):
             try:
                 if cache_key and content is not None:
-                    _file_content_cache[cache_key] = (content, enc)
-                    if len(_file_content_cache) > _FILE_CONTENT_CACHE_MAX:
-                        try: _file_content_cache.popitem(last=False)
-                        except Exception: pass
+                    with _file_content_cache_lock:
+                        _file_content_cache[cache_key] = (content, enc)
+                        if len(_file_content_cache) > _FILE_CONTENT_CACHE_MAX:
+                            try: _file_content_cache.popitem(last=False)
+                            except Exception: pass
             except Exception:
                 pass
             return (content, enc) if return_encoding else content
@@ -3191,8 +3220,9 @@ def get_file_content(filepath: str, return_encoding=False):
             detected_encoding = "utf-8"
             logger.debug(f"文件 {filepath} 使用 UTF-8 编码")
             try:
-                _file_last_encoding[filepath] = detected_encoding
-                _file_decode_lossy[filepath] = False
+                with _file_encoding_lock:
+                    _file_last_encoding[filepath] = detected_encoding
+                    _file_decode_lossy[filepath] = False
             except Exception as e:
                 logger.debug(f"Exception ignored: {e}")
             return _store_and_return(result, detected_encoding)
@@ -3204,8 +3234,9 @@ def get_file_content(filepath: str, return_encoding=False):
             detected_encoding = "utf-8-sig"
             logger.debug(f"文件 {filepath} 使用 UTF-8-BOM 编码")
             try:
-                _file_last_encoding[filepath] = detected_encoding
-                _file_decode_lossy[filepath] = False
+                with _file_encoding_lock:
+                    _file_last_encoding[filepath] = detected_encoding
+                    _file_decode_lossy[filepath] = False
             except Exception as e:
                 logger.debug(f"Exception ignored: {e}")
             return _store_and_return(result, detected_encoding)
@@ -3219,8 +3250,9 @@ def get_file_content(filepath: str, return_encoding=False):
                 detected_encoding = enc0
                 logger.debug(f"文件 {filepath} 使用常见中文编码读取: {enc0}")
                 try:
-                    _file_last_encoding[filepath] = detected_encoding
-                    _file_decode_lossy[filepath] = False
+                    with _file_encoding_lock:
+                        _file_last_encoding[filepath] = detected_encoding
+                        _file_decode_lossy[filepath] = False
                 except Exception as e:
                     logger.debug(f"Exception ignored: {e}")
                 return _store_and_return(result, detected_encoding)
@@ -3242,8 +3274,9 @@ def get_file_content(filepath: str, return_encoding=False):
                 lossy = True
             logger.debug(f"文件 {filepath} 使用检测编码读取: {enc}{' (replace)' if lossy else ''}")
             try:
-                _file_last_encoding[filepath] = detected_encoding
-                _file_decode_lossy[filepath] = bool(lossy)
+                with _file_encoding_lock:
+                    _file_last_encoding[filepath] = detected_encoding
+                    _file_decode_lossy[filepath] = bool(lossy)
             except Exception as e:
                 logger.debug(f"Exception ignored: {e}")
             return _store_and_return(result, detected_encoding)
@@ -3253,8 +3286,9 @@ def get_file_content(filepath: str, return_encoding=False):
         result = data.decode("utf-8", errors="replace")
         detected_encoding = "utf-8"
         try:
-            _file_last_encoding[filepath] = detected_encoding
-            _file_decode_lossy[filepath] = True
+            with _file_encoding_lock:
+                _file_last_encoding[filepath] = detected_encoding
+                _file_decode_lossy[filepath] = True
         except Exception as e:
             logger.debug(f"Exception ignored: {e}")
         return _store_and_return(result, detected_encoding)
@@ -3575,8 +3609,10 @@ def save_file_content(filepath: str, content: str, force_encoding: str = None):
         # 如果该文件在最近一次读取时发生过 replace（lossy 解码），说明原始字节无法从文本无损还原。
         # 这种情况下禁止保存，避免写坏文件（VS2019/编译器会报错）。
         try:
-            if _file_decode_lossy.get(filepath):
+            with _file_encoding_lock:
+                lossy = _file_decode_lossy.get(filepath)
                 enc_hint = _file_last_encoding.get(filepath) or target_enc
+            if lossy:
                 return False, f"该文件读取时发生编码替换（{enc_hint} + replace），无法保证无损保存。请用正确编码打开/修复原始字节后再保存。"
         except Exception as e:
             logger.debug(f"Exception ignored: {e}")
@@ -4776,8 +4812,10 @@ def revert_line(filepath: str, hunk_idx: int, line_idx: int, status: str, ctx_li
     # Read file with encoding detection and preserve original encoding.
     # If the file was decoded with replacement (lossy), forbids revert to avoid corrupting bytes.
     try:
-        if _file_decode_lossy.get(filepath):
+        with _file_encoding_lock:
+            lossy = _file_decode_lossy.get(filepath)
             enc_hint = _file_last_encoding.get(filepath) or "unknown"
+        if lossy:
             return False, f"该文件读取时发生编码替换（{enc_hint} + replace），无法安全执行撤回写入。请先用正确编码修复文件后再撤回。"
     except Exception as e:
         logger.debug(f"Exception ignored: {e}")
@@ -5948,10 +5986,7 @@ def _ai_build_chat_url(base_url: str):
     if u.endswith("/chat/completions") or u.endswith("/v1/chat/completions"):
         return u
     # If user provides an explicit version path (e.g. /v1, /v2), do not force /v1.
-    m = re.search(r"/v\d+$", u)
-    if m:
-        return u + "/chat/completions"
-    if u.endswith("/v1"):
+    if re.search(r"/v\d+$", u):
         return u + "/chat/completions"
     return u + "/v1/chat/completions"
 
@@ -5961,9 +5996,166 @@ def _ai_build_models_url(base_url: str):
     if not u:
         return ""
     u = u.rstrip("/")
+    # If the user provided the full chat completions URL, strip it before building the models URL.
+    # This handles non-standard paths like /zen/v1/chat/completions as well as standard /v1/chat/completions.
+    _chat_suffix = "/chat/completions"
+    if u.endswith(_chat_suffix):
+        u = u[:-len(_chat_suffix)]
     if u.endswith("/models"):
         return u
     return u + "/models"
+
+
+def _parse_upstream_error(status_code: int, body: str) -> str:
+    """Parse upstream API error response into a human-readable message.
+
+    Handles OpenAI-compatible JSON error format ({"error":{"message":"...","code":"..."}})
+    and Cloudflare/HTML error pages (error code:1010 etc.).
+
+    Returns empty string when no known error pattern is detected (caller should fall back
+    to a generic message for non-2xx status codes).
+    """
+    body = (body or "").strip()
+    if not body:
+        return ""
+
+    # Try to parse as OpenAI-compatible JSON error first.
+    try:
+        data = json.loads(body)
+        err = data.get("error")
+        if isinstance(err, dict):
+            parts = []
+            em = str(err.get("message") or err.get("msg") or "").strip()
+            ec = str(err.get("code") or "")
+            et = str(err.get("type") or "").strip()
+            if em:
+                parts.append(em)
+            if ec:
+                parts.append(f"[code={ec}]")
+            if et and et not in (ec, em):
+                parts.append(f"[type={et}]")
+            if parts:
+                return f"上游返回错误 (HTTP {status_code}): " + " ".join(parts)
+        elif isinstance(err, str) and err.strip():
+            return f"上游返回错误 (HTTP {status_code}): {err.strip()}"
+    except Exception:
+        pass
+
+    # Detect Cloudflare error pages (HTML body).
+    body_lower = body.lower()
+    if "error code:1010" in body_lower or "cf-error" in body_lower or "cloudflare" in body_lower:
+        return (
+            f"上游返回错误 (HTTP {status_code}): 请求被 Cloudflare 安全策略拦截（Error 1010）。\n"
+            "可能原因：User-Agent 被屏蔽或 IP 被限制，已自动添加浏览器 UA 头重试。\n"
+            "如仍失败，请联系上游服务商开放 API 访问权限。"
+        )
+
+    # Generic: include status code and first 400 chars of body (only for error status codes).
+    if status_code >= 400:
+        snip = body.strip()
+        if len(snip) > 400:
+            snip = snip[:400] + "…"
+        return f"上游返回错误 (HTTP {status_code}): {snip}"
+
+    return ""
+
+
+
+
+def _ai_build_opener():
+    """Build a urllib opener with custom SSL context (TLS 1.2+)."""
+    https_handler = urllib.request.HTTPSHandler(context=_AI_SSL_CONTEXT) if _AI_SSL_CONTEXT else urllib.request.HTTPSHandler()
+    return urllib.request.build_opener(https_handler)
+
+
+def _ai_extract_content(msg: dict) -> str:
+    """Extract text content from an API response message, supporting multiple formats.
+
+    Handles:
+    - Standard OpenAI: content="text"
+    - Anthropic-compatible: content=[{"type":"text","text":"..."}]
+    - Reasoning models: reasoning/reasoning_details fields
+    - Empty/null content + reasoning fallback
+    """
+    content = msg.get("content")
+    if isinstance(content, str):
+        text = content.strip()
+        if text:
+            return text
+    elif isinstance(content, list):
+        # Anthropic-style content array: [{"type":"text","text":"Hello"}]
+        parts = []
+        for it in content:
+            if isinstance(it, dict):
+                if str(it.get("type") or "").strip() == "text":
+                    parts.append(str(it.get("text") or ""))
+            elif isinstance(it, str):
+                parts.append(it)
+        text = "".join(parts).strip()
+        if text:
+            return text
+
+    # Fallback: reasoning / thinking models that put output in non-standard fields
+    reasoning = str(msg.get("reasoning") or "").strip()
+    if not reasoning:
+        rd = msg.get("reasoning_details")
+        if isinstance(rd, list):
+            reasoning = "".join(str(it.get("text") or "") for it in rd if isinstance(it, dict)).strip()
+    if reasoning:
+        return reasoning
+
+    # Last resort: text field (some APIs use this)
+    text_val = str(msg.get("text") or "").strip()
+    if text_val:
+        return text_val
+
+    return ""
+
+
+def _ai_parse_model_list(data):
+    """Flexible model list parser supporting OpenAI, Ollama, vLLM, LiteLLM, etc.
+
+    Returns a sorted, deduplicated list of model ID strings.
+    """
+    if not isinstance(data, dict):
+        return []
+
+    arr = data.get("data")
+    if not isinstance(arr, list):
+        arr = []
+
+    out = []
+    for it in arr:
+        if not isinstance(it, (dict, str)):
+            continue
+        mid = None
+        if isinstance(it, dict):
+            mid = str(it.get("id") or it.get("name") or "").strip()
+        else:
+            mid = str(it).strip()
+        if not mid:
+            continue
+        out.append(mid)
+        if len(out) >= 300:
+            break
+
+    # Fallback: some APIs (Ollama, Gemini via proxy) use "models" key with model name strings
+    if not out:
+        alt = data.get("models")
+        if isinstance(alt, list):
+            for it in alt:
+                if isinstance(it, str):
+                    mid = it.strip()
+                    if mid:
+                        out.append(mid)
+                elif isinstance(it, dict):
+                    mid = str(it.get("id") or it.get("name") or "").strip()
+                    if mid:
+                        out.append(mid)
+                if len(out) >= 300:
+                    break
+
+    return sorted(list(dict.fromkeys(out)))
 
 
 _ai_models_cache = {
@@ -5991,16 +6183,16 @@ def ai_list_models(base_url: str, api_key: str | None = None):
 
     headers = {
         "Accept": "application/json",
-        "Connection": "close",
+        "User-Agent": "GitManager/1.0",
     }
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
+        # Some APIs (e.g. Anthropic, Together) use x-api-key instead of Bearer.
+        headers["x-api-key"] = api_key
 
     req = urllib.request.Request(url, headers=headers, method="GET")
     try:
-        https_handler = urllib.request.HTTPSHandler(context=_AI_SSL_CONTEXT) if _AI_SSL_CONTEXT else urllib.request.HTTPSHandler()
-        opener = urllib.request.build_opener(https_handler)
-        with opener.open(req, timeout=30) as resp:
+        with _ai_build_opener().open(req, timeout=30) as resp:
             raw = resp.read().decode("utf-8", errors="replace")
         data = json.loads(raw or "{}")
     except urllib.error.HTTPError as e:
@@ -6008,28 +6200,15 @@ def ai_list_models(base_url: str, api_key: str | None = None):
             body = e.read().decode("utf-8", errors="replace")
         except Exception:
             body = ""
-        msg = body.strip()[:400] if body else str(e)
-        return False, f"上游返回错误: {msg}", []
+        msg = _parse_upstream_error(e.code, body)
+        return False, msg, []
     except Exception as e:
         return False, str(e), []
 
-    if not isinstance(data, dict) or str(data.get("object") or "").strip() != "list":
-        return False, "响应格式不是 OpenAI 兼容的 models list", []
-    arr = data.get("data")
-    if not isinstance(arr, list):
-        return False, "响应缺少 data 数组", []
-
-    out = []
-    for it in arr:
-        if not isinstance(it, dict):
-            continue
-        mid = str(it.get("id") or "").strip()
-        if not mid:
-            continue
-        out.append(mid)
-        if len(out) >= 300:
-            break
-    out = sorted(list(dict.fromkeys(out)))
+    # ── Flexible model-list parsing: supports OpenAI, Ollama, vLLM, LiteLLM, etc. ──
+    out = _ai_parse_model_list(data)
+    if not out:
+        return False, "响应格式不支持或未返回任何模型", []
 
     try:
         items = _ai_models_cache.get("items")
@@ -7174,16 +7353,20 @@ def ai_chat(messages: list, temperature: float | None = None, profile_id: str | 
             logger.debug(f"Exception ignored: {e}")
     if max_output_tokens > 0:
         payload["max_tokens"] = max_output_tokens
+        # Some newer APIs prefer max_completion_tokens; send both for compatibility.
+        payload["max_completion_tokens"] = max_output_tokens
 
     if stream:
         payload["stream"] = True
 
     headers = {
         "Content-Type": "application/json",
-        "Connection": "close",
+        "User-Agent": "GitManager/1.0",
     }
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
+        # Some APIs (e.g. Anthropic, Together) use x-api-key instead of Bearer.
+        headers["x-api-key"] = api_key
 
     req = urllib.request.Request(
         url,
@@ -7197,12 +7380,11 @@ def ai_chat(messages: list, temperature: float | None = None, profile_id: str | 
         except Exception:
             tmo = 60
         tmo = max(5, min(120, int(tmo)))
-        https_handler = urllib.request.HTTPSHandler(context=_AI_SSL_CONTEXT) if _AI_SSL_CONTEXT else urllib.request.HTTPSHandler()
-        opener = urllib.request.build_opener(https_handler)
-        with opener.open(req, timeout=tmo) as resp:
+        with _ai_build_opener().open(req, timeout=tmo) as resp:
             if stream:
                 # OpenAI-compatible streaming: SSE lines like "data: {json}\n\n" and terminator "data: [DONE]".
                 parts = []
+                reasoning_parts = []
                 finish_reason = ""
                 while True:
                     try:
@@ -7226,7 +7408,22 @@ def ai_chat(messages: list, temperature: float | None = None, profile_id: str | 
                     try:
                         choice = (j.get("choices") or [{}])[0]
                         delta = (choice.get("delta") or {})
+                        # Some APIs use .text, .content, or content as an array
                         delta_content = delta.get("content")
+                        if not delta_content:
+                            delta_content = delta.get("text")
+                        if isinstance(delta_content, list):
+                            delta_content = "".join(str(it.get("text") or "") if isinstance(it, dict) else str(it or "") for it in delta_content)
+                        if isinstance(delta_content, str):
+                            delta_content = delta_content.strip()
+                        # reasoning models output content in reasoning/reasoning_content/reasoning_details fields
+                        delta_reasoning = delta.get("reasoning") or delta.get("reasoning_content")
+                        if not delta_reasoning:
+                            rd = delta.get("reasoning_details")
+                            if isinstance(rd, list):
+                                delta_reasoning = "".join(str(it.get("text") or "") for it in rd if isinstance(it, dict))
+                        if delta_reasoning:
+                            reasoning_parts.append(str(delta_reasoning))
                         fr = str(choice.get("finish_reason") or "")
                         if fr:
                             finish_reason = fr
@@ -7239,7 +7436,17 @@ def ai_chat(messages: list, temperature: float | None = None, profile_id: str | 
                                 on_delta(str(delta_content))
                         except Exception as e:
                             logger.debug(f"Exception ignored: {e}")
+                    # For reasoning models: send reasoning tokens via on_delta when no content delta is available.
+                    if not delta_content and delta_reasoning:
+                        try:
+                            if callable(on_delta):
+                                on_delta(str(delta_reasoning))
+                        except Exception as e:
+                            logger.debug(f"Exception ignored: {e}")
                 content = "".join(parts)
+                # Fallback: use reasoning content when the model outputs thinking but no final answer.
+                if not content:
+                    content = "".join(reasoning_parts)
                 return True, "", {"content": content, "raw": {"stream": True}, "finish_reason": finish_reason}
 
             raw = resp.read().decode("utf-8", errors="replace")
@@ -7247,6 +7454,11 @@ def ai_chat(messages: list, temperature: float | None = None, profile_id: str | 
                 data = json.loads(raw or "{}")
             except Exception as e:
                 snip = (raw or "").strip()
+                # Detect Cloudflare/HTML error pages even on HTTP 200 (some proxies do this).
+                if snip:
+                    cf_msg = _parse_upstream_error(200, snip)
+                    if cf_msg:
+                        return False, cf_msg, None
                 if len(snip) > 400:
                     snip = snip[:400] + "…"
                 return False, f"上游响应不是有效 JSON: {e}; snippet={snip}", None
@@ -7255,13 +7467,14 @@ def ai_chat(messages: list, temperature: float | None = None, profile_id: str | 
             body = e.read().decode("utf-8", errors="replace")
         except Exception:
             body = ""
-        msg = body.strip()[:400] if body else str(e)
-        return False, f"上游返回错误: {msg}", None
+        msg = _parse_upstream_error(e.code, body)
+        return False, msg, None
     except Exception as e:
         return False, str(e), None
 
     try:
-        content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        msg = data.get("choices", [{}])[0].get("message", {})
+        content = _ai_extract_content(msg)
         finish_reason = str(data.get("choices", [{}])[0].get("finish_reason") or "")
         return True, "", {"content": content, "raw": data, "finish_reason": finish_reason}
     except Exception:
@@ -7470,7 +7683,7 @@ def _ai_build_system_context_text(cfg=None):
         "# 术语（避免歧义，必须严格遵守）\n"
         "- **暂存（stash）**：指 `git stash` 的暂存栈；对应工具 `stash_and_pull` / `stash_and_switch`，恢复用 `stash_pop`。\n"
         "- **暂存区（staged / index）**：指 `git add` 后进入 index 的暂存区；对应工具如 `stage_file`、以及提交流程中的 add/commit。\n"
-        "- 当用户说“暂存后更新/暂存后切换”时，在本系统语境下默认指 **stash**（不是 git add）。\n\n"
+        "- 当用户说\"暂存后更新/暂存后切换\"时，在本系统语境下默认指 **stash**（不是 git add）。\n\n"
         "# 关键交互约束（必须遵守）\n"
         "- 当用户要执行 Git 操作（如 pull / switch / commit / stash）时，你必须先用 `status` 确认当前是否已打开仓库。\n"
         "  - 若 `status` 显示仓库未打开：你只能提示用户选择仓库路径并调用 `open_repo`；不要在仓库已打开时重复要求打开。\n"
@@ -7485,7 +7698,7 @@ def _ai_build_system_context_text(cfg=None):
         "  2) 给出清晰的后续可选步骤，并让用户在对话中选择下一步（不要替用户决定）。\n"
         "- `stash_and_pull` / `stash_and_switch` 完成后：\n"
         "  - 如果发生了 stash（工具返回 stashed=true 或 pending_pop=true）：必须提示用户选择：`恢复暂存（stash_pop）` / `暂不恢复` / `取消`。\n"
-        "  - 如果没有 stash（stashed=false）：也要说明“无需 stash”。\n"
+        "  - 如果没有 stash（stashed=false）：也要说明\"无需 stash\"。\n"
         "- `commit_and_pull` / `commit_and_switch` 完成后：\n"
         "  - 必须提示用户选择：`继续推送（push）` / `暂不推送` / `查看提交记录（commits）` / `取消`。\n\n"
         "# 输出规范\n\n"
@@ -7512,13 +7725,13 @@ def _ai_build_system_context_text(cfg=None):
         "- 前端收到动作后会直接执行\n"
         "- 可用动作列表（根据当前上下文动态生成）：\n" + AGENT_ACTION_REGISTRY.build_system_prompt_text(scope="ai_chat") + "\n"
         "- 动作示例：`{\"action_type\": \"clear_session\", \"reason\": \"用户要求清空对话历史\"}`\n"
-        "- 使用时机：当用户要求执行“清空会话/切换主题/打开设置/聚焦输入框/收起侧栏/撤销操作”等 UI 级操作时，直接输出 action JSON\n\n"
+        "- 使用时机：当用户要求执行\"清空会话/切换主题/打开设置/聚焦输入框/收起侧栏/撤销操作\"等 UI 级操作时，直接输出 action JSON\n\n"
         "# 工具使用指南\n\n"
         "## Action Card（前端联动执行）\n"
         "- 当你需要调用工具（例如 save_file / delete_file / run_cmd 等）并且需要用户确认时：\n"
         "  1) **直接输出一个 JSON 代码块**，内容为工具调用对象：`{\"type\": \"<tool>\", ...}`\n"
         "  2) 前端会自动识别并渲染 **Action Card**，用户点击卡片按钮即可执行\n"
-        "- 不要让用户回复“确认/yes”来触发工具，也不要输出“等待确认后我将执行 save_file”这类流程描述\n\n"
+        "- 不要让用户回复\"确认/yes\"来触发工具，也不要输出\"等待确认后我将执行 save_file\"这类流程描述\n\n"
         "## 必须遵循的规则\n"
         "1. **单一真源**：只使用 TOOL_REGISTRY_JSON 中定义的工具\n"
         "2. **参数完整**：确保 `required` 字段都已提供\n"
@@ -7580,7 +7793,7 @@ def _ai_build_system_context_text(cfg=None):
         "3. **依次执行** - 按依赖顺序调用工具（最多3个）\n"
         "4. **等待结果** - 每轮工具调用后等待系统返回\n"
         "5. **汇报结论** - 基于实际结果向用户说明完成情况\n\n"
-        "**示例**：用户说“帮我找到 config.json 并修改端口为 8080”  \n"
+        "**示例**：用户说\"帮我找到 config.json 并修改端口为 8080\"  \n"
         "回复：\n"
         "```\n"
         "好的，我来帮你定位并修改配置文件。\n\n"
@@ -7595,7 +7808,7 @@ def _ai_build_system_context_text(cfg=None):
         "# 禁止事项\n"
         "❌ 臆造工具执行结果（必须等待实际回执）  \n"
         "❌ 向用户输出工具回执原文（如 `{\"ok\": true}`）  \n"
-        "❌ 使用“让我调用XXX工具”等技术性描述  \n"
+        "❌ 使用\"让我调用XXX工具\"等技术性描述  \n"
         "❌ 重复调用相同参数的工具  \n"
         "❌ 使用 TOOL_REGISTRY_JSON 之外的工具名称\n\n"
         "# 重要说明\n\n"
@@ -9746,10 +9959,15 @@ def _run_cmd_simple(cmd: str, timeout: int = 30, cwd: str = "", run_id: str = ""
         pre_map, pre_snaps = _undo_prepare_cmd_snapshots(undo_gid)
 
         start_t = time.time()
+        # Use shlex to safely split command into args list (avoid shell=True injection)
+        try:
+            args = shlex.split(c)
+        except ValueError:
+            return False, "cmd 格式错误：无法解析命令", ""
         p = subprocess.Popen(
-            c,
+            args,
             cwd=workdir,
-            shell=True,
+            shell=False,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -9758,7 +9976,8 @@ def _run_cmd_simple(cmd: str, timeout: int = 30, cwd: str = "", run_id: str = ""
         )
         if rid:
             try:
-                _hivo_agent_run_proc[rid] = p
+                with _hivo_agent_proc_lock:
+                    _hivo_agent_run_proc[rid] = p
             except Exception as e:
                 logger.debug(f"Exception ignored: {e}")
 
@@ -11164,7 +11383,8 @@ class Handler(BaseHTTPRequestHandler):
             logger.debug(f"POST 请求数据: {json.dumps(data, ensure_ascii=False)[:200]}...")
         except Exception as e:
             logger.error(f"解析 JSON 失败: {e}")
-            data = {}
+            self.send_json({"ok": False, "error": "请求体 JSON 解析失败"}, 400)
+            return
 
         try:
             if p == "/api/open_repo":
@@ -11639,6 +11859,11 @@ class Handler(BaseHTTPRequestHandler):
                             return
                         cwd = full
 
+                # Reject commands with cmd metacharacters to prevent injection
+                dangerous = re.search(r'[&|;`$(){}\[\]<>]', cmd)
+                if dangerous:
+                    self.send_json({"ok": False, "msg": "命令包含不允许的特殊字符"}, 400)
+                    return
                 try:
                     r = subprocess.run(
                         ["cmd.exe", "/c", cmd],
@@ -13535,6 +13760,10 @@ def main():
         print(f"\n服务器启动失败: {e}")
         sys.exit(1)
     finally:
+        try:
+            _pw_cleanup()
+        except Exception as e:
+            logger.debug(f"Exception ignored: {e}")
         try:
             if srv is not None:
                 srv.server_close()

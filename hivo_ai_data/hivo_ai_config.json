@@ -54,6 +54,14 @@
   },
   "profiles": [
     {
+      "id": "19f638efb7599712939396f3",
+      "name": "Profile",
+      "base_url": "",
+      "api_key": "",
+      "model": "",
+      "supports_vision": false
+    },
+    {
       "id": "19e6d6b69b2cc3bc51586a948",
       "name": "astron-code-latest",
       "base_url": "https://maas-coding-api.cn-huabei-1.xf-yun.com/v2",
@@ -79,10 +87,10 @@
     },
     {
       "id": "19d9661ec9ff35423d948347",
-      "name": "meta/llama-3.3-70b-instruct",
-      "base_url": "https://integrate.api.nvidia.com/v1",
-      "api_key": "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",
-      "model": "meta/llama-3.3-70b-instruct",
+      "name": "MiMo-v2.5-free",
+      "base_url": "https://opencode.ai/zen/v1",
+      "api_key": "sk-EmJPVeDfCoHJxwtbSuwoX1jPxsQJbhZOoUD7oVc99zTK1oMZmUOLgLyOa2aA7QsS",
+      "model": "mimo-v2.5-free",
       "supports_vision": false
     },
     {
@@ -110,7 +118,7 @@
       "supports_vision": false
     }
   ],
-  "active_profile_id": "19d955e0736f865d0766d6ff",
+  "active_profile_id": "19d9661ec9ff35423d948347",
   "web_search": {
     "active_profile_id": "default",
     "profiles": [

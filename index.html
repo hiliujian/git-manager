@@ -3305,11 +3305,9 @@ flex-shrink:0;cursor:pointer;
                     <label>API Base URL</label>
                     <input id="aiProfBaseUrl" type="text" placeholder="https://api.openai.com" autocomplete="url" />
                   </div>
-                  <div class="ai-config-row">
-                    <div class="ai-config-label">API Key</div>
-                    <div style="display:flex;gap:8px;align-items:center;flex:1;min-width:0;">
-                      <input id="aiApiKey" type="password" placeholder="sk-..." autocomplete="current-password" style="flex:1;min-width:0;">
-                    </div>
+                  <div>
+                    <label>API Key</label>
+                    <input id="aiApiKey" type="password" placeholder="sk-..." autocomplete="current-password" />
                   </div>
                   <div>
                     <label>Model</label>
@@ -5276,7 +5274,8 @@ flex-shrink:0;cursor:pointer;
         const runId = String(window.__gmAiActiveRunId || '');
         window.__gmAiResumeHint = { on: !!eligible, from_message_id: fromId || '', reason: reason || '', run_id: runId };
       } catch(_) {}
-      try { const ta = document.getElementById('aiChatInput'); if (ta) ta.value = lastUser || ''; } catch(_) {}
+      // Send "请继续" instead of the original question, so the model continues rather than restarts.
+      try { const ta = document.getElementById('aiChatInput'); if (ta) ta.value = '请继续'; } catch(_) {}
       __gmAiSetContinueState(false, 'consume');
       sendAiChat();
     } catch (_) {}
@@ -6027,8 +6026,10 @@ flex-shrink:0;cursor:pointer;
               const mi = parseInt(String(el.getAttribute('data-msg-idx')||''),10);
               const ai = parseInt(String(el.getAttribute('data-att-idx')||''),10);
               const msg = (__gmAiChatMessages && __gmAiChatMessages[mi]) || null;
+              if (!msg) return;
               const base = (Array.isArray(msg.attachments) && msg.attachments.length ? msg.attachments : (Array.isArray(msg._attMeta) ? msg._attMeta : []));
               let a = base[ai];
+              if (!a) return;
               try { if (__gmAiDebug && window.__gmDbg) { __gmDbg('click preview start', { msgIdx: mi, attIdx: ai, hasAtt: !!a, url: a && a.url, data_url: a && a.data_url, hasText: !!(a && typeof a.text==='string' && a.text), hasUndo: !!(msg && msg.undo_gid) }); } } catch(eDbgC0) {}
               // Fallback: when only _attMeta exists without url/data_url/text, try resolve from local cache by undo_gid
               const hasUrl = !!(a && (a.url || a.data_url) || (a && typeof a.text === 'string' && a.text));
@@ -6254,13 +6255,6 @@ flex-shrink:0;cursor:pointer;
                     const fn = sel ? (sel.focusNode || sel.anchorNode) : null;
                     const fe = fn ? ((fn.nodeType === Node.ELEMENT_NODE) ? fn : (fn.parentElement || null)) : null;
                     const activeLine = fe && fe.closest ? fe.closest('.editable-line') : null;
-                    if (false) console.log('[gmdbg] revertHint.remove', {
-                      where: 'toggleFoldBtn',
-                      enabled: !!window.__gmRevertBlockHintEnabled,
-                      hasActiveLine: !!activeLine,
-                      activeLinePreview: activeLine ? String(activeLine.textContent || '').slice(0, 80) : null,
-                      stack: (new Error()).stack
-                    });
                   } catch (e0) {}
                   try { el.remove(); } catch (e0) {}
                 });
@@ -8899,13 +8893,6 @@ flex-shrink:0;cursor:pointer;
                         const fn = sel ? (sel.focusNode || sel.anchorNode) : null;
                         const fe = fn ? ((fn.nodeType === Node.ELEMENT_NODE) ? fn : (fn.parentElement || null)) : null;
                         const activeLine = fe && fe.closest ? fe.closest('.editable-line') : null;
-                        if (false) console.log('[gmdbg] revertHint.remove', {
-                          where: 'enhanceMenu.rerenderCurrent',
-                          enabled: !!window.__gmRevertBlockHintEnabled,
-                          hasActiveLine: !!activeLine,
-                          activeLinePreview: activeLine ? String(activeLine.textContent || '').slice(0, 80) : null,
-                          stack: (new Error()).stack
-                        });
                       } catch (e0) {}
                       try { n.remove(); } catch (e0) {}
                     });
@@ -9760,12 +9747,6 @@ flex-shrink:0;cursor:pointer;
             if (!(el2 && host.contains(el2))) return;
           }
           const sel = window.getSelection ? window.getSelection() : null;
-          /* debug log removed: raw.keydown.backspace */ if (false) console.log('[gmdbg] raw.keydown.backspace', {
-            isCeHost: (() => { try { return !!__isCeHost(); } catch (e2) { return null; } })(),
-            defaultPrevented: !!e.defaultPrevented,
-            targetTag: t && t.tagName ? String(t.tagName) : null,
-            collapsed: sel ? !!sel.isCollapsed : null,
-          });
         } catch (e0) {}
       }, true);
 
@@ -9805,12 +9786,6 @@ flex-shrink:0;cursor:pointer;
               line = el && el.closest ? el.closest('.editable-line') : null;
             } catch (e2) {}
           }
-          /* debug log removed: raw.beforeinput */ if (false) console.log('[gmdbg] raw.beforeinput', {
-            it,
-            isCeHost: (() => { try { return !!__isCeHost(); } catch (e2) { return null; } })(),
-            hasLine: !!line,
-            targetTag: t && t.tagName ? String(t.tagName) : null,
-          });
         } catch (e0) {}
       }, true);
 
@@ -15228,6 +15203,22 @@ flex-shrink:0;cursor:pointer;
       // Enter cancelling UI; keep responding=true until backend terminal event
       __gmAiIsResponding = true;
       try { __gmAiSetSendButtonCancelling(true); } catch (e0) {}
+      // Safety timeout: force-reset if backend never confirms cancel within 30s
+      try {
+        setTimeout(() => {
+          if (!__gmAiIsResponding) return;
+          __gmAiIsResponding = false;
+          try { __gmAiSetSendButtonCancelling(false); } catch (_z) {}
+          try {
+            const msgs = Array.isArray(__gmAiChatMessages) ? __gmAiChatMessages : [];
+            for (let i = msgs.length - 1; i >= 0; i--) {
+              const m = msgs[i];
+              if (m && m.pending) { m.pending = false; m.stage = 'aborted'; if (!m.content || m.content === '已请求取消（后台将尽快中止）') m.content = '操作已取消（超时）'; break; }
+            }
+          } catch (_z) {}
+          try { __gmAiRenderChat(); } catch (_z) {}
+        }, 30000);
+      } catch(_) {}
 
       try {
         let rid = String(window.__gmAiActiveRunId || '').trim();
@@ -18569,6 +18560,9 @@ flex-shrink:0;cursor:pointer;
       try { __gmAiRefreshSendCounter(); } catch (eC0) {}
       return;
     }
+    // Clear messages immediately to avoid showing stale data during async load
+    __gmAiChatMessages = [];
+    __gmAiRenderChat();
     POST('/api/ai_sessions', { profile_id: pid, action: 'set_active', session_id: sid })
       .then(() => loadAiChatHistory(pid, sid))
       .then(() => __gmAiRefreshSendCounter())
@@ -29463,6 +29457,7 @@ flex-shrink:0;cursor:pointer;
   __gmInitAutoSaveToggle();
 
   try { if (!window.__gmDbg) window.__gmDbg = console.log.bind(console); } catch(_) {}
+
   try { if (typeof window.__gmAiDebug === 'undefined') window.__gmAiDebug = false; } catch(_) {}
 
   try {
