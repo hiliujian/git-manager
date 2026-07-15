@@ -14467,6 +14467,7 @@ flex-shrink:0;cursor:pointer;
                 if (!m.content) m.content = '对话已完成（无内容）';
               }
               try { if (Array.isArray(data.tool_receipts)) m.tool_receipts = data.tool_receipts; } catch(_){ }
+              try { if (Array.isArray(data.agent_actions)) m.agent_actions = data.agent_actions; } catch(_){ }
               // Flush any pending RAF render from streaming deltas before final render
               try {
                 if (window.__gmAiDeltaRenderRid) {
@@ -14505,6 +14506,25 @@ flex-shrink:0;cursor:pointer;
             }
           }
         } catch (eF) {}
+        break;
+
+      case 'ai_agent_action':
+        try {
+          const action = (data && typeof data.action === 'object') ? data.action : null;
+          if (!action) break;
+          __gmAiHandleAgentAction(action);
+        } catch (eAA) {}
+        break;
+
+      case 'ai_action_registry':
+        try {
+          const defs = (data && Array.isArray(data.actions)) ? data.actions : [];
+          if (defs.length) {
+            __gmAiActionDefs = defs;
+            // Re-register handlers using updated definitions
+            try { __gmAiRegisterAgentActions(); } catch (_) {}
+          }
+        } catch (eAR) {}
         break;
 
       case 'open_file':
@@ -15058,6 +15078,151 @@ flex-shrink:0;cursor:pointer;
         __gmAiSetSendButtonState(false);
       }
     } catch (e) {}
+  }
+
+  // ── Agent Action Framework ──────────────────────────────────────────────
+  // __gmAiActionDefs: action definitions received from server (Action Registry).
+  // Used for capability discovery and future dynamic feature gating.
+  // __gmAiAgentActionHandlers: maps action_type → { handler } (JS implementations).
+  let __gmAiActionDefs = [];
+  const __gmAiAgentActionHandlers = {};
+
+  function __gmAiRegisterAgentActions() {
+    // ── Handler implementations ────────────────────────────────────
+    // Each handler is a JS function implementing the action's side-effect.
+    // Metadata (desc, requiresConfirmation, params, scope) is driven by
+    // __gmAiActionDefs received from the server's ActionRegistry.
+    // To add a new action: register it on the server, then add the
+    // handler function here.
+
+    // clear_session: 清空当前会话消息
+    __gmAiAgentActionHandlers['clear_session'] = {
+      handler() {
+        try {
+          __gmAiChatMessages = [];
+          __gmAiRenderChat();
+          try { __gmAiRenderContinueFromMessages(); } catch (_) {}
+          try { __gmAiSaveHistoryNow(); } catch (_) {}
+          try { __gmAiRefreshSendCounter(); } catch (_) {}
+        } catch (e) { console.error('clear_session failed:', e); }
+      }
+    };
+
+    // close_session: 关闭当前会话
+    __gmAiAgentActionHandlers['close_session'] = {
+      handler() {
+        try {
+          const pid = String(__gmAiSelectedProfileId || __gmAiConfig.active_profile_id || '');
+          const sid = String(__gmAiActiveSessionId || '');
+          if (!pid || !sid) return;
+          const now = new Date();
+          const ts = [now.getFullYear(),
+            String(now.getMonth() + 1).padStart(2, '0'),
+            String(now.getDate()).padStart(2, '0'),
+            String(now.getHours()).padStart(2, '0'),
+            String(now.getMinutes()).padStart(2, '0'),
+            String(now.getSeconds()).padStart(2, '0')
+          ].join('');
+          const newSid = __gmAiEphemeralSessionPrefix + ts;
+          const sessions = Array.isArray(__gmAiSessions) ? __gmAiSessions.slice() : [];
+          sessions.unshift({ id: newSid, name: '新会话', unreadCount: 0, isUnread: false });
+          __gmAiSessions = sessions;
+          __gmAiActiveSessionId = newSid;
+          __gmAiChatMessages = [];
+          __gmAiRenderChat();
+          try { __gmAiRenderContinueFromMessages(); } catch (_) {}
+          try { __gmAiRefreshSendCounter(); } catch (_) {}
+          try { __gmAiRenderHistoryChips(); } catch (_) {}
+        } catch (e) { console.error('close_session failed:', e); }
+      }
+    };
+
+    // open_settings: 打开设置面板
+    __gmAiAgentActionHandlers['open_settings'] = {
+      handler() {
+        try {
+          if (typeof showAiConfigPanel === 'function') { showAiConfigPanel(); }
+        } catch (e) { console.error('open_settings failed:', e); }
+      }
+    };
+
+    // switch_theme: 切换主题
+    __gmAiAgentActionHandlers['switch_theme'] = {
+      handler(params) {
+        try {
+          const target = String((params && params.theme) || '').toLowerCase();
+          const app = document.getElementById('app');
+          if (!app) return;
+          if (target === 'dark') {
+            app.removeAttribute('data-theme');
+          } else if (target === 'light') {
+            app.setAttribute('data-theme', 'light');
+          } else {
+            const cur = app.getAttribute('data-theme');
+            if (cur === 'light') { app.removeAttribute('data-theme'); }
+            else { app.setAttribute('data-theme', 'light'); }
+          }
+          try { if (typeof localStorage !== 'undefined') localStorage.setItem('gm_theme', app.getAttribute('data-theme') || 'dark'); } catch (_) {}
+        } catch (e) { console.error('switch_theme failed:', e); }
+      }
+    };
+
+    // focus_input: 聚焦输入框
+    __gmAiAgentActionHandlers['focus_input'] = {
+      handler() {
+        try {
+          const ta = document.getElementById('aiChatInput');
+          if (ta) {
+            try { ta.focus({ preventScroll: true }); } catch (_) { ta.focus(); }
+          }
+        } catch (e) { console.error('focus_input failed:', e); }
+      }
+    };
+
+    // toggle_sidebar: 展开/收起侧边栏
+    __gmAiAgentActionHandlers['toggle_sidebar'] = {
+      handler(params) {
+        try {
+          const side = String((params && params.side) || '').toLowerCase();
+          if (side === 'left') {
+            if (typeof toggleLeftPanel === 'function') toggleLeftPanel();
+          } else if (side === 'right') {
+            if (typeof toggleRightPanel === 'function') toggleRightPanel();
+          }
+        } catch (e) { console.error('toggle_sidebar failed:', e); }
+      }
+    };
+
+    // undo_last_turn: 撤销上一轮
+    __gmAiAgentActionHandlers['undo_last_turn'] = {
+      handler() {
+        try {
+          if (typeof aiUndoLastTurn === 'function') { aiUndoLastTurn(); }
+        } catch (e) { console.error('undo_last_turn failed:', e); }
+      }
+    };
+  }
+
+  function __gmAiHandleAgentAction(action) {
+    try {
+      if (!action || typeof action !== 'object') return;
+      const at = String(action.action_type || '').trim();
+      if (!at) return;
+
+      // Lazy-init handlers
+      if (!Object.keys(__gmAiAgentActionHandlers).length) {
+        try { __gmAiRegisterAgentActions(); } catch (_) {}
+      }
+
+      const handlerDef = __gmAiAgentActionHandlers[at];
+      if (!handlerDef) {
+        console.warn('Unregistered agent action (no handler):', at);
+        return;
+      }
+
+      const params = (action && typeof action === 'object') ? action : {};
+      try { handlerDef.handler(params); } catch (eh) { console.error('Action handler error:', eh); }
+    } catch (e) { console.error('handleAgentAction:', e); }
   }
 
   function __gmAiStopResponding() {
@@ -32072,6 +32237,7 @@ flex-shrink:0;cursor:pointer;
   .repo-history-clear{margin-top:6px;border-top:1px solid var(--border);padding-top:6px;display:flex;justify-content:flex-end}
   .repo-history-clear-btn{font-size:12px;color:var(--text2);background:transparent;border:none;cursor:pointer;padding:6px 8px;border-radius:6px}
   .repo-history-clear-btn:hover{background:var(--bg3);color:var(--text)}
+
 </style>
 <script>
   (function(){

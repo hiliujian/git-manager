@@ -7261,6 +7261,139 @@ def ai_chat(messages: list, temperature: float | None = None, profile_id: str | 
         return False, "解析响应失败", None
 
 
+# ════════════════════════════════════════════════════════
+#  Agent Action Framework（Action Registry）
+# ════════════════════════════════════════════════════════
+# Unified registry for agent actions: registration, discovery,
+# validation, system-prompt generation, and frontend serialization.
+# Actions are host-application-level operations independent of
+# Tool Calls / MCP Tools. Scope support allows exposing only
+# relevant actions per page/module/workspace context.
+
+class ActionRegistry:
+    """可扩展的 Agent Action 注册中心。
+
+    统一管理 Action 的定义、参数、权限、确认策略和作用域（Scope）。
+    支持注册、注销、发现、校验、System Prompt 动态生成及前端序列化。
+    新增/删除 Action 只需调用 register()/unregister()，无需修改核心流程。
+    """
+
+    def __init__(self):
+        self._actions: dict = {}  # action_type → definition dict
+        self._lock = threading.Lock()
+
+    # ── Registration ──────────────────────────────────────────
+
+    def register(self, action_type: str, desc: str,
+                 params: dict | None = None,
+                 scope: list | None = None):
+        """注册（或更新）一个 Agent Action 定义。
+
+        Args:
+            action_type: 动作唯一标识（如 clear_session）
+            desc:        动作的人类可读描述
+            params:      {参数名: {"type":"string","desc":"..."}} 或 {}
+            scope:       作用域列表，如 ["global","ai_chat","editor"]
+                         Action 仅在匹配的 scope 下暴露给 AI
+        """
+        with self._lock:
+            self._actions[action_type] = {
+                "action_type": action_type,
+                "desc": str(desc or "").strip(),
+                "params": params if isinstance(params, dict) else {},
+                "requiresConfirmation": False,
+                "scope": list(scope) if scope else ["global"],
+            }
+
+    def unregister(self, action_type: str):
+        """注销一个 Action，后续将不再暴露给 AI 和前端。"""
+        with self._lock:
+            self._actions.pop(action_type, None)
+
+    # ── Query ─────────────────────────────────────────────────
+
+    def get(self, action_type: str) -> dict | None:
+        """获取单个 Action 定义。"""
+        with self._lock:
+            return self._actions.get(action_type)
+
+    def get_all(self, scope: str | None = None) -> list:
+        """获取所有 Action 定义，可按 scope 过滤。"""
+        with self._lock:
+            actions = list(self._actions.values())
+        if scope:
+            actions = [a for a in actions if scope in (a.get("scope") or [])]
+        return actions
+
+    def validate(self, action: dict) -> bool:
+        """校验一个 action 对象是否为已注册的 Action。"""
+        at = str(action.get("action_type") or "").strip()
+        if not at:
+            return False
+        with self._lock:
+            return at in self._actions
+
+    @property
+    def count(self) -> int:
+        with self._lock:
+            return len(self._actions)
+
+    @property
+    def action_types(self) -> list:
+        with self._lock:
+            return list(self._actions.keys())
+
+    # ── System Prompt ─────────────────────────────────────────
+
+    def build_system_prompt_text(self, scope: str | None = None) -> str:
+        """动态生成 System Prompt 中的可用 Action 列表。
+
+        Args:
+            scope: 仅暴露匹配该 scope 的 Action（None=全部暴露）
+        """
+        actions = self.get_all(scope=scope)
+        if not actions:
+            return "（当前上下文无可用的 Agent 动作）"
+        lines = []
+        for a in actions:
+            at = a.get("action_type", "")
+            desc = str(a.get("desc", "") or "").strip()
+            params = a.get("params") if isinstance(a.get("params"), dict) else {}
+            param_str = ""
+            if params:
+                parts = []
+                for pk, pv in params.items():
+                    ptype = str(pv.get("type") or "").strip() if isinstance(pv, dict) else ""
+                    parts.append(f"{pk}:{ptype}")
+                if parts:
+                    param_str = "（参数：" + ", ".join(parts) + "）"
+            lines.append(f"- {at}{param_str}：{desc}")
+        return "\n".join(lines)
+
+    # ── Serialization ─────────────────────────────────────────
+
+    def to_serializable(self, scope: str | None = None) -> list:
+        """将 Action 定义序列化为前端可消费的 JSON 列表。
+
+        Returns: [{action_type, desc, params, requiresConfirmation, scope}, ...]
+        """
+        actions = self.get_all(scope=scope)
+        return [{
+            "action_type": a["action_type"],
+            "desc": a["desc"],
+            "params": a["params"],
+            "requiresConfirmation": a["requiresConfirmation"],
+            "scope": a["scope"],
+        } for a in actions]
+
+
+# ── Global Action Registry singleton ─────────────────────────
+# 所有 Agent Action 通过此实例统一管理。
+# 新增 Action：AGENT_ACTION_REGISTRY.register("xxx", ...)
+# 删除 Action：AGENT_ACTION_REGISTRY.unregister("xxx")
+AGENT_ACTION_REGISTRY = ActionRegistry()
+
+
 def _ai_build_system_context_text(cfg=None):
     """构建系统提示词（强约束）。可传入 cfg 避免重复 _hivo_load_cfg()。"""
     try:
@@ -7364,6 +7497,15 @@ def _ai_build_system_context_text(cfg=None):
         "- 保持自然对话风格，避免僵硬模板\n\n"
         "## 工具调用格式\n"
         "严格遵循系统开头的工具调用协议：JSON 格式、每轮最多 3 个、末尾独占一行。\n\n"
+        "## Agent 动作（Action）\n"
+        "Agent 动作是你在无需读写文件/执行命令时，可以直接请求宿主应用（Host Application）执行的操作，"
+        "使用 `action_type`（而非 `type`）作为区分键。\n"
+        "- 每个动作对象包含：`action_type`（必填）、`reason`（可选，简短说明原因）及少量可选参数\n"
+        "- 动作独立于工具调用，可以单独输出，也可以和工具调用同轮输出（动作优先执行）\n"
+        "- 前端收到动作后会直接执行\n"
+        "- 可用动作列表（根据当前上下文动态生成）：\n" + AGENT_ACTION_REGISTRY.build_system_prompt_text(scope="ai_chat") + "\n"
+        "- 动作示例：`{\"action_type\": \"clear_session\", \"reason\": \"用户要求清空对话历史\"}`\n"
+        "- 使用时机：当用户要求执行“清空会话/切换主题/打开设置/聚焦输入框/收起侧栏/撤销操作”等 UI 级操作时，直接输出 action JSON\n\n"
         "# 工具使用指南\n\n"
         "## Action Card（前端联动执行）\n"
         "- 当你需要调用工具（例如 save_file / delete_file / run_cmd 等）并且需要用户确认时：\n"
@@ -7540,6 +7682,99 @@ def _hivo_extract_tool_calls(text: str, max_calls: int = 3):
             if len(calls) >= max_calls:
                 break
     return calls
+
+
+# ── Agent Action Registry ──────────────────────────────────────────────
+# All agent actions registered through the unified ActionRegistry.
+# To add a new action, call AGENT_ACTION_REGISTRY.register(...).
+# To remove, call AGENT_ACTION_REGISTRY.unregister("action_type").
+
+AGENT_ACTION_REGISTRY.register(
+    "clear_session", "清空当前会话的所有消息（保留会话本身）",
+    scope=["global", "ai_chat"],
+)
+AGENT_ACTION_REGISTRY.register(
+    "close_session", "关闭当前会话，切换到新会话",
+    scope=["global", "ai_chat"],
+)
+AGENT_ACTION_REGISTRY.register(
+    "open_settings", "打开 AI 设置面板",
+    scope=["global", "ai_chat"],
+)
+AGENT_ACTION_REGISTRY.register(
+    "switch_theme", "切换界面主题（dark 或 light）",
+    params={"theme": {"type": "string", "desc": "目标主题：dark 或 light"}},
+    scope=["global", "ai_chat"],
+)
+AGENT_ACTION_REGISTRY.register(
+    "focus_input", "聚焦 AI 输入框，方便用户快速输入",
+    scope=["global", "ai_chat"],
+)
+AGENT_ACTION_REGISTRY.register(
+    "toggle_sidebar", "展开或收起侧边栏",
+    params={"side": {"type": "string", "desc": "要操作的侧边栏：left 或 right"}},
+    scope=["global", "ai_chat"],
+)
+AGENT_ACTION_REGISTRY.register(
+    "undo_last_turn", "撤销上一轮 AI 的操作",
+    scope=["global", "ai_chat"],
+)
+
+
+def _hivo_extract_agent_actions(text: str, max_actions: int = 3):
+    """Extract agent action calls from LLM response text.
+    An agent action uses 'action_type' (not 'type') as the discriminator key."""
+    actions = []
+    s = str(text or "").strip()
+    if not s:
+        return actions
+    # Scan for JSON objects containing "action_type"
+    for seg in _hivo_scan_json_objects(s, max_objects=max_actions * 2):
+        try:
+            obj = json.loads(seg)
+        except Exception:
+            continue
+        if isinstance(obj, dict) and str(obj.get("action_type") or "").strip():
+            actions.append(obj)
+            if len(actions) >= max_actions:
+                break
+    return actions
+
+
+def _hivo_ws_emit_action(run_id: str, session_id: str, action: dict):
+    """Forward an agent action request to the frontend for execution."""
+    try:
+        payload = {
+            "type": "ai_agent_action",
+            "run_id": str(run_id or ""),
+            "session_id": str(session_id or ""),
+            "action": action if isinstance(action, dict) else {},
+            "ts": time.time(),
+        }
+        broadcast_to_clients(payload)
+    except Exception as e:
+        logger.debug(f"Exception ignored: {e}")
+
+
+def _hivo_ws_emit_action_registry(run_id: str = "", session_id: str = ""):
+    """Send the full Action Registry definitions to frontend for dynamic consumption.
+
+    Frontend uses these definitions to drive confirmation dialogs,
+    parameter validation, and capability discovery — without hardcoding
+    action metadata.
+    """
+    try:
+        defs = AGENT_ACTION_REGISTRY.to_serializable()
+        payload = {
+            "type": "ai_action_registry",
+            "run_id": str(run_id or ""),
+            "session_id": str(session_id or ""),
+            "actions": defs,
+            "ts": time.time(),
+        }
+        broadcast_to_clients(payload)
+    except Exception as e:
+        logger.debug(f"Exception ignored: {e}")
 
 
 def _hivo_tool_receipt_line(name: str, ok: bool, detail: str = ""):
@@ -9002,6 +9237,14 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
 
     _hivo_ws_emit(run_id, session_id, "sending", _hivo_status_message(cfg, "sending"))
 
+    # ── Broadcast Action Registry to frontend ──
+    # Ensures frontend has the latest action definitions for dynamic
+    # confirmation, parsing, and permission checks.
+    try:
+        _hivo_ws_emit_action_registry(run_id, session_id)
+    except Exception as e:
+        logger.debug(f"Exception ignored: {e}")
+
     try:
         feat = cfg.get("features") if isinstance(cfg, dict) else None
         feat = feat if isinstance(feat, dict) else {}
@@ -9112,6 +9355,41 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
             _trunc_warn = "\n\n[系统提示] 上一轮回复因 token 限制被截断，若干工具调用可能不完整。请在当前轮优先给出阶段性结论，必要时使用更少的工具（≤2个）完成剩余任务。"
             content += _trunc_warn
         calls = _hivo_extract_tool_calls(content, max_calls=max_calls)
+        # ── Agent Actions: extract and forward to frontend ──
+        agent_actions = _hivo_extract_agent_actions(content, max_actions=max_calls)
+        if agent_actions:
+            # Validate against registry; only emit registered actions
+            valid_actions = [a for a in agent_actions if AGENT_ACTION_REGISTRY.validate(a)]
+            if valid_actions:
+                try:
+                    _hivo_ws_emit(run_id, session_id, "executing", _hivo_status_message(cfg, "executing", tool_count=len(valid_actions)))
+                except Exception as e:
+                    logger.debug(f"Exception ignored: {e}")
+                for a in valid_actions:
+                    _hivo_ws_emit_action(run_id, session_id, a)
+                # Save chat memory and end round (actions are terminal for this round)
+                try:
+                    if user_text:
+                        st_chat = st.get("chat") if isinstance(st.get("chat"), list) else []
+                        st_chat.append({"role": "user", "content": str(user_text)})
+                        st_chat.append({"role": "assistant", "content": content})
+                        if memory_enabled:
+                            st["chat"] = st_chat[-max_hist:]
+                        if memory_enabled and len(st_chat) > keep_n:
+                            older = st_chat[:-keep_n]
+                            s2 = _hivo_summarize_for_long_term(older, max_chars=int(mem_conf.get("long_term_summary_chars") or 3500), profile_id=profile_id)
+                            if s2:
+                                st["summary"] = s2
+                except Exception as e:
+                    logger.debug(f"Exception ignored: {e}")
+                _hivo_ws_emit(run_id, session_id, "done", _hivo_status_message(cfg, "done"))
+                _hivo_ws_emit_final(run_id, session_id, content, ok=True,
+                    extra={"rounds": round_i + 1, "tool_receipts": (pre_receipts + last_tool_receipts) if pre_receipts else last_tool_receipts,
+                           "agent_actions": valid_actions, "finish_reason": finish_reason})
+                return True, content, run_id
+            # Invalid actions: treat as no-ops and continue with tool calls
+            _trunc_warn = "\n\n[系统提示] 检测到未注册的 Agent Action，已忽略。请使用已注册的动作类型。"
+            content += _trunc_warn
         # ── finish_reason 二次校验：LLM 表示有工具调用但未提取到有效调用 ──
         if not calls and finish_reason == "tool_calls":
             parse_err = "模型请求了工具调用 (finish_reason=tool_calls)，但未能解析出有效的工具调用 JSON。这可能是因为模型输出格式不符合预期，请重试。"
