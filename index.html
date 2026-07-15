@@ -15146,23 +15146,20 @@ flex-shrink:0;cursor:pointer;
       }
     };
 
-    // switch_theme: 切换主题
+    // switch_theme: 切换主题（调用系统 applyTheme，确保全局生效）
     __gmAiAgentActionHandlers['switch_theme'] = {
       handler(params) {
         try {
           const target = String((params && params.theme) || '').toLowerCase();
-          const app = document.getElementById('app');
-          if (!app) return;
-          if (target === 'dark') {
-            app.removeAttribute('data-theme');
-          } else if (target === 'light') {
-            app.setAttribute('data-theme', 'light');
+          if (target === 'dark' || target === 'light') {
+            if (typeof applyTheme === 'function') applyTheme(target);
           } else {
-            const cur = app.getAttribute('data-theme');
-            if (cur === 'light') { app.removeAttribute('data-theme'); }
-            else { app.setAttribute('data-theme', 'light'); }
+            // No target specified → toggle
+            const cur = document.documentElement.getAttribute('data-theme');
+            const next = cur === 'light' ? 'dark' : 'light';
+            if (typeof applyTheme === 'function') applyTheme(next);
           }
-          try { if (typeof localStorage !== 'undefined') localStorage.setItem('gm_theme', app.getAttribute('data-theme') || 'dark'); } catch (_) {}
+          try { if (typeof localStorage !== 'undefined') localStorage.setItem('gm_theme', document.documentElement.getAttribute('data-theme') || 'dark'); } catch (_) {}
         } catch (e) { console.error('switch_theme failed:', e); }
       }
     };
@@ -15687,6 +15684,10 @@ flex-shrink:0;cursor:pointer;
                   const st = String(m && m.stage || '');
                   if (st) item.stage = st;
                 } catch(_) {}
+                try {
+                  const tr = Array.isArray(m && m.tool_receipts) ? m.tool_receipts : [];
+                  if (tr.length) item.tool_receipts = tr;
+                } catch(_) {}
               }
               return item;
             } catch (e1) {
@@ -15854,9 +15855,17 @@ flex-shrink:0;cursor:pointer;
       const m = (__gmAiChatMessages && __gmAiChatMessages[idx]) || null;
       if (!m) { return; }
       let tr = Array.isArray(m.tool_receipts) ? m.tool_receipts : [];
-      if ((!tr || !tr.length) && __gmAiChatMessages && idx > 0) {
-        const mp = __gmAiChatMessages[idx-1] || null;
-        if (mp && Array.isArray(mp.tool_receipts)) tr = mp.tool_receipts;
+      if ((!tr || !tr.length) && __gmAiChatMessages) {
+        // Try previous message first, then next message
+        // (matches the render logic that considers trCurr, trPrev, and trNext)
+        if (idx > 0) {
+          const mp = __gmAiChatMessages[idx-1] || null;
+          if (mp && Array.isArray(mp.tool_receipts)) tr = mp.tool_receipts;
+        }
+        if ((!tr || !tr.length) && idx + 1 < __gmAiChatMessages.length) {
+          const mn = __gmAiChatMessages[idx+1] || null;
+          if (mn && Array.isArray(mn.tool_receipts)) tr = mn.tool_receipts;
+        }
       }
       
       if (!tr || !tr.length) { return; }

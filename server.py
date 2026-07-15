@@ -5622,6 +5622,13 @@ def load_ai_chat_history(profile_id: str, limit: int = 40, session_id: str | Non
                 ug = str(m.get("undo_gid") or "").strip()
                 if ug:
                     item["undo_gid"] = ug
+                # Preserve tool_receipts for cross-session display
+                try:
+                    tr = m.get("tool_receipts")
+                    if isinstance(tr, list) and tr:
+                        item["tool_receipts"] = tr
+                except Exception:
+                    pass
                 # Track for session-level continue computation
                 last_assistant = m
             out.append(item)
