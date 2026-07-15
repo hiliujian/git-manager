@@ -2274,20 +2274,23 @@ flex-shrink:0;cursor:pointer;
     [data-theme="light"] .ai-msg.cmd-result .ai-cmd-out.cmd-err{background:rgba(255,80,80,0.06);}
     .ai-msg.cmd-result .ai-cmd-name{display:inline;color:var(--text2);opacity:0.7;}
 
-    .ai-md .ai-action-card{margin-top:10px;border-radius:12px;overflow:hidden;
+    .ai-md .ai-action-card{margin-top:10px;border-radius:12px;overflow:hidden;max-width:100%;
       border:1px solid rgba(255,255,255,0.10);background:rgba(0,0,0,0.14);}
+    .ai-md .ai-action-card pre,
+    .ai-md .ai-action-card code{max-width:100%;overflow-x:auto;white-space:pre;word-break:normal;}
     [data-theme="light"] .ai-md .ai-action-card{border-color:rgba(0,0,0,0.10);background:rgba(0,0,0,0.03);}
-    .ai-md .ai-action-card-hd{display:flex;align-items:center;gap:8px;
+    .ai-md .ai-action-card-hd{display:flex;align-items:center;gap:8px;min-width:0;
       padding:8px 10px;border-bottom:1px solid rgba(255,255,255,0.08);}
     [data-theme="light"] .ai-md .ai-action-card-hd{border-bottom-color:rgba(0,0,0,0.08);}
-    .ai-md .ai-action-card-title{font-size:12px;color:var(--text);font-weight:600;}
-    .ai-md .ai-action-card-btns{margin-left:auto;display:flex;gap:6px;}
+    .ai-md .ai-action-card-title{font-size:12px;color:var(--text);font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+    .ai-md .ai-action-card-btns{margin-left:auto;display:flex;gap:6px;flex-shrink:0;}
     .ai-md .ai-action-card .btn{padding:2px 10px;}
-    .ai-md .ai-action-steps{padding:8px 10px;font-size:11px;color:var(--text2);}
-    .ai-md .ai-action-step{display:flex;gap:8px;align-items:flex-start;padding:3px 0;}
-    .ai-md .ai-action-step .k{width:44px;opacity:0.9;}
-    .ai-md .ai-action-step .v{flex:1;word-break:break-word;}
-    .ai-md .ai-action-step .st{width:70px;text-align:right;opacity:0.9;}
+    .ai-md .ai-action-steps{padding:8px 10px;font-size:11px;color:var(--text2);min-width:0;max-width:100%;}
+    .ai-md .ai-action-step{display:flex;gap:8px;align-items:flex-start;padding:3px 0;min-width:0;}
+    .ai-md .ai-action-step .k{width:44px;opacity:0.9;flex-shrink:0;}
+    .ai-md .ai-action-step .v{flex:1;min-width:0;max-width:100%;
+      word-break:break-word;overflow-wrap:anywhere;overflow-x:auto;white-space:pre-wrap;}
+    .ai-md .ai-action-step .st{width:70px;text-align:right;opacity:0.9;flex-shrink:0;}
     .ai-md .ai-action-shot{padding:0 10px 10px 10px;}
     .ai-md .ai-action-shot img{max-width:100%;height:auto;border-radius:10px;}
 
@@ -15899,6 +15902,7 @@ flex-shrink:0;cursor:pointer;
         try {
           const pres = holder.querySelectorAll('pre');
           pres.forEach(p => {
+            p.style.maxWidth = '100%';
             p.style.overflowX = 'auto';
             p.style.whiteSpace = 'pre';
             p.style.wordBreak = 'normal';
