@@ -847,6 +847,13 @@ def _hivo_agent_mark_done(run_id: str):
                 sid = ""
             if sid and _hivo_agent_session_active.get(sid) == rid:
                 _hivo_agent_session_active.pop(sid, None)
+            # 清理已完成的旧条目，防止内存泄漏（保留最近 50 条）
+            if len(_hivo_agent_run_state) > 50:
+                done_keys = [k for k, v in _hivo_agent_run_state.items() if isinstance(v, dict) and v.get("done")]
+                # 保留最近 20 条已完成的
+                done_keys.sort(key=lambda k: _hivo_agent_run_state[k].get("started_at", 0), reverse=True)
+                for k in done_keys[20:]:
+                    _hivo_agent_run_state.pop(k, None)
     except Exception as e:
         logger.debug(f"Exception ignored: {e}")
 
@@ -5610,6 +5617,12 @@ def delete_ai_session(profile_id: str, session_id: str):
         return False, "会话不存在"
     node["sessions"] = new_sess
 
+    # 清理内存中的会话状态，防止内存泄漏
+    try:
+        _hivo_session_mem.pop(sid, None)
+    except Exception:
+        pass
+
     # Update session_order and pick a reasonable next active session.
     try:
         order0 = node.get("session_order")
@@ -7378,9 +7391,25 @@ def _ai_trim_messages_to_budget(messages: list, max_total_tokens: int, reserve_o
         if first_sys and isinstance(first_sys.get("content"), str):
             sys_allow3 = max(24, int(budget * 0.3))
             final_out.append({"role": "system", "content": _ai_truncate_text_to_tokens(first_sys.get("content"), sys_allow3)})
-        if last_user and isinstance(last_user.get("content"), str):
+        if last_user:
+            lu_content = last_user.get("content")
             remain3 = max(24, budget - _ai_estimate_messages_tokens(final_out) - 8)
-            final_out.append({"role": "user", "content": _ai_truncate_text_to_tokens(last_user.get("content"), remain3)})
+            if isinstance(lu_content, str):
+                final_out.append({"role": "user", "content": _ai_truncate_text_to_tokens(lu_content, remain3)})
+            elif isinstance(lu_content, list):
+                # 多模态消息：保留 text 部分和尽量多的 image_url
+                parts = []
+                for p in lu_content:
+                    if not isinstance(p, dict):
+                        continue
+                    pt = str(p.get("type") or "")
+                    if pt == "text":
+                        parts.append({"type": "text", "text": _ai_truncate_text_to_tokens(str(p.get("text") or ""), max(24, remain3 - 100))})
+                    elif pt in ("image_url", "image", "input_image") and remain3 > 100:
+                        parts.append(p)
+                        remain3 -= 85
+                if parts:
+                    final_out.append({"role": "user", "content": parts})
         if final_out:
             return final_out
         return None
@@ -7524,8 +7553,6 @@ def ai_chat(messages: list, temperature: float | None = None, profile_id: str | 
                             delta_content = delta.get("text")
                         if isinstance(delta_content, list):
                             delta_content = "".join(str(it.get("text") or "") if isinstance(it, dict) else str(it or "") for it in delta_content)
-                        if isinstance(delta_content, str):
-                            delta_content = delta_content.strip()
                         # reasoning models output content in reasoning/reasoning_content/reasoning_details fields
                         delta_reasoning = delta.get("reasoning") or delta.get("reasoning_content")
                         if not delta_reasoning:
@@ -9221,8 +9248,8 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
     if agent_timeout_s <= 0:
         agent_timeout_s = 300
 
-    # Hard cap: avoid extremely long runs (mainstream agent UX expects bounded wall time)
-    agent_deadline = time.time() + max(30, min(600, agent_timeout_s))
+    # Agent 超时上限由配置决定，不再硬编码
+    agent_deadline = time.time() + max(30, agent_timeout_s)
 
     try:
         llm_timeout_s = int(cfg.get("llm_timeout_s") or 0)
@@ -9457,33 +9484,11 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
         sys_text = sys_text.strip() + "\n\n" + tool_ctx
     elif not sys_text.strip():
         sys_text = tool_ctx
-    # 补充：标准工具调用范式（减少调用歧义，统一结构）
-    tool_examples = (
-        "【工具使用范式（示例）】\n"
-        "- get_file（统一文件接口：文本返回内容；二进制/媒体返回文件对象）：{\"type\":\"get_file\", \"path\":\"相对路径或 attachments/...\"}\n"
-        "- read_file_range（读取行范围）：{\"type\":\"read_file_range\", \"path\":\"路径\", \"start\":1, \"end\":200}\n"
-        "- list_dir_tree（目录树）：{\"type\":\"list_dir_tree\", \"path\":\"目录\", \"depth\":4, \"max_entries\":600}\n"
-        "- search_code（代码搜索）：{\"type\":\"search_code\", \"query\":\"关键词\", \"case_sensitive\":false, \"max_results\":50}\n"
-        "- find_files（按名找文件）：{\"type\":\"find_files\", \"name\":\"文件名或片段\"}\n"
-        "- list_files（最近文件变化缓存）：{\"type\":\"list_files\", \"max_age\": 0}\n"
-        "- diff_file（单文件 diff）：{\"type\":\"diff_file\", \"path\":\"文件路径\", \"ctx_lines\": 3}\n"
-        "- staged_files（暂存区列表）：{\"type\":\"staged_files\"}\n"
-        "- stash_list（查看 stash）：{\"type\":\"stash_list\"}；stash_drop：{\"type\":\"stash_drop\", \"ref\":\"stash@{0}\"}\n"
-        "- unstage_file（取消暂存单文件）：{\"type\":\"unstage_file\", \"path\":\"文件路径\"}\n"
-        "- discard_staged_file（丢弃暂存修改）：{\"type\":\"discard_staged_file\", \"path\":\"文件路径\"}\n"
-        "- unstage_all_staged（取消全部暂存）：{\"type\":\"unstage_all_staged\"}；discard_all_staged：{\"type\":\"discard_all_staged\"}\n"
-        "- save_file（保存文件）：{\"type\":\"save_file\", \"path\":\"文件路径\", \"content\":\"新内容\"}\n"
-        "- delete_file（删除文件）：{\"type\":\"delete_file\", \"path\":\"文件路径\"}\n"
-        "- rename_file（重命名/移动）：{\"type\":\"rename_file\", \"old_path\":\"旧\", \"new_path\":\"新\"}\n"
-        "- status（仓库状态）：{\"type\":\"status\"}；open_repo：{\"type\":\"open_repo\", \"path\":\"仓库路径\"}；set_origin：{\"type\":\"set_origin\", \"url\":\"git 地址\"}\n"
-        "- workspace_context（工作区上下文）：{\"type\":\"workspace_context\"}；open_file：{\"type\":\"open_file\", \"path\":\"文件\", \"view\":\"editor\"}\n"
-        "- run_cmd（运行命令）：{\"type\":\"run_cmd\", \"cmd\":\"git status\", \"timeout\":30, \"cwd\":\"可选\"}\n"
-        "- web_search（站外搜索）：{\"type\":\"web_search\", \"query\":\"关键词\", \"top_k\":5, \"timeout\":20}；web_fetch：{\"type\":\"web_fetch\", \"url\":\"https://...\", \"timeout\":20}\n"
-        "- verify_python（语法校验）：{\"type\":\"verify_python\", \"files\":[\"server.py\"]}\n"
-        "- switch_branch（切换分支）：{\"type\":\"switch_branch\", \"branch\":\"feature/x\"}；commit_and_switch：{\"type\":\"commit_and_switch\", \"message\":\"WIP\", \"branch\":\"feature/x\"}\n"
-        "- undo（撤销上一组操作）：{\"type\":\"undo\"}\n"
-        "说明：务必输出严格 JSON（不要多余文本/注释）。路径不明确时先 find_files/search_code；读取大文件建议用 read_file_range 分段。用户上传的图片已直接内嵌在消息中，无需再调用工具读取。"
-    )
+    # 追加工具调用格式说明（合并到系统提示，避免独立消息浪费 token）
+    sys_text = sys_text.rstrip() + "\n\n【工具调用格式】务必输出严格 JSON（不要多余文本/注释）。" \
+        "路径不明确时先 find_files/search_code；读取大文件建议用 read_file_range 分段。" \
+        "用户上传的图片已直接内嵌在消息中，无需再调用工具读取。" \
+        "工具名称和参数格式参见上方工具描述。"
     sys0 = {"role": "system", "content": sys_text}
     msgs = [sys0]
     # One-shot resume guidance (runtime-only): when client hints a resume from last assistant error/aborted
@@ -9499,7 +9504,6 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
             msgs.append({"role": "system", "content": guide})
     except Exception:
         pass
-    msgs.append({"role": "system", "content": tool_examples})
     if long_summary:
         msgs.append({"role": "system", "content": long_summary})
     if tool_mem_block:
@@ -9674,7 +9678,11 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
         allow = agent_conf.get("tools")
         if isinstance(allow, list) and allow:
             allow_set = set(str(x).strip() for x in allow if str(x).strip())
-            calls = [c for c in calls if str(c.get("type") or "").strip() in allow_set]
+            filtered_calls = [c for c in calls if str(c.get("type") or "").strip() in allow_set]
+            if len(filtered_calls) < len(calls):
+                dropped = [str(c.get("type") or "?") for c in calls if str(c.get("type") or "").strip() not in allow_set]
+                logger.info(f"[Agent] 工具白名单过滤: 丢弃 {len(calls) - len(filtered_calls)} 个未授权工具调用: {dropped}")
+            calls = filtered_calls
         if not calls:
             try:
                 if user_text:
@@ -9791,6 +9799,13 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
                     logger.debug(f"Exception ignored: {e}")
             else:
                 ok1, msg1, data1 = _hivo_exec_tool(c2, undo_gid=undo_gid_eff, run_id=run_id, agent_deadline=agent_deadline)
+                # 写操作后清理工具缓存，避免返回旧内容
+                _tool_type = str(c2.get("type") or "").strip()
+                if _tool_type in ("save_file", "delete_file", "rename_file", "unstage_file", "discard_staged_file", "unstage_all_staged", "discard_all_staged") and isinstance(tool_cache, OrderedDict):
+                    try:
+                        tool_cache.clear()
+                    except Exception:
+                        pass
                 try:
                     if tool_cache_enabled and cache_key and isinstance(tool_cache, OrderedDict):
                         tool_cache[cache_key] = {"ok": bool(ok1), "msg": str(msg1 or ""), "data": data1 if isinstance(data1, dict) else {}}
@@ -9970,9 +9985,9 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
 
         msgs.append({"role": "assistant", "content": content})
         msgs.append({
-            "role": "user",
-            "content": receipt_text
-            + "\n\n【指令】上述内容是工具执行的内部回执（仅供你参考）。请基于这些**真实结果**生成面向用户的自然语言回复：\n"
+            "role": "system",
+            "content": "【工具回执】\n" + receipt_text
+            + "\n\n请基于上述真实结果生成面向用户的自然语言回复：\n"
             + "- 不要输出回执原文或内部字段（如 'ok', 'msg', 'data'）\n"
             + "- 若任务完成，直接给出结论；若还需继续，输出下一步的工具 JSON\n"
             + "- 若回执中有错误或失败，向用户说明原因并建议替代方案"
@@ -10226,7 +10241,7 @@ def _ai_cache_get(query: str, profile_id: str | None = None):
             if score > best_score:
                 best_score = score
                 best_key = ck
-        if best_key and best_score >= 0.75:
+        if best_key and best_score >= 0.92:
             e = _ai_cache.get(best_key)
             if e is not None:
                 e["hits"] = int(e.get("hits") or 0) + 1
