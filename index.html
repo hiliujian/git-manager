@@ -69,56 +69,57 @@
         }
         totalBytes += size;
         if (FRONT_MAX_TOTAL > 0 && totalBytes > FRONT_MAX_TOTAL) {
-          toast(`本次附件总大小超过限制（>${(FRONT_MAX_TOTAL/1024/1024)|0}MB）`,'warn');
           return { ok: false, items: [] };
         }
-        // 预警：图片超过 data_url 发送阈值将被后端截断
-        try {
-          const mime = String(a && a.mime || '');
-          if (mime.startsWith('image/') && DATA_URL_MAX_BYTES > 0 && size > DATA_URL_MAX_BYTES) {
-            toast(`提示：图片"${String(a.name||'图片')}"体积较大（${((size)/1024/1024).toFixed(1)}MB），发送给 AI 时可能被截断（阈值 ${(DATA_URL_MAX_BYTES/1024/1024).toFixed(1)}MB）。建议压缩后再上传。`, 'warn');
-          }
-        } catch (e) {}
       }
 
-      // 客户端压缩：将超过 data_url 阈值的图片在上传前压缩到阈值内
-      async function __gmCompressDataUrlToMaxBytes(dataUrl, maxBytes){
-        try{
-          if (!dataUrl || !dataUrl.startsWith('data:')) return dataUrl;
-          const img = new Image();
-          // Allow cross-origin data URLs
-          img.decoding = 'async';
-          const p = new Promise((resolve, reject)=>{
-            img.onload = ()=>resolve(true);
-            img.onerror = ()=>reject(new Error('img load failed'));
-          });
-          img.src = dataUrl;
-          await p;
-          const canvas = document.createElement('canvas');
-          const ctx = canvas.getContext('2d');
-          if (!ctx) return dataUrl;
-          let w = img.naturalWidth || img.width || 0;
-          let h = img.naturalHeight || img.height || 0;
-          if (!w || !h) return dataUrl;
-          // 先按面积缩放接近目标大小，再通过质量迭代逼近
-          const bytes0 = (()=>{ try{ const b64 = dataUrl.split(',')[1]||''; return Math.floor(b64.length * 0.75);}catch{ return 0; }})();
-          let ratio = Math.sqrt(Math.max(0.1, Math.min(1, (maxBytes>0 && bytes0>0) ? (maxBytes/bytes0) : 1)));
-          ratio = isFinite(ratio) ? ratio : 1;
-          let nw = Math.max(1, Math.floor(w * ratio));
-          let nh = Math.max(1, Math.floor(h * ratio));
-          canvas.width = nw; canvas.height = nh;
-          ctx.drawImage(img, 0, 0, nw, nh);
-          let qList = [0.85,0.75,0.65,0.55,0.45,0.35];
-          let out = canvas.toDataURL('image/jpeg', qList[0]);
-          const est = (u)=>{ try{ const b64 = String(u||'').split(',')[1]||''; return Math.floor(b64.length*0.75);}catch{return 0;} };
-          if (est(out) <= maxBytes) return out;
-          for (let i=1;i<qList.length;i++){
-            out = canvas.toDataURL('image/jpeg', qList[i]);
-            if (est(out) <= maxBytes) return out;
-          }
-          return out; // 尽力而为：若仍超限，返回最后一次（由后端再兜底）
-        }catch{ return dataUrl; }
+  // 客户端压缩：将超过 data_url 阈值的图片在上传前压缩到阈值内
+  async function __gmCompressDataUrlToMaxBytes(dataUrl, maxBytes){
+    try{
+      if (!dataUrl || !dataUrl.startsWith('data:')) return dataUrl;
+      if (maxBytes <= 0) return dataUrl;
+      const img = new Image();
+      img.decoding = 'async';
+      const p = new Promise((resolve, reject)=>{
+        img.onload = ()=>resolve(true);
+        img.onerror = ()=>reject(new Error('img load failed'));
+      });
+      img.src = dataUrl;
+      await p;
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return dataUrl;
+      const w = img.naturalWidth || img.width || 0;
+      const h = img.naturalHeight || img.height || 0;
+      if (!w || !h) return dataUrl;
+      const est = (u)=>{ try{ const b64 = String(u||'').split(',')[1]||''; return Math.floor(b64.length*0.75);}catch{return 0;} };
+      // 完整图片：先降低质量；若仍超限，再缩小尺寸循环压缩——保证图片完整、不截断
+      const qList = [0.85, 0.75, 0.65, 0.55, 0.45, 0.35];
+      let curW = w, curH = h, curUrl = dataUrl;
+      // 质量迭代
+      canvas.width = curW; canvas.height = curH;
+      ctx.drawImage(img, 0, 0, curW, curH);
+      for (let i = 0; i < qList.length; i++) {
+        curUrl = canvas.toDataURL('image/jpeg', qList[i]);
+        if (est(curUrl) <= maxBytes) return curUrl;
       }
+      // 仍超限：等比缩小尺寸（保留完整图片，最小边不低于 256px）
+      const minDim = 256;
+      let scale = 0.85;
+      while (scale > 0.3) {
+        curW = Math.max(minDim, Math.floor(w * scale));
+        curH = Math.max(minDim, Math.floor(h * scale));
+        canvas.width = curW; canvas.height = curH;
+        ctx.drawImage(img, 0, 0, curW, curH);
+        for (let i = 0; i < qList.length; i++) {
+          curUrl = canvas.toDataURL('image/jpeg', qList[i]);
+          if (est(curUrl) <= maxBytes) return curUrl;
+        }
+        scale *= 0.85;
+      }
+      return curUrl; // 尽力而为：返回已缩放+最低质量的结果（完整图片，不截断）
+    }catch{ return dataUrl; }
+  }
 
       // 对待上传的图片进行就地压缩（仅在超过阈值时）
       try{
@@ -131,7 +132,7 @@
           if (!mime.startsWith('image/') || !du.startsWith('data:')) continue;
           const sz = Number(sizes[i]||0);
           if (DATA_URL_MAX_BYTES>0 && sz>DATA_URL_MAX_BYTES){
-            if (!warned.v){ try{ toast('检测到大图，正在本地压缩以便更好地发送给 AI…','ok'); }catch(_){} warned.v = true; }
+            if (!warned.v){ warned.v = true; }
             const du2 = await __gmCompressDataUrlToMaxBytes(du, DATA_URL_MAX_BYTES);
             try{
               const b64 = String(du2.split(',')[1]||'');
@@ -2115,14 +2116,63 @@ flex-shrink:0;cursor:pointer;
       border:1px solid transparent;color:var(--text2);flex-shrink:0;
       transition:all 0.15s ease;font-size:13px;line-height:1;font-family:inherit;}
     .ai-add-ctx-btn:hover{background:var(--bg4);border-color:var(--border);color:var(--accent);}
-    .ai-add-ctx-btn svg{width:14px;height:14px;display:block;}
+    .ai-add-ctx-btn svg{width:12px;height:12px;display:block;margin:0 auto;}
 
     .ai-undo-btn{display:inline-flex;align-items:center;justify-content:center;
       width:22px;height:22px;border-radius:6px;cursor:pointer;background:transparent;
       border:1px solid transparent;color:var(--text2);flex-shrink:0;
       transition:all 0.15s ease;font-size:13px;line-height:1;font-family:inherit;}
     .ai-undo-btn:hover{background:var(--bg4);border-color:var(--border);color:var(--accent);}
-    .ai-undo-btn svg{width:14px;height:14px;display:block;}
+    .ai-undo-btn svg{width:12px;height:12px;display:block;margin:0 auto;}
+
+    /* Token 用量按钮 */
+    .ai-token-btn{display:inline-flex;align-items:center;justify-content:center;
+      width:22px;height:22px;border-radius:6px;cursor:pointer;background:transparent;
+      border:1px solid transparent;color:var(--text2);flex-shrink:0;
+      transition:all 0.15s ease;font-size:13px;line-height:1;font-family:inherit;}
+    .ai-token-btn:hover{background:var(--bg4);border-color:var(--border);color:var(--accent);}
+    .ai-token-btn svg{width:12px;height:12px;display:block;margin:0 auto;}
+    /* Token 用量弹窗 */
+    .ai-token-popup{display:none;position:fixed;z-index:2200;width:auto;
+      background:rgba(26,28,36,.96);border:1px solid rgba(61,66,98,.85);border-radius:12px;
+      box-shadow:0 22px 60px rgba(0,0,0,0.55);padding:12px 14px;font-size:12px;color:var(--text);
+      backdrop-filter:blur(10px);}
+    .ai-token-popup.show{display:block;}
+    .ai-token-popup .ai-token-title{display:flex;justify-content:space-between;align-items:center;
+      margin-bottom:6px;font-weight:700;font-size:13px;}
+    .ai-token-popup .ai-token-bar-bg{margin-bottom:8px;height:5px;border-radius:999px;
+      background:var(--bg4);overflow:hidden;}
+    .ai-token-popup .ai-token-bar-fill{height:100%;border-radius:999px;background:var(--accent);
+      transition:width 0.3s ease;}
+    .ai-token-popup .ai-token-bar-fill.warn{background:var(--warn);}
+    .ai-token-popup .ai-token-bar-fill.danger{background:var(--danger);}
+    .ai-token-popup .ai-token-list{max-height:180px;overflow-y:auto;}
+    .ai-token-popup .ai-token-row{display:flex;gap:12px;padding:3px 0;}
+    .ai-token-popup .ai-token-col{flex:1;display:flex;justify-content:space-between;color:var(--text2);min-width:0;}
+    .ai-token-popup .ai-token-col .ai-token-col-label{flex-shrink:0;margin-right:4px;color:var(--text2);}
+    .ai-token-popup .ai-token-col span:last-child{font-variant-numeric:tabular-nums;
+      color:var(--text);font-weight:500;}
+    .ai-token-popup .ai-token-footnote{font-size:10px;color:var(--text3);
+      margin-top:6px;border-top:1px solid rgba(255,255,255,0.06);padding-top:6px;}
+
+    /* 对话内搜索栏 */
+    .ai-chat-searchbar{display:none;align-items:center;gap:6px;padding:6px 10px;
+      border-bottom:1px solid var(--border);background:var(--bg2);font-size:11px;
+      flex-shrink:0;width:100%;box-sizing:border-box;min-width:0;}
+    .ai-chat-searchbar.show{display:flex;}
+    .ai-chat-searchbar input{flex:1 1 auto;min-width:0;height:24px;border:1px solid var(--border);
+      border-radius:6px;background:var(--bg);color:var(--text);padding:0 8px;font-size:11px;
+      font-family:inherit;outline:none;}
+    .ai-chat-searchbar input:focus{border-color:var(--accent);}
+    .ai-chat-searchbar .meta{flex-shrink:0;color:var(--text3);font-size:11px;font-variant-numeric:tabular-nums;
+      text-align:center;padding:0 4px;font-family:inherit;}
+    .ai-chat-searchbar .ai-search-btn{flex-shrink:0;width:24px;height:24px;border-radius:6px;
+      border:1px solid var(--border);background:transparent;color:var(--text2);cursor:pointer;
+      font-size:11px;line-height:1;font-family:inherit;display:inline-flex;align-items:center;justify-content:center;
+      padding:0;}
+    .ai-chat-searchbar .ai-search-btn:hover{background:var(--bg4);color:var(--text);}
+    .ai-chat-search-hit{background:rgba(255,213,79,0.35);border-radius:2px;display:inline;}
+    .ai-chat-search-hit.current{background:rgba(255,152,0,0.6);}
 
     .ai-attach-preview{display:none;padding:8px;margin-top:6px;border:1px solid var(--border);
       border-radius:10px;background:var(--bg2);}
@@ -2179,7 +2229,7 @@ flex-shrink:0;cursor:pointer;
       max-width:220px;min-width:0;overflow:hidden;flex:0 1 auto;
       white-space:nowrap;text-overflow:ellipsis;}
     .ai-model-selector:hover{background:var(--bg4);border-color:var(--border);}
-    .ai-model-icon{width:14px;height:14px;opacity:0.6;}
+    .ai-model-icon{width:12px;height:12px;opacity:0.9;display:block;margin:0 auto;flex-shrink:0;color:var(--accent);}
     .ai-model-name{font-size:11px;color:var(--text2);font-weight:500;max-width:100%;
       white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex:1;}
 
@@ -2319,13 +2369,14 @@ flex-shrink:0;cursor:pointer;
     .ai-media-overlay{z-index:650;background:rgba(0,0,0,0.78);}
     .ai-media-overlay .ai-media-frame{width:min(92vw, 1080px);height:92vh;display:flex;align-items:center;justify-content:center;position:relative;}
     .ai-media-overlay img{max-width:100%;max-height:100%;object-fit:contain;border-radius:12px;border:1px solid rgba(255,255,255,0.16);
-      background:rgba(0,0,0,0.25);}
+      background:rgba(0,0,0,0.25);transform-origin:center center;}
     [data-theme="light"] .ai-media-overlay img{border-color:rgba(0,0,0,0.18);background:rgba(255,255,255,0.55);}
     .ai-media-overlay .ai-media-nav{position:absolute;top:50%;transform:translateY(-50%);
       width:52px;height:52px;border-radius:999px;border:1px solid rgba(255,255,255,0.18);
       background:rgba(0,0,0,0.38);color:#fff;display:flex;align-items:center;justify-content:center;
       cursor:pointer;user-select:none;opacity:0;transition:opacity 0.15s ease, background 0.15s ease;
-      font-size:28px;font-weight:900;line-height:1;}
+      font-size:28px;font-weight:900;line-height:1;z-index:10;}
+    .ai-media-overlay .ai-media-nav svg{display:block;margin:0 auto;}
     .ai-media-overlay .ai-media-frame.__show-controls .ai-media-nav{opacity:1;}
     .ai-media-overlay .ai-media-nav:hover{background:rgba(0,0,0,0.60);}
     .ai-media-overlay .ai-media-nav.prev{left:12px;}
@@ -2333,7 +2384,7 @@ flex-shrink:0;cursor:pointer;
     .ai-media-text{max-width:100%;max-height:100%;width:min(92vw, 1000px);height:auto;display:flex;align-items:flex-start;justify-content:flex-start;border-radius:12px;border:1px solid rgba(255,255,255,0.16);background:rgba(0,0,0,0.25);color:#fff;padding:16px;overflow:auto;}
     [data-theme="light"] .ai-media-text{border-color:rgba(0,0,0,0.18);background:rgba(255,255,255,0.85);color:#111;}
     .ai-media-text pre{white-space:pre-wrap;word-break:break-word;margin:0;font-size:13px;line-height:1.5;font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;}
-    .ai-media-overlay .ai-media-tools{position:absolute;left:50%;transform:translateX(-50%);
+    .ai-media-overlay .ai-media-tools{position:absolute;z-index:10;left:50%;transform:translateX(-50%);
       top:12px;display:flex;gap:8px;align-items:center;padding:6px 8px;border-radius:999px;
       border:1px solid rgba(255,255,255,0.16);background:rgba(0,0,0,0.35);
       backdrop-filter:blur(8px);opacity:0;transition:opacity 0.15s ease, background 0.15s ease;}
@@ -2900,6 +2951,17 @@ flex-shrink:0;cursor:pointer;
   </div>
   <span class="repo-label" id="repoLabel"></span>
   <div class="row ml">
+    <button class="btn" id="tagBtn" style="display:none" data-action="openTagModal" title="Tag 标签管理">
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
+        <line x1="7" y1="7" x2="7.01" y2="7"/>
+      </svg>标签
+    </button>
+    <button class="btn" id="conflictBtn" style="display:none" data-action="openConflictModal" title="冲突解决">
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>
+      </svg>冲突
+    </button>
     <button class="btn" id="stagedBtn" style="display:none" data-action="showStagedPanel">
       <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
         <path d="M7 7h10"/>
@@ -3232,6 +3294,14 @@ flex-shrink:0;cursor:pointer;
         </div>
 
         <div id="aiChatView" style="display:flex;flex-direction:column;flex:1;min-height:0;">
+          <!-- 对话内搜索栏 -->
+          <div class="ai-chat-searchbar" id="aiChatSearchbar">
+            <input type="text" id="aiChatSearchInput" placeholder="在对话中查找..." autocomplete="off" spellcheck="false">
+            <span class="meta" id="aiChatSearchMeta">0/0</span>
+            <button class="ai-search-btn" data-action="aiSearchPrev" title="上一个 (Shift+Enter)">↑</button>
+            <button class="ai-search-btn" data-action="aiSearchNext" title="下一个 (Enter)">↓</button>
+            <button class="ai-search-btn" data-action="aiSearchClose" title="关闭 (Esc)">✕</button>
+          </div>
           <!-- 聊天消息区 -->
           <div id="aiChatList" class="ai-chat"><div class="ai-chat-inner" id="aiChatInner"></div></div>
           
@@ -3256,14 +3326,14 @@ flex-shrink:0;cursor:pointer;
               </div>
               <div class="ai-drag-overlay" id="aiDragOverlay"><div class="txt">释放以上传文件</div></div>
               <div class="ai-under">
-                <button class="ai-add-ctx-btn" title="Add Context" data-action="aiAddContext"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg></button>
-                <button class="ai-add-ctx-btn" id="aiAttachBtn" title="Add Attachment" data-action="aiPickAttachments"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-8.49 8.49a5 5 0 0 1-7.07 0 5 5 0 0 1 0-7.07l8.49-8.49a3.5 3.5 0 0 1 4.95 4.95l-8.49 8.49a2 2 0 0 1-2.83-2.83l8.13-8.13"/></svg></button>
+                <button class="ai-add-ctx-btn" title="添加上下文" data-action="aiAddContext"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8"/></svg></button>
+                <button class="ai-add-ctx-btn" id="aiAttachBtn" title="添加附件" data-action="aiPickAttachments"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-8.49 8.49a5 5 0 0 1-7.07 0 5 5 0 0 1 0-7.07l8.49-8.49a3.5 3.5 0 0 1 4.95 4.95l-8.49 8.49a2 2 0 0 1-2.83-2.83l8.13-8.13"/></svg></button>
                 <input id="aiAttachInput" type="file" multiple style="display:none" />
-                <button class="ai-undo-btn" title="撤回上一轮" data-action="aiUndoLastTurn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14l-4-4 4-4"/><path d="M5 10h10a4 4 0 0 1 0 8h-1"/></svg></button>
+                <button class="ai-undo-btn" title="撤回上一轮" data-action="aiUndoLastTurn"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14l-4-4 4-4"/><path d="M5 10h10a4 4 0 0 1 0 8h-1"/></svg></button>
+                <button class="ai-token-btn" title="Token 用量" data-action="aiTokenUsage"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></button>
                 <div class="ai-model-selector" data-action="openAiModelMenu" title="选择模型">
-                  <svg class="ai-model-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <circle cx="12" cy="12" r="3"/>
-                    <path d="M12 1v6m0 6v6m5.2-13.2l-4.2 4.2m-1.4 1.4l-4.2 4.2m10.6.6l-4.2-4.2m-1.4-1.4l-4.2-4.2"/>
+                  <svg class="ai-model-icon" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 3l1.9 5.8L20 11l-6.1 2.2L12 19l-1.9-5.8L4 11l6.1-2.2z"/>
                   </svg>
                   <span class="ai-model-name" id="aiModelName">未选择</span>
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -3470,6 +3540,57 @@ flex-shrink:0;cursor:pointer;
   </div>
 </div>
 
+<!-- Tag 管理 Modal -->
+<div class="overlay" id="tagModal">
+  <div class="modal" style="max-width:760px">
+    <h3>Tag 标签管理</h3>
+    <div style="display:flex;gap:8px;margin:10px 0;align-items:center;flex-wrap:wrap">
+      <input type="text" id="tagNameInput" placeholder="标签名（如 v1.0.0）" style="flex:1;min-width:160px;padding:6px 10px;background:var(--bg2);border:1px solid var(--border);color:var(--text);border-radius:6px;font-size:13px">
+      <input type="text" id="tagMessageInput" placeholder="说明（可选，附注标签）" style="flex:2;min-width:220px;padding:6px 10px;background:var(--bg2);border:1px solid var(--border);color:var(--text);border-radius:6px;font-size:13px">
+      <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text2);cursor:pointer;white-space:nowrap">
+        <input type="checkbox" id="tagAnnotatedChk" checked> 附注
+      </label>
+      <button class="btn blue" id="tagCreateBtn" data-action="createTag" style="white-space:nowrap">创建</button>
+    </div>
+    <div class="gm-tag-table-wrap" style="max-height:400px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;margin-top:8px">
+      <table class="gm-tag-table" style="width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed">
+        <colgroup>
+          <col style="width:24%"><col style="width:18%"><col style="width:22%"><col style="width:24%"><col style="width:12%">
+        </colgroup>
+        <thead>
+          <tr style="background:var(--bg2)">
+            <th style="padding:8px;border-bottom:1px solid var(--border);text-align:left;font-weight:600;color:var(--text2)">标签名</th>
+            <th style="padding:8px;border-bottom:1px solid var(--border);text-align:left;font-weight:600;color:var(--text2)">提交</th>
+            <th style="padding:8px;border-bottom:1px solid var(--border);text-align:left;font-weight:600;color:var(--text2)">打标签人</th>
+            <th style="padding:8px;border-bottom:1px solid var(--border);text-align:left;font-weight:600;color:var(--text2)">日期</th>
+            <th style="padding:8px;border-bottom:1px solid var(--border);text-align:center;font-weight:600;color:var(--text2)">操作</th>
+          </tr>
+        </thead>
+        <tbody id="tagListBody">
+          <tr><td colspan="5" style="padding:24px;text-align:center;color:var(--text3)">点击「刷新」加载标签列表</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="modal-btns" style="margin-top:12px">
+      <button class="btn" data-action="refreshTags" id="tagRefreshBtn">刷新</button>
+      <button class="btn" data-action="closeModal" data-modal="tagModal">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- 冲突解决 Modal -->
+<div class="overlay" id="conflictModal">
+  <div class="modal" style="max-width:900px">
+    <h3>冲突解决</h3>
+    <div id="conflictEmptyHint" style="padding:30px;text-align:center;color:var(--text3)">当前没有冲突文件</div>
+    <div id="conflictFileList" style="max-height:540px;overflow-y:auto"></div>
+    <div class="modal-btns" style="margin-top:12px">
+      <button class="btn" data-action="refreshConflicts" id="conflictRefreshBtn">刷新</button>
+      <button class="btn" data-action="closeModal" data-modal="conflictModal">关闭</button>
+    </div>
+  </div>
+</div>
+
 <div class="overlay ai-media-overlay" id="aiMediaPreviewModal">
   <div class="ai-media-frame">
     <div class="ai-media-tools">
@@ -3478,10 +3599,14 @@ flex-shrink:0;cursor:pointer;
       <span class="ai-media-counter" id="aiMediaPreviewCounter">1/1</span>
       <button class="btnx" id="aiMediaPreviewCloseBtn" type="button">关闭</button>
     </div>
-    <div class="ai-media-nav prev" id="aiMediaPreviewPrev" title="上一张">‹</div>
+    <div class="ai-media-nav prev" id="aiMediaPreviewPrev" title="上一张" aria-label="上一张">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="22" height="22"><polyline points="15 18 9 12 15 6"/></svg>
+    </div>
     <img id="aiMediaPreviewImg" src="" alt="" />
     <div id="aiMediaPreviewText" class="ai-media-text" style="display:none;"><pre id="aiMediaPreviewPre"></pre></div>
-    <div class="ai-media-nav next" id="aiMediaPreviewNext" title="下一张">›</div>
+    <div class="ai-media-nav next" id="aiMediaPreviewNext" title="下一张" aria-label="下一张">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="22" height="22"><polyline points="9 18 15 12 9 6"/></svg>
+    </div>
   </div>
 </div>
 
@@ -3492,6 +3617,9 @@ flex-shrink:0;cursor:pointer;
   <button class="btn" id="undoTipBtn" data-action="undoLastRevertFromTip">撤销</button>
   <button class="btn x" data-action="hideUndoTip">关闭</button>
 </div>
+
+<!-- AI Token 用量弹窗 -->
+<div class="ai-token-popup" id="aiTokenPopup"></div>
 
 <div id="navDial" class="nav-dial">
   <div class="nav-dial-outer"></div>
@@ -3560,8 +3688,6 @@ flex-shrink:0;cursor:pointer;
       });
     } catch (e) {}
   })();
-  const DEBUG_MODE = false; // 设置为 true 启用详细日志
-
   // __gmDbg is redefined later in AI module with richer logic; keep window alias.
   try { window.__gmDbg = __gmDbg; } catch (e) {}
   
@@ -4611,6 +4737,24 @@ flex-shrink:0;cursor:pointer;
                     return;
                   }
                   setLog('✓ 执行完成', 'ok');
+                  // 将 API 返回的结果数据显示在卡片底部
+                  try {
+                    const rd = (r && r.data) ? r.data : (r && r.result) ? r.result : null;
+                    if (rd) {
+                      let str = '';
+                      try { str = JSON.stringify(rd, null, 2); } catch(_) { str = String(rd); }
+                      if (str) {
+                        // 清除可能残留的旧结果节点
+                        const old = logEl.querySelector('.ai-action-result');
+                        if (old) old.remove();
+                        const pre2 = document.createElement('pre');
+                        pre2.className = 'ai-action-result';
+                        pre2.style.cssText = 'margin:8px 0 0 0;max-height:220px;overflow:auto;font-size:11px;background:rgba(0,0,0,0.12);padding:6px 8px;border-radius:6px;white-space:pre-wrap;word-break:break-all;';
+                        pre2.textContent = str;
+                        logEl.appendChild(pre2);
+                      }
+                    }
+                  } catch(_){ }
                   try { await refresh(); } catch (eR0) {}
                 } catch (e2) {
                   setLog(String((e2 && e2.message) || e2 || '执行失败'), 'err');
@@ -5312,9 +5456,22 @@ flex-shrink:0;cursor:pointer;
         const content = String(m.content || '');
         if (!content) continue;
         const item = { role, content };
+        // 保留附件信息（供后端处理为多模态格式）
         if (role === 'user') {
           const ug = String(m.undo_gid || '').trim();
           if (ug) item.undo_gid = ug;
+          const atts = Array.isArray(m.attachments) ? m.attachments : (Array.isArray(m._attMeta) ? m._attMeta : []);
+          if (atts.length) {
+            item.attachments = atts.map(a => {
+              const o = { name: String(a && a.name || 'file'), mime: String(a && a.mime || '') };
+              if (a && a.size) o.size = Number(a.size);
+              if (a && a.url) o.url = String(a.url);
+              if (a && a.data_url) o.data_url = String(a.data_url);
+              if (a && a.text) o.text = String(a.text);
+              if (a && a.path) o.path = String(a.path).replace(/\\/g, '/');
+              return o;
+            });
+          }
         }
         if (role === 'system') sys.push(item);
         else rest.push(item);
@@ -6180,6 +6337,40 @@ flex-shrink:0;cursor:pointer;
           if (act === 'undoLastRevertFromTip') { e.preventDefault(); undoLastRevertFromTip(); return; }
           if (act === 'hideUndoTip') { e.preventDefault(); hideUndoTip(); return; }
 
+          // AI Token 用量
+          if (act === 'aiTokenUsage') { e.preventDefault(); try { __gmAiShowTokenUsage(); } catch (e2) {} return; }
+
+          // 对话内搜索
+          if (act === 'aiSearchClose') { e.preventDefault(); try { __gmAiCloseChatSearch(); } catch (e2) {} return; }
+          if (act === 'aiSearchNext') { e.preventDefault(); try { __gmAiChatSearchGoto(1); } catch (e2) {} return; }
+          if (act === 'aiSearchPrev') { e.preventDefault(); try { __gmAiChatSearchGoto(-1); } catch (e2) {} return; }
+
+          // Tag 管理
+          if (act === 'openTagModal') { e.preventDefault(); showModal('tagModal'); try { __gmLoadTags(); } catch (e2) {} return; }
+          if (act === 'refreshTags') { e.preventDefault(); try { __gmLoadTags(); } catch (e2) {} return; }
+          if (act === 'createTag') { e.preventDefault(); try { __gmCreateTag(); } catch (e2) {} return; }
+          if (act === 'deleteTag') { e.preventDefault(); try { __gmDeleteTag(String(el.getAttribute('data-name') || '')); } catch (e2) {} return; }
+
+          // 冲突解决
+          if (act === 'openConflictModal') { e.preventDefault(); showModal('conflictModal'); try { __gmLoadConflicts(); } catch (e2) {} return; }
+          if (act === 'refreshConflicts') { e.preventDefault(); try { __gmLoadConflicts(); } catch (e2) {} return; }
+          if (act === 'resolveConflict') {
+            e.preventDefault();
+            try {
+              __gmResolveConflict(
+                String(el.getAttribute('data-path') || ''),
+                String(el.getAttribute('data-resolution') || '')
+              );
+            } catch (e2) {}
+            return;
+          }
+          if (act === 'resolveConflictCustom') {
+            e.preventDefault();
+            try { __gmResolveConflictCustom(String(el.getAttribute('data-path') || '')); } catch (e2) {}
+            return;
+          }
+
+
           if (act === 'selAll') {
             e.preventDefault();
             const v = String(el.getAttribute('data-value') || '');
@@ -6389,9 +6580,30 @@ flex-shrink:0;cursor:pointer;
             else wrap.classList.remove('is-dragover');
           } catch (e0) {}
         };
+        // Ctrl+F 拦截已移到 if 块外独立注册
         aiChatInput.addEventListener('keydown', (e) => {
           try { aiChatInputKeydown(e); } catch (e2) {}
         });
+        // 在输入框上直接拦截 Ctrl+F（捕获阶段，确保最先执行）
+        aiChatInput.addEventListener('keydown', (e) => {
+          try {
+            const k = (e.key || '').toLowerCase();
+            if (e.ctrlKey && !e.shiftKey && !e.altKey && k === 'f') {
+              e.preventDefault();
+              e.stopImmediatePropagation();
+              try {
+                const bar = document.getElementById('aiChatSearchbar');
+                if (bar && bar.classList.contains('show')) {
+                  const inp = document.getElementById('aiChatSearchInput');
+                  if (inp) { inp.focus(); inp.select(); }
+                } else if (typeof __gmAiOpenChatSearch === 'function') {
+                  __gmAiOpenChatSearch();
+                }
+              } catch (_) {}
+              return;
+            }
+          } catch (_) {}
+        }, true);
         // drag & drop attachments
         aiChatInput.addEventListener('dragenter', (e) => {
           try { e.preventDefault(); } catch (e2) {}
@@ -6421,19 +6633,71 @@ flex-shrink:0;cursor:pointer;
             const items = e && e.clipboardData ? e.clipboardData.items : null;
             if (!items || !items.length) return;
             const files = [];
+            let hasFile = false;
             for (const it of items) {
               try {
                 if (it && it.kind === 'file') {
+                  hasFile = true;
                   const f = it.getAsFile ? it.getAsFile() : null;
                   if (f) files.push(f);
                 }
               } catch (e3) {}
             }
-            if (files.length) __gmAiAddFiles(files);
+            if (files.length) {
+              // 阻止浏览器默认粘贴（避免图片被插入到输入框内）
+              e.preventDefault();
+              __gmAiAddFiles(files);
+            }
           } catch (e2) {}
         });
       }
       try { __gmAiChipInit(aiChatInput); } catch (eChipInit) {}
+
+      // 独立注册 Ctrl+F 拦截器（不依赖 aiChatInput.__gmBound）
+      if (!window.__gmAiCtrlFBound) {
+        window.__gmAiCtrlFBound = true;
+        // 记录鼠标位置，用于判断是否在 AI 面板内
+        let __gmAiMouseX = 0, __gmAiMouseY = 0;
+        document.addEventListener('mousemove', (e) => {
+          __gmAiMouseX = e.clientX;
+          __gmAiMouseY = e.clientY;
+        }, true);
+        const __gmIsMouseInAi = () => {
+          try {
+            const aiWrap = document.querySelector('.ai-wrap');
+            if (!aiWrap) return false;
+            const r = aiWrap.getBoundingClientRect();
+            return __gmAiMouseX >= r.left && __gmAiMouseX <= r.right &&
+                   __gmAiMouseY >= r.top && __gmAiMouseY <= r.bottom;
+          } catch (_) { return false; }
+        };
+        const __gmAiCtrlFHandler = (e) => {
+          try {
+            const k = (e.key || '').toLowerCase();
+            if (e.ctrlKey && !e.shiftKey && !e.altKey && k === 'f') {
+              const aiChatView = document.getElementById('aiChatView');
+              if (!aiChatView || aiChatView.style.display === 'none') return;
+              // 焦点在 AI 区域 或 鼠标在 AI 区域 → 触发对话搜索
+              const ae = document.activeElement;
+              const focusInAi = ae && ae.closest && ae.closest('#aiChatView, #aiChatList, .ai-composer-wrap, .ai-chat-searchbar, .ai-sessions-scroll, .ai-wrap');
+              if (!focusInAi && !__gmIsMouseInAi()) return;
+              e.preventDefault();
+              e.stopImmediatePropagation();
+              try {
+                const bar = document.getElementById('aiChatSearchbar');
+                if (bar && bar.classList.contains('show')) {
+                  const inp = document.getElementById('aiChatSearchInput');
+                  if (inp) { inp.focus(); inp.select(); }
+                } else if (typeof __gmAiOpenChatSearch === 'function') {
+                  __gmAiOpenChatSearch();
+                }
+              } catch (_) {}
+              return;
+            }
+          } catch (_) {}
+        };
+        document.addEventListener('keydown', __gmAiCtrlFHandler, true);
+      }
 
       const aiAttachInput = document.getElementById('aiAttachInput');
       if (aiAttachInput && !aiAttachInput.__gmBound) {
@@ -7595,6 +7859,8 @@ flex-shrink:0;cursor:pointer;
     }
     
     if (e.ctrlKey && !e.shiftKey && !e.altKey && k === 'f') {
+      // AI 对话区的 Ctrl+F 已在捕获阶段由 __gmAiCtrlFHandler 处理（preventDefault + stopPropagation）
+      // 如果事件能到达这里，说明不在 AI 区域，走编辑器查找
       e.preventDefault();
       if (isFindBarOpen()) closeFindBar();
       else openFindBar();
@@ -9916,9 +10182,6 @@ flex-shrink:0;cursor:pointer;
           if (!lineEl || !host.contains(lineEl)) return;
 
           const __gmDelDbg = (tag, payload) => {
-            try {
-              /* debug log removed: __gmDelDbg */
-            } catch (e2) {}
             try { if (typeof __gmDbg === 'function') { __gmDbg(tag, payload); } } catch (e2) {}
           };
 
@@ -10712,9 +10975,6 @@ flex-shrink:0;cursor:pointer;
                   try { e.stopPropagation(); } catch (e2) {}
 
                   const __gmDelDbg = (tag, payload) => {
-                    try {
-                      /* debug log removed: __gmDelDbg */
-                    } catch (e3) {}
                     try { if (typeof __gmDbg === 'function') { __gmDbg(tag, payload); } } catch (e3) {}
                   };
 
@@ -14224,7 +14484,7 @@ flex-shrink:0;cursor:pointer;
             url: String(WS_URL || ''),
           };
         } catch (eLC0) {}
-        try { /* removed debug log: WebSocket closed */ } catch (eLC1) {}
+
         try {
           if (wsPingTimer) {
             clearInterval(wsPingTimer);
@@ -14915,7 +15175,6 @@ flex-shrink:0;cursor:pointer;
 
   // ── Hivo AI: Attachments & Drafts ──
   let __gmAiPendingAttachments = [];
-  let __gmAiDraftPersistTimer = 0;
   // In-memory per-session drafts (not persisted): { [sessionId]: { text: string, atts: array } }
   window.__gmAiSessionDrafts = window.__gmAiSessionDrafts && typeof window.__gmAiSessionDrafts === 'object' ? window.__gmAiSessionDrafts : {};
 
@@ -14960,12 +15219,7 @@ flex-shrink:0;cursor:pointer;
     } catch (e) {}
   }
 
-  // Draft persistence: intentionally disabled (no-op). Session drafts are kept in memory only via __gmAiSessionDrafts.
-  function __gmAiPersistDraftForActiveSession() { /* no-op: drafts not persisted */ }
-  function __gmAiRestoreDraftForActiveSession() { /* no-op: drafts not persisted */ }
-  function __gmAiSchedulePersistDraft() {
-    try { if (__gmAiDraftPersistTimer) { clearTimeout(__gmAiDraftPersistTimer); __gmAiDraftPersistTimer = 0; } } catch (e) {}
-  }
+
 
   
 
@@ -15239,14 +15493,14 @@ flex-shrink:0;cursor:pointer;
                 break;
               }
             }
-            if (queuedForMsg) { /* removed debug log: queued pre-run cancel */ }
+
           } catch(_) {}
         }
         if (rid) {
           POST('/api/hivo_agent_cancel', { run_id: rid }).catch(()=>{});
           try { if (__gmAiRunStatusCache && __gmAiRunStatusCache.delete) __gmAiRunStatusCache.delete(rid); } catch (eC1) {}
           try { __gmAiCancelledRunIds.add(rid); } catch (eMark) {}
-          try { /* removed debug log: requested cancel for run */ } catch(_) {}
+
           // Reflect cancelling state on last pending assistant
           try {
             const msgs = Array.isArray(__gmAiChatMessages) ? __gmAiChatMessages : [];
@@ -15256,7 +15510,7 @@ flex-shrink:0;cursor:pointer;
             }
           } catch(_){ }
         } else {
-          try { /* removed debug log: cancel requested but no run_id */ } catch(_) {}
+
         }
       } catch (eC0) {}
       // Do not finalize or clear activeRunId here; wait for backend terminal event
@@ -15481,7 +15735,7 @@ flex-shrink:0;cursor:pointer;
         }
       }
 
-      try { /* debug log removed: renderChat messages */ } catch (eR1) {}
+
       const prevCache = Array.isArray(list.__gmAiMsgCache) ? list.__gmAiMsgCache : [];
       const nextCache = [];
       const children = Array.from(list.children || []);
@@ -16138,10 +16392,485 @@ flex-shrink:0;cursor:pointer;
 
   function __gmAiEstimateTokensByChars(text) {
     try {
-      const n = String(text || '').length;
-      return Math.ceil(n / 4);
+      const s = String(text || '');
+      // CJK 字符：约 1 token/字；其它字符：约 4 字符/token
+      let cjk = 0, other = 0;
+      for (let i = 0; i < s.length; i++) {
+        const c = s.charCodeAt(i);
+        if ((c >= 0x4E00 && c <= 0x9FFF) ||   // CJK 统一汉字
+            (c >= 0x3400 && c <= 0x4DBF) ||   // CJK 扩展 A
+            (c >= 0x3040 && c <= 0x30FF) ||   // 日文平假名/片假名
+            (c >= 0xAC00 && c <= 0xD7AF)) {   // 韩文
+          cjk++;
+        } else {
+          other++;
+        }
+      }
+      return cjk + Math.ceil(other / 4);
     } catch (e) {
       return 0;
+    }
+  }
+
+  // ── Token 用量统计 ──────────────────────────────────────────
+  const AI_MAX_TOKENS = 32000;
+  // 缓存每条消息的 token 估算值
+  function __gmAiGetTokenDetails() {
+    try {
+      const msgs = (typeof __gmAiChatMessages !== 'undefined') ? __gmAiChatMessages : (window.__gmAiChatMessages || []);
+      const details = [];
+      for (const m of msgs) {
+        try {
+          const role = String(m.role || '').toLowerCase();
+          if (role !== 'assistant' && role !== 'user') continue;
+          // 文本部分
+          let text = '';
+          if (typeof m.content === 'string') text = m.content;
+          else if (Array.isArray(m.content)) {
+            for (const c of m.content) {
+              if (c && typeof c === 'object' && c.type === 'text' && typeof c.text === 'string') text += c.text;
+            }
+          }
+          if (!text && typeof m.text === 'string') text = m.text;
+          const tok = __gmAiEstimateTokensByChars(text);
+          details.push({ label: role === 'assistant' ? '助手' : '用户', tok, role });
+        } catch (e) {}
+      }
+      return details;
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function __gmAiShowTokenUsage() {
+    try {
+      const popup = document.getElementById('aiTokenPopup');
+      const btn = document.querySelector('.ai-token-btn');
+      if (!popup || !btn) return;
+      if (popup.classList.contains('show')) { popup.classList.remove('show'); return; }
+      const details = __gmAiGetTokenDetails();
+      let totalTokens = 0;
+      for (const d of details) totalTokens += (d.tok || 0);
+      const pct = Math.min(100, Math.round(totalTokens / AI_MAX_TOKENS * 100));
+      const barCls = pct >= 90 ? 'danger' : pct >= 70 ? 'warn' : '';
+      // 最近 10 条，逆序（最新在前），两两配对成一行
+      const recent = details.slice(-10).reverse();
+      const pairs = [];
+      for (let i = 0; i < recent.length; i += 2) {
+        pairs.push({ a: recent[i], b: recent[i + 1] || null });
+      }
+      const escHtml = (s) => String(s || '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+      const col = (d) => d ? `<div class="ai-token-col"><span class="ai-token-col-label">${escHtml(d.label)}</span><span>~${d.tok} tokens</span></div>` : '<div class="ai-token-col"></div>';
+      const detailHtml = pairs.map(p => `<div class="ai-token-row">${col(p.a)}${col(p.b)}</div>`).join('');
+      popup.innerHTML = `<div class="ai-token-title"><span>Token 用量</span><span style="font-size:10px;color:var(--text3);">${totalTokens} / ${AI_MAX_TOKENS}</span></div><div class="ai-token-bar-bg"><div class="ai-token-bar-fill ${barCls}" style="width:${pct}%"></div></div><div class="ai-token-list">${detailHtml}</div><div class="ai-token-footnote">以上为字符级估算值，仅供参考。</div>`;
+      const composer = document.querySelector('.ai-composer-wrap');
+      const cr = composer ? composer.getBoundingClientRect() : null;
+      const br = btn.getBoundingClientRect();
+      popup.classList.add('show');
+      if (cr && cr.width) {
+        popup.style.width = Math.round(cr.width) + 'px';
+        popup.style.boxSizing = 'border-box';
+      } else {
+        popup.style.width = '';
+      }
+      const popupW = popup.offsetWidth || (cr && cr.width) || 280;
+      let left = cr ? cr.left : (br.right - popupW);
+      left = Math.max(8, Math.min(window.innerWidth - popupW - 8, left));
+      const popupH = popup.offsetHeight || 160;
+      let top = br.top - popupH - 8;
+      top = Math.max(8, top);
+      popup.style.left = Math.round(left) + 'px';
+      popup.style.top = Math.round(top) + 'px';
+      // 点击外部关闭
+      const closeHandler = (ev) => {
+        try {
+          if (popup.contains(ev.target) || btn.contains(ev.target)) return;
+          popup.classList.remove('show');
+          document.removeEventListener('mousedown', closeHandler, true);
+        } catch (_) {}
+      };
+      setTimeout(() => { try { document.addEventListener('mousedown', closeHandler, true); } catch (_) {} }, 0);
+    } catch (e) {
+      console.error('[TokenUsage]', e);
+    }
+  }
+
+  // ── 对话内搜索 ──────────────────────────────────────────────
+  let __gmAiChatSearchHits = [];
+  let __gmAiChatSearchIdx = -1;
+
+  function __gmAiOpenChatSearch() {
+    try {
+      const bar = document.getElementById('aiChatSearchbar');
+      const input = document.getElementById('aiChatSearchInput');
+      if (!bar || !input) return;
+      bar.classList.add('show');
+      // 用选中文本预填
+      try {
+        const sel = window.getSelection ? window.getSelection().toString() : '';
+        if (sel && sel.length <= 120) input.value = sel;
+      } catch (_) {}
+      input.focus();
+      input.select();
+      __gmAiRunChatSearch();
+    } catch (e) {}
+  }
+
+  function __gmAiCloseChatSearch() {
+    try {
+      const bar = document.getElementById('aiChatSearchbar');
+      if (bar) bar.classList.remove('show');
+      __gmAiClearChatSearchHits();
+      __gmAiChatSearchHits = [];
+      __gmAiChatSearchIdx = -1;
+    } catch (e) {}
+  }
+
+  function __gmAiClearChatSearchHits() {
+    try {
+      const root = document.getElementById('aiChatInner') || document.getElementById('aiChatList');
+      if (!root) return;
+      // 移除高亮 span（把文本内容还原）
+      root.querySelectorAll('span.ai-chat-search-hit').forEach(el => {
+        try {
+          const parent = el.parentNode;
+          // 把 span 的文本内容移回父节点
+          while (el.firstChild) parent.insertBefore(el.firstChild, el);
+          parent.removeChild(el);
+          // 合并相邻文本节点
+          parent.normalize();
+        } catch (_) {}
+      });
+    } catch (e) {}
+  }
+
+  function __gmAiRunChatSearch() {
+    try {
+      __gmAiClearChatSearchHits();
+      __gmAiChatSearchHits = [];
+      __gmAiChatSearchIdx = -1;
+      const input = document.getElementById('aiChatSearchInput');
+      const meta = document.getElementById('aiChatSearchMeta');
+      const q = String(input ? input.value : '').trim();
+      if (!q) { if (meta) meta.textContent = '0/0'; return; }
+      const root = document.getElementById('aiChatInner') || document.getElementById('aiChatList');
+      if (!root) return;
+      // 使用 TreeWalker 收集所有文本节点
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+        acceptNode: (node) => {
+          const p = node.parentElement;
+          if (!p) return NodeFilter.FILTER_REJECT;
+          if (p.tagName === 'SCRIPT' || p.tagName === 'STYLE') return NodeFilter.FILTER_REJECT;
+          return NodeFilter.FILTER_ACCEPT;
+        }
+      });
+      const lower = q.toLowerCase();
+      const hits = [];
+      let node;
+      while ((node = walker.nextNode())) {
+        const text = node.nodeValue || '';
+        const lowerText = text.toLowerCase();
+        let from = 0;
+        let idx;
+        while ((idx = lowerText.indexOf(lower, from)) >= 0) {
+          hits.push({ node, start: idx, end: idx + q.length });
+          from = idx + q.length;
+        }
+      }
+      // 用 span 精确包裹每个命中范围
+      __gmAiChatSearchHits = [];
+      for (const h of hits) {
+        try {
+          if (!h.node || !h.node.parentNode) continue;
+          const range = document.createRange();
+          range.setStart(h.node, h.start);
+          range.setEnd(h.node, h.end);
+          const span = document.createElement('span');
+          span.className = 'ai-chat-search-hit';
+          range.surroundContents(span);
+          __gmAiChatSearchHits.push({ span, node: h.node });
+        } catch (_) {}
+      }
+      if (__gmAiChatSearchHits.length > 0) {
+        __gmAiChatSearchIdx = 0;
+        __gmAiChatSearchHits[0].span.classList.add('current');
+        __gmAiScrollToChatSearchHit(0);
+      }
+      if (meta) meta.textContent = `${__gmAiChatSearchIdx >= 0 ? (__gmAiChatSearchIdx + 1) : 0}/${__gmAiChatSearchHits.length}`;
+    } catch (e) {
+      console.error('[ChatSearch]', e);
+    }
+  }
+
+  function __gmAiScrollToChatSearchHit(idx) {
+    try {
+      if (idx < 0 || idx >= __gmAiChatSearchHits.length) return;
+      const h = __gmAiChatSearchHits[idx];
+      if (!h || !h.span) return;
+      h.span.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    } catch (e) {}
+  }
+
+  function __gmAiChatSearchGoto(dir) {
+    try {
+      if (!__gmAiChatSearchHits.length) return;
+      // 清除之前 current 标记
+      const root = document.getElementById('aiChatInner') || document.getElementById('aiChatList');
+      if (root) root.querySelectorAll('span.ai-chat-search-hit.current').forEach(el => el.classList.remove('current'));
+      __gmAiChatSearchIdx = (__gmAiChatSearchIdx + dir + __gmAiChatSearchHits.length) % __gmAiChatSearchHits.length;
+      if (__gmAiChatSearchHits[__gmAiChatSearchIdx]) {
+        __gmAiChatSearchHits[__gmAiChatSearchIdx].span.classList.add('current');
+      }
+      __gmAiScrollToChatSearchHit(__gmAiChatSearchIdx);
+      const meta = document.getElementById('aiChatSearchMeta');
+      if (meta) meta.textContent = `${__gmAiChatSearchIdx + 1}/${__gmAiChatSearchHits.length}`;
+    } catch (e) {}
+  }
+
+  // 初始化对话搜索事件绑定（只绑一次）
+  (function __gmInitAiChatSearch() {
+    try {
+      const input = document.getElementById('aiChatSearchInput');
+      if (!input || input.__gmBound) return;
+      input.__gmBound = true;
+      input.addEventListener('input', () => { try { __gmAiRunChatSearch(); } catch (e) {} });
+      input.addEventListener('keydown', (e) => {
+        try {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            __gmAiChatSearchGoto(e.shiftKey ? -1 : 1);
+          } else if (e.key === 'Escape') {
+            e.preventDefault();
+            __gmAiCloseChatSearch();
+          }
+        } catch (_) {}
+      });
+    } catch (e) {}
+  })();
+
+  // ── Tag 管理 ────────────────────────────────────────────────
+  async function __gmLoadTags() {
+    try {
+      const body = document.getElementById('tagListBody');
+      if (!body) return;
+      body.innerHTML = '<tr><td colspan="5" style="padding:24px;text-align:center;color:var(--text3)">加载中...</td></tr>';
+      const res = await fetch('/api/tags').then(r => r.json()).catch(() => ({ ok: false, error: '网络错误' }));
+      if (!res.ok) {
+        body.innerHTML = `<tr><td colspan="5" style="padding:24px;text-align:center;color:var(--danger)">${String(res.error || '加载失败')}</td></tr>`;
+        return;
+      }
+      const tags = Array.isArray(res.tags) ? res.tags : [];
+      if (!tags.length) {
+        body.innerHTML = '<tr><td colspan="5" style="padding:24px;text-align:center;color:var(--text3)">暂无标签</td></tr>';
+        return;
+      }
+      const esc = (s) => String(s || '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+      body.innerHTML = tags.map(t => `
+        <tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:8px;font-weight:600;color:var(--accent);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(t.name)}">${esc(t.name)}</td>
+          <td style="padding:8px;font-family:monospace;font-size:11px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(t.short || (t.commit || '').slice(0, 7))}">${esc(t.short || (t.commit || '').slice(0, 7))}</td>
+          <td style="padding:8px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(t.tagger || '-')}">${esc(t.tagger || '-')}</td>
+          <td style="padding:8px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(t.date || '-')}">${esc(t.date || '-')}</td>
+          <td style="padding:8px;text-align:center"><button class="btn red" style="padding:2px 10px;font-size:11px;line-height:1.4" data-action="deleteTag" data-name="${esc(t.name)}">删除</button></td>
+        </tr>`).join('');
+    } catch (e) {
+      console.error('[Tags]', e);
+    }
+  }
+
+  async function __gmCreateTag() {
+    try {
+      const nameInput = document.getElementById('tagNameInput');
+      const msgInput = document.getElementById('tagMessageInput');
+      const annoChk = document.getElementById('tagAnnotatedChk');
+      if (!nameInput) return;
+      const name = String(nameInput.value || '').trim();
+      if (!name) { toast('请输入标签名', 'warn'); return; }
+      const res = await fetch('/api/tag/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, message: String(msgInput ? msgInput.value : ''), annotated: annoChk ? annoChk.checked : true })
+      }).then(r => r.json()).catch(() => ({ ok: false, error: '网络错误' }));
+      if (!res.ok) { toast('✗ ' + (res.error || '创建失败'), 'err'); return; }
+      toast('✓ 标签创建成功', 'ok');
+      if (nameInput) nameInput.value = '';
+      if (msgInput) msgInput.value = '';
+      __gmLoadTags();
+      __gmRefreshGitStateUI();
+    } catch (e) {
+      toast('✗ 创建失败: ' + e.message, 'err');
+    }
+  }
+
+  async function __gmDeleteTag(name) {
+    try {
+      if (!name) return;
+      if (!confirm(`确定删除标签 "${name}" 吗？\n（仅删除本地 tag，远端不会自动删除）`)) return;
+      const res = await fetch('/api/tag/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, remote: false })
+      }).then(r => r.json()).catch(() => ({ ok: false, error: '网络错误' }));
+      if (!res.ok) { toast('✗ ' + (res.error || '删除失败'), 'err'); return; }
+      toast('✓ 标签已删除', 'ok');
+      __gmLoadTags();
+      __gmRefreshGitStateUI();
+    } catch (e) {
+      toast('✗ 删除失败: ' + e.message, 'err');
+    }
+  }
+
+  // ── 冲突解决 ────────────────────────────────────────────────
+  // 刷新顶部 Tag/冲突 按钮的可见性：无 tag 隐藏标签按钮，无冲突隐藏冲突按钮
+  async function __gmRefreshGitStateUI() {
+    try {
+      const tagBtn = document.getElementById('tagBtn');
+      const conflictBtn = document.getElementById('conflictBtn');
+      // 检查是否有 tag
+      if (tagBtn) {
+        try {
+          const r = await fetch('/api/tags').then(r => r.json()).catch(() => ({ ok: false, tags: [] }));
+          const hasTags = !!(r && r.ok && Array.isArray(r.tags) && r.tags.length > 0);
+          tagBtn.style.display = hasTags ? 'flex' : 'none';
+        } catch (_) { tagBtn.style.display = 'none'; }
+      }
+      // 检查是否有冲突
+      if (conflictBtn) {
+        try {
+          const r = await fetch('/api/conflicts').then(r => r.json()).catch(() => ({ ok: false, files: [] }));
+          const hasConflicts = !!(r && r.ok && Array.isArray(r.files) && r.files.length > 0);
+          conflictBtn.style.display = hasConflicts ? 'flex' : 'none';
+        } catch (_) { conflictBtn.style.display = 'none'; }
+      }
+    } catch (e) {}
+  }
+
+  async function __gmLoadConflicts() {
+    try {
+      const list = document.getElementById('conflictFileList');
+      const emptyHint = document.getElementById('conflictEmptyHint');
+      if (!list) return;
+      list.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text3)">加载中...</div>';
+      if (emptyHint) emptyHint.style.display = 'none';
+      const res = await fetch('/api/conflicts').then(r => r.json()).catch(() => ({ ok: false, error: '网络错误' }));
+      if (!res.ok) {
+        list.innerHTML = `<div style="padding:20px;text-align:center;color:var(--danger)">${String(res.error || '加载失败')}</div>`;
+        return;
+      }
+      const files = Array.isArray(res.files) ? res.files : [];
+      if (!files.length) {
+        list.innerHTML = '';
+        if (emptyHint) emptyHint.style.display = 'block';
+        return;
+      }
+      const esc = (s) => String(s || '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+      list.innerHTML = files.map(f => {
+        const hunks = Array.isArray(f.hunks) ? f.hunks : [];
+        const hunkHtml = hunks.map((h, i) => `
+          <div style="margin:8px 0;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--bg2)">
+            <div style="font-size:11px;color:var(--text3);margin-bottom:6px">冲突块 ${i + 1}（行 ${h.start}-${h.end}）</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px">
+              <div>
+                <div style="color:var(--accent);margin-bottom:4px">Ours（当前分支）</div>
+                <pre style="margin:0;max-height:120px;overflow:auto;background:var(--bg);padding:6px;border-radius:4px;border:1px solid var(--border);white-space:pre-wrap;word-break:break-word">${esc(h.ours || '(空)')}</pre>
+              </div>
+              <div>
+                <div style="color:var(--accent2);margin-bottom:4px">Theirs（传入分支）</div>
+                <pre style="margin:0;max-height:120px;overflow:auto;background:var(--bg);padding:6px;border-radius:4px;border:1px solid var(--border);white-space:pre-wrap;word-break:break-word">${esc(h.theirs || '(空)')}</pre>
+              </div>
+            </div>
+          </div>`).join('');
+        return `
+          <div style="margin-bottom:12px;padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg)">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+              <div style="font-weight:600;font-size:13px;color:var(--text);word-break:break-all">${esc(f.path)}</div>
+              <div style="display:flex;gap:6px;flex-shrink:0">
+                <button class="btn" style="padding:3px 8px;font-size:11px" data-action="resolveConflict" data-path="${esc(f.path)}" data-resolution="ours">采用当前</button>
+                <button class="btn" style="padding:3px 8px;font-size:11px" data-action="resolveConflict" data-path="${esc(f.path)}" data-resolution="theirs">采用传入</button>
+                <button class="btn" style="padding:3px 8px;font-size:11px" data-action="resolveConflict" data-path="${esc(f.path)}" data-resolution="both">保留两者</button>
+                <button class="btn blue" style="padding:3px 8px;font-size:11px" data-action="resolveConflictCustom" data-path="${esc(f.path)}">手动编辑</button>
+              </div>
+            </div>
+            ${hunkHtml || '<div style="color:var(--text3);font-size:12px">该文件无冲突标记，可直接标记为已解决</div>'}
+          </div>`;
+      }).join('');
+    } catch (e) {
+      console.error('[Conflicts]', e);
+    }
+  }
+
+  async function __gmResolveConflict(path, resolution) {
+    try {
+      if (!path) return;
+      const res = await fetch('/api/conflict/resolve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path, resolution })
+      }).then(r => r.json()).catch(() => ({ ok: false, error: '网络错误' }));
+      if (!res.ok) { toast('✗ ' + (res.error || '解决失败'), 'err'); return; }
+      toast('✓ 冲突已解决: ' + path, 'ok');
+      __gmLoadConflicts();
+      __gmRefreshGitStateUI();
+    } catch (e) {
+      toast('✗ 解决失败: ' + e.message, 'err');
+    }
+  }
+
+  async function __gmResolveConflictCustom(path) {
+    try {
+      if (!path) return;
+      // 先读取当前文件内容
+      const r = await fetch('/api/file_content?path=' + encodeURIComponent(path)).then(r => r.json()).catch(() => ({ ok: false }));
+      let initial = '';
+      if (r && r.ok && typeof r.content === 'string') initial = r.content;
+      // 弹出自定义编辑覆盖层
+      let overlay = document.getElementById('conflictCustomOverlay');
+      if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.id = 'conflictCustomOverlay';
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:3000;background:rgba(0,0,0,0.7);display:none;align-items:center;justify-content:center;padding:20px';
+        overlay.innerHTML = `
+          <div style="background:var(--bg);border:1px solid var(--border);border-radius:12px;width:min(900px,95vw);max-height:90vh;display:flex;flex-direction:column">
+            <div style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+              <span id="conflictCustomTitle" style="font-weight:600;font-size:14px;color:var(--text)"></span>
+              <button id="conflictCustomClose" class="btn" style="padding:4px 10px">取消</button>
+            </div>
+            <textarea id="conflictCustomTextarea" style="flex:1;min-height:300px;width:100%;border:none;background:var(--bg2);color:var(--text);padding:12px 16px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.5;resize:none;outline:none"></textarea>
+            <div style="padding:10px 16px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px">
+              <button id="conflictCustomSave" class="btn blue" style="padding:6px 16px">保存并标记已解决</button>
+            </div>
+          </div>`;
+        document.body.appendChild(overlay);
+      }
+      const titleEl = overlay.querySelector('#conflictCustomTitle');
+      const ta = overlay.querySelector('#conflictCustomTextarea');
+      const closeBtn = overlay.querySelector('#conflictCustomClose');
+      const saveBtn = overlay.querySelector('#conflictCustomSave');
+      if (titleEl) titleEl.textContent = '编辑文件内容（解决冲突）: ' + path;
+      if (ta) ta.value = initial;
+      overlay.style.display = 'flex';
+      let closed = false;
+      const close = () => { closed = true; overlay.style.display = 'none'; };
+      closeBtn.onclick = close;
+      saveBtn.onclick = async () => {
+        try {
+          const newContent = ta ? ta.value : '';
+          const res = await fetch('/api/conflict/resolve', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path, resolution: 'custom', custom_content: newContent })
+          }).then(r => r.json()).catch(() => ({ ok: false, error: '网络错误' }));
+          if (!res.ok) { toast('✗ ' + (res.error || '解决失败'), 'err'); return; }
+          toast('✓ 已保存自定义内容并标记为已解决', 'ok');
+          close();
+          __gmLoadConflicts();
+          __gmRefreshGitStateUI();
+        } catch (e2) {
+          toast('✗ 保存失败: ' + e2.message, 'err');
+        }
+      };
+    } catch (e) {
+      toast('✗ 解决失败: ' + e.message, 'err');
     }
   }
 
@@ -16381,72 +17110,7 @@ flex-shrink:0;cursor:pointer;
     }
   }
 
-  // [UNUSED] Kept for reference — current agent path uses server-side _ai_trim_messages_to_budget.
-  function __gmAiBuildContextManagedMessages(sysText, baseMessages) {
-    try {
-      const cleaned = (baseMessages || []).filter(m => !(m && m.pending));
 
-      const MAX_INPUT_TOKENS = 12000;
-      const RESERVED_FOR_REPLY = 2500;
-      const BUDGET = Math.max(2000, MAX_INPUT_TOKENS - RESERVED_FOR_REPLY);
-
-      const ctxSummary = __gmAiGetCtxSummary();
-      const summaryBlock = ctxSummary
-        ? (`长期记忆摘要（来自更早对话，已压缩；必要时可要求用户确认）：\n${ctxSummary}`)
-        : '';
-
-      const sysWithSummary = summaryBlock
-        ? (String(sysText || '') + `\n\n${summaryBlock}`)
-        : String(sysText || '');
-
-      const estSys = __gmAiEstimateTokensByChars(sysWithSummary);
-
-      const RECENT_TURNS = 10;
-      const recent = cleaned.slice(Math.max(0, cleaned.length - RECENT_TURNS));
-      const older = cleaned.slice(0, Math.max(0, cleaned.length - RECENT_TURNS));
-
-      let keep = recent.slice();
-      let total = estSys;
-      for (const m of keep) total += __gmAiEstimateTokensByChars(String(m && m.content || '')) + 8;
-
-      if (total <= BUDGET) {
-        return sysWithSummary
-          ? ([{ role: 'system', content: sysWithSummary }].concat(keep))
-          : keep;
-      }
-
-      // Budget exceeded: compress older into summary (heuristic extract), and if still too big, trim older recent.
-      if (older.length) {
-        const extra = __gmAiSummarizeOldMessages(older);
-        if (extra) {
-          const merged = ctxSummary ? __gmAiMergeStructuredSummaries(ctxSummary, extra) : String(extra || '');
-          const bounded = merged.length > 6000 ? merged.slice(0, 6000) : merged;
-          __gmAiSetCtxSummary(bounded);
-        }
-      }
-
-      const ctxSummary2 = __gmAiGetCtxSummary();
-      const sysWithSummary2 = ctxSummary2
-        ? (String(sysText || '') + `\n\n长期记忆摘要（来自更早对话，已压缩；必要时可要求用户确认）：\n${ctxSummary2}`)
-        : String(sysText || '');
-
-      let total2 = __gmAiEstimateTokensByChars(sysWithSummary2);
-      for (const m of keep) total2 += __gmAiEstimateTokensByChars(String(m && m.content || '')) + 8;
-
-      while (keep.length > 2 && total2 > BUDGET) {
-        const drop = keep.shift();
-        total2 -= (__gmAiEstimateTokensByChars(String(drop && drop.content || '')) + 8);
-      }
-
-      return sysWithSummary2
-        ? ([{ role: 'system', content: sysWithSummary2 }].concat(keep))
-        : keep;
-    } catch (e) {
-      const cleaned = (baseMessages || []).filter(m => !(m && m.pending));
-      if (sysText) return ([{ role: 'system', content: sysText }].concat(cleaned));
-      return cleaned;
-    }
-  }
 
   function __gmAiEnsureMentionMenu() {
     if (__gmAiMentionMenuEl) return __gmAiMentionMenuEl;
@@ -18628,7 +19292,7 @@ flex-shrink:0;cursor:pointer;
   async function createAiSession() {
     const pid = String(__gmAiSelectedProfileId || __gmAiConfig.active_profile_id || '');
     if (!pid) return;
-    try { __gmAiPersistDraftForActiveSession(); } catch (e0d) {}
+
     const now = Date.now();
     const sid = __gmAiEphemeralSessionPrefix + String(now) + '_' + String(Math.floor(Math.random() * 1000000));
     try {
@@ -18649,7 +19313,7 @@ flex-shrink:0;cursor:pointer;
       const ta = document.getElementById('aiChatInput');
       if (ta) ta.value = '';
     } catch (e0Ta) {}
-    try { __gmAiPersistDraftForActiveSession(); } catch (e0d2) {}
+
     toast('✓ 已新建会话', 'ok');
   }
 
@@ -18669,7 +19333,7 @@ flex-shrink:0;cursor:pointer;
         const ta = document.getElementById('aiChatInput');
         if (ta) ta.value = '';
       } catch (e0Ta) {}
-      try { __gmAiRestoreDraftForActiveSession(); } catch (eDR) {}
+
       return true;
     }
     __gmToastApiError('新建会话失败', res, (res && (res.msg || res.error)) || '新建会话失败');
@@ -18758,7 +19422,7 @@ flex-shrink:0;cursor:pointer;
       try { __gmAiRenderContinueFromMessages(); } catch (eCR) {}
     }
     if (restoreDraft) {
-      try { __gmAiRestoreDraftForActiveSession(); } catch (eDR) {}
+
     }
     try { await __gmAiRefreshSendCounter(); } catch (eC1) {}
   }
@@ -18888,7 +19552,7 @@ flex-shrink:0;cursor:pointer;
       if (ta.__gmMentionBound) return;
       ta.__gmMentionBound = true;
       ta.addEventListener('input', () => {
-        __gmAiSchedulePersistDraft();
+
         __gmAiUpdateMentionMenu();
       });
       ta.addEventListener('click', () => {
@@ -20017,6 +20681,9 @@ flex-shrink:0;cursor:pointer;
     document.getElementById('stagedBtn').style.display  = 'none';
     document.getElementById('refreshBtn').style.display = 'flex';
     document.getElementById('changeBtn').style.display  = 'flex';
+    try { document.getElementById('tagBtn').style.display = 'none'; } catch (e) {}
+    try { document.getElementById('conflictBtn').style.display = 'none'; } catch (e) {}
+    try { __gmRefreshGitStateUI(); } catch (e) {}
     initBranchDropdown();
 
     // 启动WebSocket连接
@@ -28396,32 +29063,27 @@ flex-shrink:0;cursor:pointer;
       const next = document.getElementById('aiMediaPreviewNext');
       if (!tools || !prev || !next) return;
 
-      // Pick the currently visible content element (image or text)
-      const target = (img.style.display !== 'none') ? img : textBox;
-      const targetRect = target.getBoundingClientRect();
+      // 按钮和工具栏固定在 frame 边缘，不随图片缩放变化
+      // 用 frame 的尺寸计算位置，而不是图片的视觉尺寸
       const frameRect = frame.getBoundingClientRect();
-      const iw = Math.max(0, Math.floor(targetRect.width));
-      const ih = Math.max(0, Math.floor(targetRect.height));
-      const il = Math.max(0, Math.floor(targetRect.left - frameRect.left));
-      const it = Math.max(0, Math.floor(targetRect.top - frameRect.top));
-      if (iw <= 0 || ih <= 0) return;
+      const fw = Math.max(0, Math.floor(frameRect.width));
+      const fh = Math.max(0, Math.floor(frameRect.height));
+      if (fw <= 0 || fh <= 0) return;
 
-      const pad = 10;
+      const pad = 12;
       const navSize = 52;
-      const navLeft = Math.max(pad, il + pad);
-      const navRight = Math.max(pad, il + iw - navSize - pad);
-      const navTop = Math.max(pad, it + Math.floor(ih / 2) - Math.floor(navSize / 2));
-      prev.style.left = navLeft + 'px';
-      next.style.left = navRight + 'px';
-      prev.style.top = navTop + 'px';
-      next.style.top = navTop + 'px';
-      prev.style.right = 'auto';
-      next.style.right = 'auto';
+      // 左右按钮：固定在 frame 左右边缘，垂直居中
+      prev.style.left = pad + 'px';
+      prev.style.top = Math.max(pad, Math.floor(fh / 2 - navSize / 2)) + 'px';
+      next.style.right = pad + 'px';
+      next.style.left = 'auto';
+      next.style.top = Math.max(pad, Math.floor(fh / 2 - navSize / 2)) + 'px';
       prev.style.transform = 'none';
       next.style.transform = 'none';
 
-      tools.style.top = Math.max(pad, it + pad) + 'px';
-      tools.style.left = (il + Math.floor(iw / 2)) + 'px';
+      // 工具栏：固定在 frame 顶部居中
+      tools.style.top = pad + 'px';
+      tools.style.left = Math.floor(fw / 2) + 'px';
       tools.style.transform = 'translateX(-50%)';
     } catch (e) {}
   }
@@ -28745,6 +29407,37 @@ flex-shrink:0;cursor:pointer;
       if (modal && !modal.__gmAiPreviewResizeBound) {
         modal.__gmAiPreviewResizeBound = true;
         window.addEventListener('resize', () => { try { if (window.__gmAiMediaPreviewOpen) __gmAiMediaPreviewRefreshLayout(); } catch (e2) {} }, true);
+      }
+
+      // 鼠标滚轮缩放（仅对图片生效）
+      if (modal && !modal.__gmAiPreviewWheelBound) {
+        modal.__gmAiPreviewWheelBound = true;
+        modal.addEventListener('wheel', (e) => {
+          try {
+            if (!window.__gmAiMediaPreviewOpen) return;
+            const im = document.getElementById('aiMediaPreviewImg');
+            if (!im || im.style.display === 'none') return;
+            e.preventDefault();
+            const cur = parseFloat(im.dataset.zoom || '1') || 1;
+            const next = Math.max(0.5, Math.min(5, cur * (e.deltaY > 0 ? 0.9 : 1.1)));
+            im.dataset.zoom = String(next);
+            im.style.transformOrigin = 'center center';
+            im.style.transition = 'transform 0.15s ease';
+            im.style.transform = `scale(${next})`;
+            // 缩放期间保持控件可见
+            show();
+            hideLater();
+            try { __gmAiMediaPreviewRefreshLayout(); } catch (_) {}
+          } catch (_) {}
+        }, { passive: false });
+      }
+
+      // 切换图片/重置时清空缩放
+      if (img && !img.__gmAiPreviewZoomResetBound) {
+        img.__gmAiPreviewZoomResetBound = true;
+        img.addEventListener('load', () => {
+          try { img.style.transform = ''; img.dataset.zoom = ''; } catch (_) {}
+        }, true);
       }
     } catch (e) {}
   })();
@@ -29460,36 +30153,8 @@ flex-shrink:0;cursor:pointer;
   __gmBindStaticUiDelegation();
   __gmInitAutoSaveToggle();
 
-  try { if (!window.__gmDbg) window.__gmDbg = console.log.bind(console); } catch(_) {}
 
   try { if (typeof window.__gmAiDebug === 'undefined') window.__gmAiDebug = false; } catch(_) {}
-
-  try {
-    if (!window.__gmGlobalClickDbgBoundV2) {
-      window.__gmGlobalClickDbgBoundV2 = true;
-      const logFn = (...args)=>{ /* debug log removed */ };
-      window.addEventListener('click', (e)=>{
-        const el = e.target && e.target.closest ? e.target.closest('[data-action]') : null;
-        const act = el ? String(el.getAttribute('data-action')||'') : '';
-        logFn('win click (capture=false)', { tag: (e.target && e.target.tagName)||'', hasEl: !!el, act });
-      }, false);
-      window.addEventListener('click', (e)=>{
-        const el = e.target && e.target.closest ? e.target.closest('[data-action]') : null;
-        const act = el ? String(el.getAttribute('data-action')||'') : '';
-        logFn('win click (capture=true)', { tag: (e.target && e.target.tagName)||'', hasEl: !!el, act });
-      }, true);
-      document.addEventListener('click', (e)=>{
-        const el = e.target && e.target.closest ? e.target.closest('[data-action]') : null;
-        const act = el ? String(el.getAttribute('data-action')||'') : '';
-        logFn('doc click (capture=true)', { tag: (e.target && e.target.tagName)||'', hasEl: !!el, act });
-      }, true);
-      document.addEventListener('click', (e)=>{
-        const el = e.target && e.target.closest ? e.target.closest('[data-action]') : null;
-        const act = el ? String(el.getAttribute('data-action')||'') : '';
-        logFn('doc click (capture=false)', { tag: (e.target && e.target.tagName)||'', hasEl: !!el, act });
-      }, false);
-    }
-  } catch (_) {}
 
   // ── Git Sync Status Indicator ───────────────────────────────────────────────
   let __gmSyncStatusInFlight = false;

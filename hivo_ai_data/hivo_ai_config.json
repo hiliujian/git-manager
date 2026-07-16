@@ -7,7 +7,7 @@
     "window": 4,
     "max_same": 3,
     "signature": "tool_types",
-    "escalation_limit": 2
+    "escalation_limit": 3
   },
   "status_messages": {
     "sending": "发送中...",
@@ -54,11 +54,11 @@
   },
   "profiles": [
     {
-      "id": "19f638efb7599712939396f3",
+      "id": "19f650caee0f13a52862bac98",
       "name": "Profile",
-      "base_url": "",
-      "api_key": "",
-      "model": "",
+      "base_url": "https://opencode.ai/zen/v1",
+      "api_key": "sk-EmJPVeDfCoHJxwtbSuwoX1jPxsQJbhZOoUD7oVc99zTK1oMZmUOLgLyOa2aA7QsS",
+      "model": "deepseek-v4-flash-free",
       "supports_vision": false
     },
     {
@@ -118,7 +118,7 @@
       "supports_vision": false
     }
   ],
-  "active_profile_id": "19d9661ec9ff35423d948347",
+  "active_profile_id": "19d955e0736f865d0766d6ff",
   "web_search": {
     "active_profile_id": "default",
     "profiles": [

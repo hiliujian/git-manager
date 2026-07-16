@@ -3031,6 +3031,70 @@ def discard_all_staged():
         return False, err or "丢弃全部暂存失败"
     return True, ""
 
+
+def _extract_conflict_hunks(content):
+    """从文件内容中提取所有 <<<<<<< / ======= / >>>>>>> 冲突块。
+    返回: [{start: 行号(1-based), end: 行号, ours: str, theirs: str, base_section: str}, ...]
+    """
+    hunks = []
+    if not content:
+        return hunks
+    lines = content.split("\n")
+    i = 0
+    n = len(lines)
+    while i < n:
+        line = lines[i]
+        if line.startswith("<<<<<<<"):
+            start = i + 1  # 1-based
+            ours_lines = []
+            theirs_lines = []
+            base_lines = []
+            sep_seen = False
+            end_seen = False
+            marker_end = None
+            j = i + 1
+            while j < n:
+                lj = lines[j]
+                if lj.startswith("======="):
+                    sep_seen = True
+                    j += 1
+                    continue
+                if lj.startswith(">>>>>>>"):
+                    end_seen = True
+                    marker_end = j
+                    break
+                # 处理 ||||||| ours base（三方合并时可能存在）
+                if lj.startswith("|||||||"):
+                    # 旧版本块开始，跳到下一个 =======
+                    j += 1
+                    base_section = []
+                    while j < n and not lines[j].startswith("======="):
+                        base_section.append(lines[j])
+                        j += 1
+                    base_lines = base_section
+                    if j < n and lines[j].startswith("======="):
+                        sep_seen = True
+                        j += 1
+                    continue
+                if not sep_seen:
+                    ours_lines.append(lj)
+                else:
+                    theirs_lines.append(lj)
+                j += 1
+            if end_seen and marker_end is not None:
+                hunks.append({
+                    "start": start,
+                    "end": marker_end + 1,  # 1-based, 含 >>>>>>> 行
+                    "ours": "\n".join(ours_lines),
+                    "theirs": "\n".join(theirs_lines),
+                    "base": "\n".join(base_lines)
+                })
+            i = marker_end + 1 if marker_end is not None else i + 1
+        else:
+            i += 1
+    return hunks
+
+
 def get_unmerged_files():
     """Return a list of unmerged (conflicted) files in the working tree.
 
@@ -7103,7 +7167,20 @@ def _ai_estimate_messages_tokens(messages: list):
                 continue
             total += 4
             total += _ai_estimate_text_tokens(m.get("role"))
-            total += _ai_estimate_text_tokens(m.get("content"))
+            c = m.get("content")
+            if isinstance(c, str):
+                total += _ai_estimate_text_tokens(c)
+            elif isinstance(c, list):
+                # OpenAI 多模态格式：数组 content
+                for p in c:
+                    if not isinstance(p, dict):
+                        continue
+                    pt = str(p.get("type") or "")
+                    if pt == "text":
+                        total += _ai_estimate_text_tokens(p.get("text"))
+                    elif pt in ("image_url", "image", "input_image"):
+                        # 图片 token 估算（base64 不计入文本 token，固定开销）
+                        total += 85  # GPT-4o 每张图片约 85-170 tokens
         total += 8
         return int(total)
     except Exception:
@@ -7164,11 +7241,29 @@ def _ai_trim_messages_to_budget(messages: list, max_total_tokens: int, reserve_o
             c = m.get("content")
             if r not in ("system", "user", "assistant"):
                 continue
-            if not isinstance(c, str) or not c.strip():
+            # 支持 content 为字符串或数组（OpenAI 多模态格式）
+            if isinstance(c, str):
+                if not c.strip():
+                    continue
+            elif isinstance(c, list):
+                # 数组格式：至少要有一个有效 part
+                has_valid = False
+                for p in c:
+                    if isinstance(p, dict):
+                        pt = str(p.get("type") or "")
+                        if pt == "text" and str(p.get("text") or "").strip():
+                            has_valid = True
+                            break
+                        elif pt in ("image_url", "image", "input_image"):
+                            has_valid = True
+                            break
+                if not has_valid:
+                    continue
+            else:
                 continue
             if is_dup(last, m):
                 continue
-            if r == "assistant" and c.strip() in ("对话内容过长，已超过限制",):
+            if r == "assistant" and isinstance(c, str) and c.strip() in ("对话内容过长，已超过限制",):
                 continue
             cleaned.append(m)
             last = m
@@ -7176,7 +7271,11 @@ def _ai_trim_messages_to_budget(messages: list, max_total_tokens: int, reserve_o
         sys_msgs = [m for m in cleaned if str(m.get("role") or "") == "system"]
         non_sys = [m for m in cleaned if str(m.get("role") or "") != "system"]
 
-        sys_text = "\n\n".join([str(m.get("content") or "").strip() for m in sys_msgs if isinstance(m.get("content"), str)])
+        sys_text = "\n\n".join([
+            str(m.get("content") or "").strip()
+            for m in sys_msgs
+            if isinstance(m.get("content"), str)
+        ])
         base = []
         if sys_text:
             base.append({"role": "system", "content": sys_text})
@@ -7218,7 +7317,18 @@ def _ai_trim_messages_to_budget(messages: list, max_total_tokens: int, reserve_o
             keep_n = max(0, min(6, older_count))
             for m in non_sys[:older_count]:
                 role = str(m.get("role") or "")
-                txt = str(m.get("content") or "")
+                c = m.get("content")
+                # 提取文本用于摘要（支持数组格式 content）
+                if isinstance(c, str):
+                    txt = c
+                elif isinstance(c, list):
+                    txt_parts = []
+                    for p in c:
+                        if isinstance(p, dict) and str(p.get("type") or "") == "text":
+                            txt_parts.append(str(p.get("text") or ""))
+                    txt = " ".join(txt_parts)
+                else:
+                    txt = ""
                 if role == "user":
                     parts.append("U:" + txt[:160])
                 elif role == "assistant":
@@ -7743,8 +7853,7 @@ def _ai_build_system_context_text(cfg=None):
         "- `file_content` - 读取完整文件内容\n"
         "- `read_file_range` - 读取文件片段（指定行号）\n"
         "- `delete_file` - 删除文件\n"
-        "- `rename_file` - 重命名或移动文件\n"
-        "- `raw_file` - 前端预览/下载用（工具链不调用）\n\n"
+        "- `rename_file` - 重命名或移动文件\n\n"
         "### 文件查找\n"
         "- `find_files` - 按文件名搜索（支持模糊匹配）\n"
         "- `search_code` - 按内容搜索（支持正则）\n"
@@ -7819,8 +7928,6 @@ def _ai_build_system_context_text(cfg=None):
         "- `change` - 单栏变更视图（推荐快速查看修改）  \n"
         "- `split` - 双栏对比视图（左旧右新）  \n"
         "- `unified` - 统一 diff 视图（传统 git diff）\n\n"
-        "**raw_file 用途**  \n"
-        "仅供前端图片/媒体预览与文件下载，不用于 AI 工具链。\n"
     )
 
     if extra:
@@ -9128,7 +9235,7 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
     rep_window = int(repeat_conf.get("window") or 3)
     rep_max_same = int(repeat_conf.get("max_same") or 2)
     rep_sig_mode = str(repeat_conf.get("signature") or "tool_types")
-    rep_escalation_limit = int(repeat_conf.get("escalation_limit") or 2)
+    rep_escalation_limit = int(repeat_conf.get("escalation_limit") or 3)
 
     undo_gid_eff = str(undo_gid or "").strip()
     if not undo_gid_eff:
@@ -9212,40 +9319,6 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
     if keep_n > 0 and len(hist) > keep_n:
         hist = hist[-keep_n:]
 
-
-    def _attempt_image_text(full_path: str, mime: str, max_chars: int = 4000) -> str:
-        """Best-effort OCR/文本提取：优先使用 Pillow + pytesseract；若不可用，返回简要占位描述。
-        不抛异常，始终返回字符串。"""
-        try:
-            try:
-                lim0 = cfg.get("limits") if isinstance(cfg, dict) and isinstance(cfg.get("limits"), dict) else {}
-                mc = int(lim0.get("ocr_text_max_chars") or 4000)
-                max_chars = max(200, min(20000, mc))
-            except Exception:
-                max_chars = 4000
-            txt = ""
-            try:
-                from PIL import Image  # type: ignore
-                import pytesseract  # type: ignore
-                with Image.open(full_path) as im:
-                    im = im.convert("RGB")
-                    txt = str(pytesseract.image_to_string(im) or "").strip()
-            except Exception:
-                txt = ""
-            if not txt:
-                # 优雅降级，占位信息
-                try:
-                    sz = int(os.path.getsize(full_path) or 0)
-                except Exception:
-                    sz = 0
-                base = os.path.basename(full_path)
-                return f"[图片占位] {base} ({mime or 'image/unknown'}, {sz} bytes)。未启用/未安装 OCR 依赖，无法自动提取文字。"
-            if len(txt) > max_chars:
-                txt = txt[:max_chars] + "\n...（OCR 文本已截断）..."
-            return txt
-        except Exception:
-            return ""
-
     def _format_text_attachments(att0: list):
         try:
             blocks = []
@@ -9299,18 +9372,35 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
 
     if user_text:
         if atts:
-            # 统一采用现有"查看文件"工具链：不再注入 image_url，多模态改为通过工具按需读取。
-            # 1) 系统提示：声明附件并说明查看方式（含可用链接）
-            try:
-                lines = []
-                for a in atts:
-                    if not isinstance(a, dict):
-                        continue
-                    nm = str(a.get("name") or "file").strip() or "file"
-                    mime = str(a.get("mime") or "").strip()
-                    pth = str(a.get("path") or "").strip()
-                    # 若前端还未提供 path，但存在 URL（/api/ai_attachment?path=...），尽量解析出 path 供模型使用
-                    if (not pth):
+            # 方案 B：OpenAI 多模态格式
+            # 图片用 image_url 注入 content 数组；文本文件内容拼入 text 部分
+            # 构造 OpenAI 多模态 content 数组
+            content_parts = []
+            # 文本部分：用户文本 + 文本附件内容
+            txt_files = _format_text_attachments(atts)
+            joined_text = []
+            if str(user_text):
+                joined_text.append(str(user_text))
+            if txt_files:
+                joined_text.append(txt_files)
+            text_content = "\n\n".join([x for x in joined_text if x]).strip()
+            if text_content:
+                content_parts.append({"type": "text", "text": text_content})
+
+            # 图片部分：用 image_url 格式注入 base64 data_url
+            for a in (atts or []):
+                if not isinstance(a, dict):
+                    continue
+                mime = str(a.get("mime") or "")
+                if not mime.startswith("image/"):
+                    continue
+                # 优先使用 data_url（base64），其次从 path 读取文件转 base64
+                data_url = str(a.get("data_url") or "").strip()
+                # 从 url 解析 path 作为 fallback
+                if not data_url:
+                    pth = str(a.get("path") or "").replace("\\", "/").strip()
+                    # 若前端未提供 path，从 url 解析
+                    if not pth:
                         try:
                             u = str(a.get("url") or "").strip()
                             if u and ("/api/ai_attachment" in u) and ("path=" in u):
@@ -9323,60 +9413,33 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
                         except Exception:
                             pth = pth
                     if pth:
-                        lines.append(f"- {nm} ({mime or 'unknown'}): path={pth}")
-                    else:
-                        lines.append(f"- {nm} ({mime or 'unknown'})")
-            except Exception:
-                lines = []
-            sys_hint = (
-                "【附件说明】本轮对话包含用户上传的附件。请基于附件内容回答问题。\n"
-                "如需查看具体内容，请使用系统提供的'查看文件'工具（get_file）并传 path 字段读取上列文件；\n"
-                "若模型或当前环境不支持工具调用，请明确告知受限之处，并仅基于可见信息给出分析。"
-            )
-            if lines:
-                sys_hint = (sys_hint + "\n附件清单(请以 path 调用 get_file):\n" + "\n".join(lines)).strip()
-            hist.append({"role": "system", "content": sys_hint})
-
-            # 2) 方案B：不注入 image_url。统一以纯文本消息承载：用户文本 + 可解析的文本附件 + （可用时）OCR 文本。
-            txt_files = _format_text_attachments(atts)
-            # OCR 提取（可选）
-            ocr_blocks = []
-            try:
-                for a in (atts or []):
-                    mime = str(a.get("mime") or "")
-                    pth = str(a.get("path") or "").replace("\\", "/")
-                    if not (mime.startswith("image/") and pth):
-                        continue
-                    full = None
-                    try:
-                        rp_norm = pth
-                        if not (rp_norm.startswith("attachments/") or rp_norm.startswith("hivo_ai_data/attachments/")):
-                            full = _safe_repo_abspath(rp_norm)
-                        else:
-                            base_data = str(_hivo_ai_data_dir());
-                            if rp_norm.startswith("hivo_ai_data/attachments/"):
-                                suffix = rp_norm.split("hivo_ai_data/", 1)[1]
+                        try:
+                            if not (pth.startswith("attachments/") or pth.startswith("hivo_ai_data/attachments/")):
+                                full = _safe_repo_abspath(pth)
                             else:
-                                suffix = rp_norm
-                            full = os.path.abspath(os.path.join(base_data, suffix))
-                    except Exception:
-                        full = None
-                    if (not full) or (not os.path.exists(full)) or os.path.isdir(full):
-                        continue
-                    txt1 = _attempt_image_text(full, mime)
-                    if txt1:
-                        nm = str(a.get("name") or os.path.basename(pth) or "image").strip()
-                        ocr_blocks.append(f"【图片：{nm} / {mime}】\n{txt1}")
-            except Exception:
-                pass
-            joined = []
-            if str(user_text):
-                joined.append(str(user_text))
-            if txt_files:
-                joined.append(txt_files)
-            if ocr_blocks:
-                joined.append("\n\n".join(ocr_blocks))
-            hist.append({"role": "user", "content": "\n\n".join([x for x in joined if x]).strip()})
+                                base_data = str(_hivo_ai_data_dir())
+                                if pth.startswith("hivo_ai_data/attachments/"):
+                                    suffix = pth.split("hivo_ai_data/", 1)[1]
+                                else:
+                                    suffix = pth
+                                full = os.path.abspath(os.path.join(base_data, suffix))
+                            if full and os.path.exists(full) and not os.path.isdir(full):
+                                import base64 as _b64
+                                with open(full, "rb") as _f:
+                                    b64 = _b64.b64encode(_f.read()).decode("ascii")
+                                data_url = f"data:{mime};base64,{b64}"
+                        except Exception:
+                            data_url = ""
+                if data_url:
+                    content_parts.append({
+                        "type": "image_url",
+                        "image_url": {"url": data_url}
+                    })
+
+            if content_parts:
+                hist.append({"role": "user", "content": content_parts})
+            else:
+                hist.append({"role": "user", "content": str(user_text)})
         else:
             hist.append({"role": "user", "content": str(user_text)})
 
@@ -9419,7 +9482,7 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
         "- verify_python（语法校验）：{\"type\":\"verify_python\", \"files\":[\"server.py\"]}\n"
         "- switch_branch（切换分支）：{\"type\":\"switch_branch\", \"branch\":\"feature/x\"}；commit_and_switch：{\"type\":\"commit_and_switch\", \"message\":\"WIP\", \"branch\":\"feature/x\"}\n"
         "- undo（撤销上一组操作）：{\"type\":\"undo\"}\n"
-        "说明：务必输出严格 JSON（不要多余文本/注释）。路径不明确时先 find_files/search_code；读取大文件建议用 read_file_range 分段。若需读取用户上传的附件，请使用 get_file（传 path，如 attachments/...）。"
+        "说明：务必输出严格 JSON（不要多余文本/注释）。路径不明确时先 find_files/search_code；读取大文件建议用 read_file_range 分段。用户上传的图片已直接内嵌在消息中，无需再调用工具读取。"
     )
     sys0 = {"role": "system", "content": sys_text}
     msgs = [sys0]
@@ -9443,16 +9506,6 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
         msgs.append({"role": "system", "content": tool_mem_block})
     if dyn_context and str(dyn_context).strip():
         msgs.append({"role": "system", "content": str(dyn_context)})
-    # 若存在附件：补充一条系统指导，鼓励按需使用"查看文件"工具读取附件内容，避免幻觉。
-    if attachments_present:
-        try:
-            attach_sys = (
-                "【附件读取指引】当前会话包含附件。你可以在需要时调用系统的'查看文件'工具来读取附件内容，再基于真实内容回答；"
-                "若工具不可用，请说明限制并基于已知信息回答，避免编造文件内容。"
-            )
-            msgs.append({"role": "system", "content": attach_sys})
-        except Exception:
-            pass
     msgs.extend(hist)
 
     _hivo_ws_emit(run_id, session_id, "sending", _hivo_status_message(cfg, "sending"))
@@ -11347,6 +11400,65 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 self.send_json({"error": "读取失败"}, 500)
 
+        elif p == "/api/tags":
+            # 列出所有 tag
+            if not REPO_PATH:
+                self.send_json({"ok": False, "error": "未打开仓库"}, 400)
+                return
+            try:
+                # 格式：refname|objectname|taggername|taggerdate|subject
+                fmt = "%(refname:short)|%(objectname)|%(taggername)|%(taggerdate:short)|%(subject)"
+                out, err, code = run_git(["for-each-ref", "--format=" + fmt, "refs/tags"], timeout=60)
+                tags = []
+                if code == 0 and out:
+                    for line in out.splitlines():
+                        parts = line.split("|", 4)
+                        if len(parts) >= 5:
+                            tags.append({
+                                "name": parts[0],
+                                "commit": parts[1],
+                                "tagger": parts[2],
+                                "date": parts[3],
+                                "message": parts[4]
+                            })
+                # 同时获取指向的提交短 hash
+                for t in tags:
+                    try:
+                        o2, e2, c2 = run_git(["rev-parse", "--short", t["commit"]], timeout=30)
+                        if c2 == 0 and o2:
+                            t["short"] = o2.strip()
+                    except Exception:
+                        t["short"] = (t["commit"] or "")[:7]
+                self.send_json({"ok": True, "tags": tags})
+            except Exception as e:
+                logger.error(f"处理 /api/tags 异常: {e}", exc_info=True)
+                self.send_json({"ok": False, "error": str(e)}, 500)
+
+        elif p == "/api/conflicts":
+            # 获取冲突文件列表 + 每个文件的冲突块
+            if not REPO_PATH:
+                self.send_json({"ok": False, "error": "未打开仓库"}, 400)
+                return
+            try:
+                conflict_files, _ = get_unmerged_files()
+                files_info = []
+                for f in conflict_files:
+                    info = {"path": f, "hunks": []}
+                    try:
+                        # 读取文件内容，提取 <<<<<<< / ======= / >>>>>>> 冲突块
+                        full = os.path.join(REPO_PATH, f)
+                        if os.path.exists(full):
+                            with open(full, "r", encoding="utf-8", errors="replace") as fp:
+                                content = fp.read()
+                            info["hunks"] = _extract_conflict_hunks(content)
+                    except Exception as e3:
+                        info["error"] = str(e3)
+                    files_info.append(info)
+                self.send_json({"ok": True, "files": files_info})
+            except Exception as e:
+                logger.error(f"处理 /api/conflicts 异常: {e}", exc_info=True)
+                self.send_json({"ok": False, "error": str(e)}, 500)
+
         else:
             logger.warning(f"未知的 GET 请求路径: {p}")
             self.send_json({"error":"Not found"}, 404)
@@ -12232,9 +12344,13 @@ class Handler(BaseHTTPRequestHandler):
                             continue
                         role = str(m.get("role") or "").strip()
                         if role in ("user", "assistant"):
-                            content = str(m.get("content") or "")
-                            if content:
-                                visible.append({"role": role, "content": content})
+                            c = m.get("content")
+                            # 支持 content 为字符串或数组（OpenAI 多模态格式）
+                            if isinstance(c, str) and c.strip():
+                                visible.append({"role": role, "content": c})
+                            elif isinstance(c, list):
+                                # 保留数组格式（可能含 image_url）
+                                visible.append({"role": role, "content": c})
                     visible = visible[-80:]
                 except Exception:
                     visible = []
@@ -13702,6 +13818,159 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception as e:
                     logger.debug(f"Exception ignored: {e}")
                 self.send_json({"ok": True, "output": (out or "").strip()})
+
+            elif p == "/api/tag/create":
+                # 创建 tag
+                if not REPO_PATH:
+                    self.send_json({"ok": False, "error": "未打开仓库"}, 400)
+                    return
+                name = str((data or {}).get("name") or "").strip()
+                message = str((data or {}).get("message") or "").strip()
+                target = str((data or {}).get("target") or "").strip() or "HEAD"
+                annotated = bool((data or {}).get("annotated", True))
+                if not name:
+                    self.send_json({"ok": False, "error": "tag 名称不能为空"}, 400)
+                    return
+                # 验证 tag 名称
+                if not re.match(r"^[A-Za-z0-9._/-]+$", name) or name.startswith("-"):
+                    self.send_json({"ok": False, "error": "tag 名称不合法"}, 400)
+                    return
+                try:
+                    args = ["tag"]
+                    if annotated:
+                        args += ["-a", name, "-m", message or f"Tag {name}", target]
+                    else:
+                        args += [name, target]
+                    out, err, code = run_git(args, timeout=60)
+                    if code != 0:
+                        self.send_json({"ok": False, "error": (err or "创建 tag 失败").strip()}, 400)
+                        return
+                    self.send_json({"ok": True, "message": "tag 创建成功"})
+                except Exception as e:
+                    logger.error(f"处理 /api/tag/create 异常: {e}", exc_info=True)
+                    self.send_json({"ok": False, "error": str(e)}, 500)
+
+            elif p == "/api/tag/delete":
+                # 删除 tag
+                if not REPO_PATH:
+                    self.send_json({"ok": False, "error": "未打开仓库"}, 400)
+                    return
+                name = str((data or {}).get("name") or "").strip()
+                remote = bool((data or {}).get("remote", False))
+                if not name:
+                    self.send_json({"ok": False, "error": "tag 名称不能为空"}, 400)
+                    return
+                if not re.match(r"^[A-Za-z0-9._/-]+$", name) or name.startswith("-"):
+                    self.send_json({"ok": False, "error": "tag 名称不合法"}, 400)
+                    return
+                try:
+                    args = ["tag", "-d", name]
+                    out, err, code = run_git(args, timeout=60)
+                    if code != 0:
+                        self.send_json({"ok": False, "error": (err or "删除 tag 失败").strip()}, 400)
+                        return
+                    # 可选：删除远端 tag
+                    if remote:
+                        try:
+                            _, err2, code2 = run_git(["push", "origin", "--delete", name], timeout=120)
+                            # 远端失败不阻断本地删除结果
+                        except Exception as e2:
+                            logger.debug(f"删除远端 tag 失败: {e2}")
+                    self.send_json({"ok": True, "message": "tag 删除成功"})
+                except Exception as e:
+                    logger.error(f"处理 /api/tag/delete 异常: {e}", exc_info=True)
+                    self.send_json({"ok": False, "error": str(e)}, 500)
+
+            elif p == "/api/conflict/resolve":
+                # 解决冲突：把指定文件中的冲突块替换为选定方案，然后 git add
+                if not REPO_PATH:
+                    self.send_json({"ok": False, "error": "未打开仓库"}, 400)
+                    return
+                path = str((data or {}).get("path") or "").strip()
+                resolution = str((data or {}).get("resolution") or "").strip()  # ours / theirs / both / custom
+                custom_content = (data or {}).get("custom_content")  # 完整自定义文件内容
+                if not path:
+                    self.send_json({"ok": False, "error": "path 不能为空"}, 400)
+                    return
+                try:
+                    full = os.path.join(REPO_PATH, path)
+                    if not os.path.exists(full):
+                        self.send_json({"ok": False, "error": f"文件不存在: {path}"}, 400)
+                        return
+                    if custom_content is not None:
+                        # 客户端提供完整新内容
+                        new_content = str(custom_content)
+                    else:
+                        with open(full, "r", encoding="utf-8", errors="replace") as fp:
+                            content = fp.read()
+                        hunks = _extract_conflict_hunks(content)
+                        if not hunks:
+                            # 没有冲突标记，直接 git add
+                            _, _, _ = run_git(["add", "--", path], timeout=60)
+                            self.send_json({"ok": True, "message": "无冲突标记，已标记为已解决"})
+                            return
+                        # 按 resolution 替换每个冲突块
+                        def resolve_block(h):
+                            if resolution == "ours":
+                                return h["ours"]
+                            elif resolution == "theirs":
+                                return h["theirs"]
+                            elif resolution == "both":
+                                return h["ours"] + "\n" + h["theirs"] if h["ours"] and h["theirs"] else (h["ours"] or h["theirs"])
+                            elif resolution == "base":
+                                return h["base"]
+                            else:
+                                # 默认 ours
+                                return h["ours"]
+                        # 重建内容
+                        lines = content.split("\n")
+                        result = []
+                        i = 0
+                        while i < len(lines):
+                            if lines[i].startswith("<<<<<<<"):
+                                # 找到对应的 >>>>>>> 结束行
+                                j = i + 1
+                                sep_seen = False
+                                while j < len(lines):
+                                    if lines[j].startswith("|||||||"):
+                                        j += 1
+                                        while j < len(lines) and not lines[j].startswith("======="):
+                                            j += 1
+                                        if j < len(lines) and lines[j].startswith("======="):
+                                            sep_seen = True
+                                            j += 1
+                                        continue
+                                    if lines[j].startswith("======="):
+                                        sep_seen = True
+                                        j += 1
+                                        continue
+                                    if lines[j].startswith(">>>>>>>"):
+                                        break
+                                    j += 1
+                                # 找到 hunk 对象
+                                hunk = None
+                                for h in hunks:
+                                    if h["start"] == i + 1:
+                                        hunk = h
+                                        break
+                                if hunk:
+                                    resolved = resolve_block(hunk)
+                                    if resolved:
+                                        result.append(resolved)
+                                i = j + 1
+                            else:
+                                result.append(lines[i])
+                                i += 1
+                        new_content = "\n".join(result)
+                    # 写回
+                    with open(full, "w", encoding="utf-8") as fp:
+                        fp.write(new_content)
+                    # git add 标记已解决
+                    _, _, _ = run_git(["add", "--", path], timeout=60)
+                    self.send_json({"ok": True, "message": "冲突已解决"})
+                except Exception as e:
+                    logger.error(f"处理 /api/conflict/resolve 异常: {e}", exc_info=True)
+                    self.send_json({"ok": False, "error": str(e)}, 500)
 
             else:
                 logger.warning(f"未知的 POST 请求路径: {p}")
