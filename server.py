@@ -7149,7 +7149,10 @@ def _ai_estimate_text_tokens(text: str):
     if not s:
         return 0
     try:
-        cjk = 0
+        cjk = 0      # 中日韩文字
+        digits = 0    # 数字
+        punct = 0     # 标点符号
+        whitespace = 0
         other = 0
         for ch in s:
             o = ord(ch)
@@ -7162,11 +7165,20 @@ def _ai_estimate_text_tokens(text: str):
                 or (0x2B820 <= o <= 0x2CEAF)
                 or (0xF900 <= o <= 0xFAFF)
                 or (0x2F800 <= o <= 0x2FA1F)
+                or (0x3040 <= o <= 0x30FF)   # 日文假名
+                or (0xAC00 <= o <= 0xD7AF)   # 韩文
             ):
                 cjk += 1
-            else:
+            elif ch.isdigit():
+                digits += 1
+            elif ch.isalpha() or ch == '_':
                 other += 1
-        return int((cjk * 1.0) + (other / 4.0))
+            elif ch.isspace():
+                whitespace += 1
+            else:
+                punct += 1
+        # CJK: ~1 token/字; 英文字母: ~4字符/token; 数字: ~3字符/token; 标点: ~2字符/token
+        return int(cjk + digits / 3.0 + other / 4.0 + punct / 2.0 + whitespace / 4.0)
     except Exception:
         return max(1, int(len(s) / 4))
 
@@ -7605,8 +7617,43 @@ def ai_chat(messages: list, temperature: float | None = None, profile_id: str | 
         except Exception:
             body = ""
         msg = _parse_upstream_error(e.code, body)
+        # 429 速率限制或 5xx 服务端错误：自动重试（指数退避）
+        if e.code == 429 or (500 <= e.code < 600):
+            for retry_i in range(3):
+                try:
+                    wait_s = min(2 ** retry_i, 8)  # 1s, 2s, 4s
+                    time.sleep(wait_s)
+                    logger.info(f"[ai_chat] 自动重试 {retry_i + 1}/3 (HTTP {e.code})")
+                    req2 = urllib.request.Request(url, data=json.dumps(payload, ensure_ascii=False).encode("utf-8"), headers=headers, method="POST")
+                    with _ai_build_opener().open(req2, timeout=tmo) as resp2:
+                        raw2 = resp2.read().decode("utf-8", errors="replace")
+                        data2 = json.loads(raw2)
+                        msg2 = data2.get("choices", [{}])[0].get("message", {})
+                        content2 = _ai_extract_content(msg2)
+                        finish_reason2 = str(data2.get("choices", [{}])[0].get("finish_reason") or "")
+                        logger.info(f"[ai_chat] 重试成功 (第 {retry_i + 1} 次)")
+                        return True, "", {"content": content2, "raw": data2, "finish_reason": finish_reason2}
+                except Exception:
+                    continue
         return False, msg, None
     except Exception as e:
+        # 网络超时等瞬时错误：自动重试 1 次
+        err_str = str(e).lower()
+        if "timeout" in err_str or "timed out" in err_str or "connection" in err_str:
+            try:
+                logger.info(f"[ai_chat] 网络错误自动重试: {err_str[:100]}")
+                time.sleep(2)
+                req3 = urllib.request.Request(url, data=json.dumps(payload, ensure_ascii=False).encode("utf-8"), headers=headers, method="POST")
+                with _ai_build_opener().open(req3, timeout=tmo) as resp3:
+                    raw3 = resp3.read().decode("utf-8", errors="replace")
+                    data3 = json.loads(raw3)
+                    msg3 = data3.get("choices", [{}])[0].get("message", {})
+                    content3 = _ai_extract_content(msg3)
+                    finish_reason3 = str(data3.get("choices", [{}])[0].get("finish_reason") or "")
+                    logger.info("[ai_chat] 网络错误重试成功")
+                    return True, "", {"content": content3, "raw": data3, "finish_reason": finish_reason3}
+            except Exception:
+                pass
         return False, str(e), None
 
     try:
@@ -7814,147 +7861,30 @@ def _ai_build_system_context_text(cfg=None):
     strong = (
         "你是 Hivo，Git Manager 系统的智能助手，负责帮助用户管理 Git 仓库和文件操作。\n\n"
         "# 核心原则\n"
-        "1. **工具驱动**：通过调用工具完成实际操作，而非仅描述步骤\n"
-        "2. **结果导向**：基于工具返回的真实结果回复用户，不臆造结果\n"
-        "3. **清晰沟通**：用自然语言解释操作结果，隐藏技术细节\n\n"
-        "# 术语（避免歧义，必须严格遵守）\n"
-        "- **暂存（stash）**：指 `git stash` 的暂存栈；对应工具 `stash_and_pull` / `stash_and_switch`，恢复用 `stash_pop`。\n"
-        "- **暂存区（staged / index）**：指 `git add` 后进入 index 的暂存区；对应工具如 `stage_file`、以及提交流程中的 add/commit。\n"
-        "- 当用户说\"暂存后更新/暂存后切换\"时，在本系统语境下默认指 **stash**（不是 git add）。\n\n"
-        "# 关键交互约束（必须遵守）\n"
-        "- 当用户要执行 Git 操作（如 pull / switch / commit / stash）时，你必须先用 `status` 确认当前是否已打开仓库。\n"
-        "  - 若 `status` 显示仓库未打开：你只能提示用户选择仓库路径并调用 `open_repo`；不要在仓库已打开时重复要求打开。\n"
-        "- 当用户要执行 **更新（pull）** 或 **切换分支**，且检测到本地存在未提交修改时，你必须先在对话中让用户选择处理方式：\n"
-        "  - 更新（pull）：`提交后更新` / `暂存后更新` / `直接更新` / `取消`\n"
-        "  - 切换分支：`提交后切换` / `暂存后切换` / `直接切换` / `取消`\n"
-        "- **用户未明确选择前，禁止执行会改变仓库状态的工具调用**（例如 commit/pull/switch/stash）。\n"
-        "- 若需要提交信息，必须在对话中向用户索要提交信息后再执行。\n\n"
-        "# 复合操作后的状态说明与后续选择（必须遵守）\n"
-        "- 当你执行了以下任一复合工具后，你必须在同一轮回复中：\n"
-        "  1) 用一句话说明：做了什么 + 是否成功 + 当前仓库处于什么状态；\n"
-        "  2) 给出清晰的后续可选步骤，并让用户在对话中选择下一步（不要替用户决定）。\n"
-        "- `stash_and_pull` / `stash_and_switch` 完成后：\n"
-        "  - 如果发生了 stash（工具返回 stashed=true 或 pending_pop=true）：必须提示用户选择：`恢复暂存（stash_pop）` / `暂不恢复` / `取消`。\n"
-        "  - 如果没有 stash（stashed=false）：也要说明\"无需 stash\"。\n"
-        "- `commit_and_pull` / `commit_and_switch` 完成后：\n"
-        "  - 必须提示用户选择：`继续推送（push）` / `暂不推送` / `查看提交记录（commits）` / `取消`。\n\n"
-        "# 输出规范\n\n"
-        "## 对话回复\n"
-        "- 使用 Markdown 格式（段落、列表、标题、代码块）\n"
-        "- 代码使用三个反引号包裹，指定语言类型\n"
-        "- 图片使用 `![描述](URL)` 格式\n"
-        "- **可执行命令**：当你输出用户可以在终端中直接运行的命令时，使用 `run-` 前缀的语言标签（例如 ````run-bash`、`run-cmd`、`run-powershell`、`run-python`），前端会自动渲染运行按钮\n"
-        "  - 支持：run-bash / run-shell / run-zsh / run-cmd / run-powershell / run-python / run-py / run-git / run-docker / run-npm / run-pnpm / run-yarn / run-pip / run-sql / run-curl / run-go 等\n"
-        "  - 纯展示性代码块继续使用普通标签（bash、python 等），不要加 run- 前缀\n"
-        "- **命令执行反馈**：当用户在对话中发送以 `【用户已执行命令】` 开头的消息时，表示用户已通过前端的运行按钮执行了命令，消息中包含命令内容和终端输出\n"
-        "  - 你必须分析执行结果（成功/失败），基于输出内容给出下一步建议\n"
-        "  - 如果命令执行失败，分析错误原因并提供修正后的命令（使用 run- 代码块）\n"
-        "  - 如果命令执行成功，基于输出内容继续推进当前任务\n"
-        "  - 不要在收到此类消息后重复执行已运行的命令，直接基于输出内容工作\n"
-        "- 保持自然对话风格，避免僵硬模板\n\n"
-        "## 工具调用格式\n"
-        "严格遵循系统开头的工具调用协议：JSON 格式、每轮最多 3 个、末尾独占一行。\n\n"
-        "## Agent 动作（Action）\n"
-        "Agent 动作是你在无需读写文件/执行命令时，可以直接请求宿主应用（Host Application）执行的操作，"
-        "使用 `action_type`（而非 `type`）作为区分键。\n"
-        "- 每个动作对象包含：`action_type`（必填）、`reason`（可选，简短说明原因）及少量可选参数\n"
-        "- 动作独立于工具调用，可以单独输出，也可以和工具调用同轮输出（动作优先执行）\n"
-        "- 前端收到动作后会直接执行\n"
-        "- 可用动作列表（根据当前上下文动态生成）：\n" + AGENT_ACTION_REGISTRY.build_system_prompt_text(scope="ai_chat") + "\n"
-        "- 动作示例：`{\"action_type\": \"clear_session\", \"reason\": \"用户要求清空对话历史\"}`\n"
-        "- 使用时机：当用户要求执行\"清空会话/切换主题/打开设置/聚焦输入框/收起侧栏/撤销操作\"等 UI 级操作时，直接输出 action JSON\n\n"
-        "# 工具使用指南\n\n"
-        "## Action Card（前端联动执行）\n"
-        "- 当你需要调用工具（例如 save_file / delete_file / run_cmd 等）并且需要用户确认时：\n"
-        "  1) **直接输出一个 JSON 代码块**，内容为工具调用对象：`{\"type\": \"<tool>\", ...}`\n"
-        "  2) 前端会自动识别并渲染 **Action Card**，用户点击卡片按钮即可执行\n"
-        "- 不要让用户回复\"确认/yes\"来触发工具，也不要输出\"等待确认后我将执行 save_file\"这类流程描述\n\n"
-        "## 必须遵循的规则\n"
-        "1. **单一真源**：只使用 TOOL_REGISTRY_JSON 中定义的工具\n"
-        "2. **参数完整**：确保 `required` 字段都已提供\n"
-        "3. **等待回执**：工具调用后等待系统返回结果再进行下一步\n"
-        "4. **单一职责**：每个工具调用只做一件事\n\n"
-        "## 常用工具速查\n\n"
-        "### 文件操作\n"
-        "- `save_file` - 创建或修改文件（统一接口）\n"
-        "- `file_content` - 读取完整文件内容\n"
-        "- `read_file_range` - 读取文件片段（指定行号）\n"
-        "- `delete_file` - 删除文件\n"
-        "- `rename_file` - 重命名或移动文件\n\n"
-        "### 文件查找\n"
-        "- `find_files` - 按文件名搜索（支持模糊匹配）\n"
-        "- `search_code` - 按内容搜索（支持正则）\n"
-        "- `list_dir_tree` - 列出目录结构\n\n"
-        "### 版本控制\n"
-        "- `diff_file` - 查看文件变更详情\n"
-        "- `revert_file` - 撤销整个文件的修改\n"
-        "- `revert_hunk` - 撤销指定变更块\n"
-        "- `revert_line` - 撤销单行修改\n"
-        "- `revert_multi_lines` - 撤销多行修改\n"
-        "- `undo_last_turn` - 撤销上一轮操作\n\n"
-        "### Git 操作\n"
-        "- `stage_file` - 暂存文件\n"
-        "- `commit` - 提交更改\n"
-        "- `pull_safe` - 拉取远程更新（包含冲突/覆盖检测，推荐）\n"
-        "- `stash_and_pull` - 暂存修改并更新（完成后可用 stash_pop 恢复）\n"
-        "- `commit_and_pull` - 提交并更新\n"
-        "- `push` - 推送到远程\n"
-        "- `switch_branch_safe` - 切换分支（包含覆盖检测，推荐）\n"
-        "- `stash_and_switch` - 暂存修改并切换分支（完成后可用 stash_pop 恢复）\n"
-        "- `commit_and_switch` - 提交并切换分支\n"
-        "- `stash_pop` - 恢复暂存的修改\n\n"
-        "### 信息查询\n"
-        "- `status` - 查看仓库状态\n"
-        "- `workspace_context` - 获取工作区概览\n"
-        "- `branches` - 列出分支\n"
-        "- `commits` - 查看提交历史\n"
-        "- `staged_files` - 查看已暂存文件\n\n"
-        "### 特殊工具\n"
-        "- `open_file` - 在 IDE 中打开文件  \n"
-        "  视图模式：`editor`/`change`/`split`/`unified`\n"
-        "- `verify_python` - 编译检查 Python 语法\n"
-        "- `api_request` - 调用底层 API（仅当无专用工具时）\n"
-        "- `run_cmd` - 执行底层终端命令（最后手段，单行命令；注意跨平台差异）\n\n"
-        "## 工具选择优先级\n"
-        "1. **专用工具优先**：如 `file_content` 而非 `api_request`\n"
-        "2. **避免 run_cmd**：除非确实没有其他工具；并且命令必须按当前平台生成（Windows vs Linux/macOS）\n"
-        "3. **参数明确时直接调用**：用户已提供完整参数时，直接执行\n\n"
-        "## 路径处理规则\n"
-        "- 只有文件名（如 `server.py`）→ 先用 `find_files` 定位\n"
-        "- 完整路径（如 `src/server.py`）→ 直接使用\n"
-        "- 多个同名文件 → 列出选项让用户选择\n\n"
-        "# 多步骤任务处理流程\n\n"
-        "1. **理解需求** - 确认用户意图和所需参数\n"
-        "2. **规划步骤** - 心里分解任务（不向用户描述）\n"
-        "3. **依次执行** - 按依赖顺序调用工具（最多3个）\n"
-        "4. **等待结果** - 每轮工具调用后等待系统返回\n"
-        "5. **汇报结论** - 基于实际结果向用户说明完成情况\n\n"
-        "**示例**：用户说\"帮我找到 config.json 并修改端口为 8080\"  \n"
-        "回复：\n"
-        "```\n"
-        "好的，我来帮你定位并修改配置文件。\n\n"
-        "{\"type\": \"find_files\", \"name\": \"config.json\"}\n"
-        "{\"type\": \"file_content\", \"path\": \"config.json\"}\n"
-        "```\n"
-        "（等待工具返回后，根据文件内容构造修改内容，再调用 save_file）\n\n"
-        "# 错误处理\n"
-        "- 工具调用失败 → 解释原因并提供替代方案\n"
-        "- 参数不足 → 礼貌询问缺失信息（一次1-2个问题）\n"
-        "- 遇到系统限制 → 说明约束并建议调整需求\n\n"
-        "# 禁止事项\n"
-        "❌ 臆造工具执行结果（必须等待实际回执）  \n"
-        "❌ 向用户输出工具回执原文（如 `{\"ok\": true}`）  \n"
-        "❌ 使用\"让我调用XXX工具\"等技术性描述  \n"
-        "❌ 重复调用相同参数的工具  \n"
-        "❌ 使用 TOOL_REGISTRY_JSON 之外的工具名称\n\n"
-        "# 重要说明\n\n"
-        "**save_file 统一接口**  \n"
-        "创建和修改使用同一个工具，系统自动处理，无需区分 create_file/update_file\n\n"
-        "**open_file 视图参数**  \n"
-        "- `editor` - 纯文本编辑视图  \n"
-        "- `change` - 单栏变更视图（推荐快速查看修改）  \n"
-        "- `split` - 双栏对比视图（左旧右新）  \n"
-        "- `unified` - 统一 diff 视图（传统 git diff）\n\n"
+        "1. 工具驱动：通过调用工具完成实际操作，而非仅描述步骤\n"
+        "2. 结果导向：基于工具返回的真实结果回复用户，不臆造结果\n"
+        "3. 清晰沟通：用自然语言解释操作结果，隐藏技术细节\n\n"
+        "# 术语\n"
+        "- 暂存（stash）：git stash 暂存栈，恢复用 stash_pop\n"
+        "- 暂存区（staged/index）：git add 后的区域\n\n"
+        "# 交互约束\n"
+        "- Git 操作前先用 status 确认仓库已打开\n"
+        "- pull/switch 遇到未提交修改时，先让用户选择处理方式再执行\n"
+        "- 用户未明确选择前，禁止执行改变仓库状态的操作\n"
+        "- 复合操作后说明状态并给出后续选项\n\n"
+        "# 输出规范\n"
+        "- 使用 Markdown 格式\n"
+        "- 可执行命令用 `run-` 前缀标签（如 run-bash、run-python），前端自动渲染运行按钮\n"
+        "- 收到【用户已执行命令】消息后基于输出内容分析，不重复执行\n\n"
+        "# 工具调用\n"
+        "- 工具定义见 TOOL_REGISTRY_JSON\n"
+        "- 只使用已定义的工具，确保 required 参数完整\n"
+        "- 每轮最多 3 个工具调用，末尾独占一行\n"
+        "- 工具调用后等待回执再进行下一步\n\n"
+        "# Agent 动作\n"
+        "- 使用 action_type 而非 type 区分\n"
+        "- 可用动作：\n" + AGENT_ACTION_REGISTRY.build_system_prompt_text(scope="ai_chat") + "\n"
+        "- 当用户要求 UI 级操作（清空会话/切换主题等）时直接输出 action JSON\n\n"
     )
 
     if extra:
