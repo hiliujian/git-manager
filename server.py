@@ -524,7 +524,7 @@ def _undo_save_state():
                 "order": list(_undo_group_order),
                 "groups": dict(_undo_groups),
             }
-        p.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        _atomic_write_json(p, payload, indent=None)
     except Exception:
         return
 
@@ -1143,6 +1143,22 @@ def _hivo_ai_data_dir() -> Path:
         return Path("hivo_ai_data")
 
 
+def _atomic_write_json(path, data, indent=2):
+    """原子写入 JSON 文件：先写临时文件再替换，避免写入中途崩溃导致文件损坏。
+
+    Args:
+        path: 目标文件路径 (Path or str)
+        data: 可序列化的 Python 对象
+        indent: JSON 缩进，None 表示不缩进
+    """
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    text = json.dumps(data, ensure_ascii=False) if indent is None else json.dumps(data, ensure_ascii=False, indent=indent)
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, p)
+
+
 def _hivo_load_cfg():
     with _hivo_cfg_lock:
         try:
@@ -1254,11 +1270,7 @@ def _hivo_save_cfg(cfg: dict):
     with _hivo_cfg_lock:
         try:
             p = _hivo_cfg_path()
-            try:
-                p.parent.mkdir(parents=True, exist_ok=True)
-            except Exception as e:
-                logger.debug(f"Exception ignored: {e}")
-            p.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+            _atomic_write_json(p, cfg, indent=2)
             _hivo_cfg_cache.clear()
             _hivo_cfg_cache.update(cfg)
             return True, "保存成功"
@@ -2670,13 +2682,14 @@ def _hivo_ws_emit_final(run_id: str, session_id: str, content: str, ok: bool = T
         logger.debug(f"Exception ignored: {e}")
 
 
-def _hivo_ws_emit_delta(run_id: str, session_id: str, delta: str):
+def _hivo_ws_emit_delta(run_id: str, session_id: str, delta: str, delta_type: str = "content"):
     try:
         payload = {
             "type": "ai_agent_delta",
             "run_id": str(run_id or ""),
             "session_id": str(session_id or ""),
             "delta": str(delta or ""),
+            "delta_type": str(delta_type or "content"),
             "ts": time.time(),
         }
         broadcast_to_clients(payload)
@@ -5239,6 +5252,13 @@ def _hivo_ai_clean_messages(messages: list, limit: int):
                 item["can_continue"] = bool(m.get("can_continue", False))
             except Exception:
                 pass
+            # 思考过程
+            try:
+                tc = str(m.get("thinking_content") or "").strip()
+                if tc:
+                    item["thinking_content"] = tc
+            except Exception:
+                pass
             # 持久化最小化 _attMeta（渲染附件缩略图）与 __continue_snapshot（用于 Continue 恢复）
             try:
                 meta_in = m.get("_attMeta")
@@ -5353,8 +5373,7 @@ def _hivo_ai_load_history_data():
 
 def _hivo_ai_write_history_data(data: dict):
     p = _hivo_ai_history_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    _atomic_write_json(p, data, indent=2)
 
 
 def _hivo_ai_ensure_profile_node(data: dict, profile_id: str):
@@ -5737,6 +5756,13 @@ def load_ai_chat_history(profile_id: str, limit: int = 40, session_id: str | Non
                 ug = str(m.get("undo_gid") or "").strip()
                 if ug:
                     item["undo_gid"] = ug
+                # 保留思考过程
+                try:
+                    tc = str(m.get("thinking_content") or "").strip()
+                    if tc:
+                        item["thinking_content"] = tc
+                except Exception:
+                    pass
                 # Preserve tool_receipts for cross-session display
                 try:
                     tr = m.get("tool_receipts")
@@ -7429,7 +7455,667 @@ def _ai_trim_messages_to_budget(messages: list, max_total_tokens: int, reserve_o
         return messages if isinstance(messages, list) else []
 
 
-def ai_chat(messages: list, temperature: float | None = None, profile_id: str | None = None, timeout_s: int = 60, stream: bool = False, on_delta=None):
+# ════════════════════════════════════════════════════════
+#  多模型 Provider 适配层
+# ════════════════════════════════════════════════════════
+
+class BaseLLMProvider:
+    """LLM Provider 抽象基类。
+
+    子类负责：
+    - 将内部统一格式（OpenAI 风格 messages/tools）转换为对应提供商的请求格式
+    - 将提供商的响应转换为内部统一格式
+
+    统一内部响应格式:
+    {
+        "content": str,               # 文本内容
+        "tool_calls": [               # 可选：工具调用列表（原生 function calling）
+            {"id": str, "type": "function", "function": {"name": str, "arguments": str}}
+        ],
+        "finish_reason": str,         # stop / tool_calls / length / ...
+        "raw": dict,                  # 原始响应（用于调试）
+    }
+    """
+
+    def __init__(self, profile: dict):
+        self.profile = profile or {}
+        self.base_url = str(self.profile.get("base_url") or self.profile.get("endpoint") or "").strip()
+        self.api_key = str(self.profile.get("api_key") or "")
+        self.model = str(self.profile.get("model") or "").strip()
+
+    def build_request(self, messages, tools=None, temperature=None, max_tokens=None, stream=False):
+        """构建请求。返回 (url, headers, body)。"""
+        raise NotImplementedError
+
+    def parse_response(self, raw_body: str) -> dict:
+        """解析非流式响应。返回统一格式。"""
+        raise NotImplementedError
+
+    def parse_stream_chunk(self, chunk_text: str) -> dict:
+        """解析流式单个 chunk。返回统一格式的增量部分（content/delta），或 None 表示跳过。"""
+        return None
+
+    def stream_is_done(self, chunk_text: str) -> bool:
+        """判断流式是否结束。"""
+        return chunk_text.strip() == "[DONE]"
+
+    def create_stream_state(self) -> dict:
+        """创建流式累积状态对象。"""
+        return {
+            "content_parts": [],
+            "reasoning_parts": [],
+            "finish_reason": "",
+            "tool_calls": {},
+        }
+
+    def accumulate_chunk(self, state: dict, chunk_text: str) -> dict:
+        """累积一个流式 chunk，返回当前增量（用于前端显示）。
+
+        返回格式: {"content_delta": str, "reasoning_delta": str}
+        """
+        parsed = self.parse_stream_chunk(chunk_text)
+        if not parsed:
+            return {}
+
+        content_delta = parsed.get("content_delta")
+        reasoning_delta = parsed.get("reasoning_delta")
+
+        if content_delta:
+            state["content_parts"].append(str(content_delta))
+        if reasoning_delta:
+            state["reasoning_parts"].append(str(reasoning_delta))
+
+        fr = parsed.get("finish_reason")
+        if fr:
+            state["finish_reason"] = fr
+
+        tc_delta = parsed.get("tool_calls_delta")
+        if isinstance(tc_delta, list):
+            for d in tc_delta:
+                if not isinstance(d, dict):
+                    continue
+                idx = d.get("index")
+                if idx is None:
+                    continue
+                idx = int(idx)
+                if idx not in state["tool_calls"]:
+                    state["tool_calls"][idx] = {
+                        "id": "", "type": "function",
+                        "function": {"name": "", "arguments": ""}
+                    }
+                acc = state["tool_calls"][idx]
+                if d.get("id"):
+                    acc["id"] = str(d["id"])
+                if d.get("type"):
+                    acc["type"] = str(d["type"])
+                func_d = d.get("function") or {}
+                if isinstance(func_d, dict):
+                    if func_d.get("name"):
+                        acc["function"]["name"] = str(func_d["name"])
+                    if func_d.get("arguments"):
+                        acc["function"]["arguments"] += str(func_d["arguments"])
+
+        return {
+            "content_delta": content_delta,
+            "reasoning_delta": reasoning_delta,
+        }
+
+    def get_stream_result(self, state: dict) -> dict:
+        """获取流式最终结果，返回统一格式。"""
+        content = "".join(state["content_parts"])
+        reasoning_content = "".join(state["reasoning_parts"])
+        if not content:
+            content = reasoning_content
+
+        tool_calls_list = []
+        if state["tool_calls"]:
+            for idx in sorted(state["tool_calls"].keys()):
+                tool_calls_list.append(state["tool_calls"][idx])
+
+        result = {
+            "content": content,
+            "reasoning_content": reasoning_content,
+            "raw": {"stream": True},
+            "finish_reason": state["finish_reason"],
+        }
+        if tool_calls_list:
+            result["tool_calls"] = tool_calls_list
+        return result
+
+
+class OpenAIProvider(BaseLLMProvider):
+    """OpenAI 兼容格式（默认）。适用于 OpenAI、Azure OpenAI、vLLM、Ollama 等。"""
+
+    PROVIDER_ID = "openai"
+
+    def build_request(self, messages, tools=None, temperature=None, max_tokens=None, stream=False):
+        url = _ai_build_chat_url(self.base_url)
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": "GitManager/1.0",
+        }
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+            headers["x-api-key"] = self.api_key
+
+        body = {
+            "model": self.model,
+            "messages": messages,
+        }
+        if temperature is not None:
+            body["temperature"] = float(temperature)
+        if max_tokens and max_tokens > 0:
+            body["max_tokens"] = max_tokens
+            body["max_completion_tokens"] = max_tokens
+        if stream:
+            body["stream"] = True
+        if tools:
+            body["tools"] = tools
+            body["tool_choice"] = "auto"
+
+        return url, headers, body
+
+    def parse_response(self, raw_body: str) -> dict:
+        data = json.loads(raw_body or "{}")
+        msg = (data.get("choices") or [{}])[0].get("message", {})
+        content = _ai_extract_content(msg)
+        finish_reason = str((data.get("choices") or [{}])[0].get("finish_reason") or "")
+
+        reasoning_content = ""
+        try:
+            rc = msg.get("reasoning_content") or msg.get("reasoning")
+            if isinstance(rc, str):
+                reasoning_content = rc
+            elif isinstance(rc, list):
+                reasoning_content = "".join(
+                    str(it.get("text") or "") if isinstance(it, dict) else str(it or "")
+                    for it in rc
+                )
+        except Exception:
+            reasoning_content = ""
+
+        tool_calls = msg.get("tool_calls")
+        result = {
+            "content": content,
+            "reasoning_content": reasoning_content,
+            "finish_reason": finish_reason,
+            "raw": data,
+        }
+        if isinstance(tool_calls, list) and tool_calls:
+            result["tool_calls"] = tool_calls
+        return result
+
+    def parse_stream_chunk(self, chunk_text: str) -> dict:
+        try:
+            j = json.loads(chunk_text)
+        except Exception:
+            return None
+        choice = (j.get("choices") or [{}])[0]
+        delta = (choice.get("delta") or {})
+
+        delta_content = delta.get("content")
+        if not delta_content:
+            delta_content = delta.get("text")
+        if isinstance(delta_content, list):
+            delta_content = "".join(
+                str(it.get("text") or "") if isinstance(it, dict) else str(it or "")
+                for it in delta_content
+            )
+
+        delta_reasoning = delta.get("reasoning") or delta.get("reasoning_content")
+        if not delta_reasoning:
+            rd = delta.get("reasoning_details")
+            if isinstance(rd, list):
+                delta_reasoning = "".join(str(it.get("text") or "") for it in rd if isinstance(it, dict))
+
+        result = {}
+        if delta_content:
+            result["content_delta"] = str(delta_content)
+        if delta_reasoning:
+            result["reasoning_delta"] = str(delta_reasoning)
+
+        fr = str(choice.get("finish_reason") or "")
+        if fr:
+            result["finish_reason"] = fr
+
+        tc_delta = delta.get("tool_calls")
+        if tc_delta is not None:
+            result["tool_calls_delta"] = tc_delta
+
+        return result
+
+
+class AnthropicProvider(BaseLLMProvider):
+    """Anthropic Claude 原生 API 格式。"""
+
+    PROVIDER_ID = "anthropic"
+
+    def build_request(self, messages, tools=None, temperature=None, max_tokens=None, stream=False):
+        base = self.base_url.rstrip("/")
+        if not base.endswith("/v1"):
+            base = base + "/v1"
+        url = base + "/messages"
+
+        headers = {
+            "Content-Type": "application/json",
+            "x-api-key": self.api_key,
+            "anthropic-version": "2023-06-01",
+        }
+
+        system_prompt = ""
+        user_messages = []
+        for m in messages:
+            if not isinstance(m, dict):
+                continue
+            role = str(m.get("role") or "")
+            content = m.get("content")
+            if role == "system":
+                if isinstance(content, str):
+                    if system_prompt:
+                        system_prompt += "\n\n" + content
+                    else:
+                        system_prompt = content
+            elif role in ("user", "assistant"):
+                user_messages.append({"role": role, "content": content})
+
+        body = {
+            "model": self.model,
+            "messages": user_messages,
+        }
+        if system_prompt:
+            body["system"] = system_prompt
+        if temperature is not None:
+            body["temperature"] = float(temperature)
+        if max_tokens and max_tokens > 0:
+            body["max_tokens"] = max_tokens
+        if stream:
+            body["stream"] = True
+        if tools:
+            anthropic_tools = []
+            for t in tools:
+                if not isinstance(t, dict):
+                    continue
+                func = t.get("function", {}) if t.get("type") == "function" else t
+                name = str(func.get("name") or "")
+                desc = str(func.get("description") or "")
+                params = func.get("parameters", {})
+                if not name:
+                    continue
+                anthropic_tools.append({"name": name, "description": desc, "input_schema": params})
+            if anthropic_tools:
+                body["tools"] = anthropic_tools
+
+        return url, headers, body
+
+    def parse_response(self, raw_body: str) -> dict:
+        data = json.loads(raw_body or "{}")
+        content = data.get("content")
+        text_parts = []
+        reasoning_parts = []
+        tool_calls = []
+        if isinstance(content, list):
+            for idx, block in enumerate(content):
+                if not isinstance(block, dict):
+                    continue
+                btype = str(block.get("type") or "")
+                if btype == "text":
+                    text_parts.append(str(block.get("text") or ""))
+                elif btype == "thinking":
+                    reasoning_parts.append(str(block.get("thinking") or block.get("text") or ""))
+                elif btype == "tool_use":
+                    tool_calls.append({
+                        "id": str(block.get("id") or f"toolu_{idx}"),
+                        "type": "function",
+                        "function": {
+                            "name": str(block.get("name") or ""),
+                            "arguments": json.dumps(block.get("input", {}), ensure_ascii=False),
+                        },
+                    })
+
+        finish_reason = str(data.get("stop_reason") or "")
+        if finish_reason == "tool_use":
+            finish_reason = "tool_calls"
+
+        result = {
+            "content": "".join(text_parts).strip(),
+            "reasoning_content": "".join(reasoning_parts),
+            "finish_reason": finish_reason,
+            "raw": data,
+        }
+        if tool_calls:
+            result["tool_calls"] = tool_calls
+        return result
+
+    def parse_stream_chunk(self, chunk_text: str) -> dict:
+        try:
+            j = json.loads(chunk_text)
+        except Exception:
+            return None
+        etype = str(j.get("type") or "")
+        result = {}
+
+        if etype == "content_block_delta":
+            delta = j.get("delta", {})
+            dtype = str(delta.get("type") or "")
+            if dtype == "text_delta":
+                text = str(delta.get("text") or "")
+                if text:
+                    result["content_delta"] = text
+            elif dtype == "input_json_delta":
+                partial = str(delta.get("partial_json") or "")
+                if partial:
+                    result["tool_arguments_delta"] = partial
+        elif etype == "message_delta":
+            delta = j.get("delta", {})
+            sr = str(delta.get("stop_reason") or "")
+            if sr:
+                result["finish_reason"] = "tool_calls" if sr == "tool_use" else sr
+
+        return result
+
+    def stream_is_done(self, chunk_text: str) -> bool:
+        try:
+            j = json.loads(chunk_text)
+            return str(j.get("type") or "") == "message_stop"
+        except Exception:
+            return False
+
+    def create_stream_state(self) -> dict:
+        state = super().create_stream_state()
+        state["anthropic_current_tool_idx"] = -1
+        return state
+
+    def accumulate_chunk(self, state: dict, chunk_text: str) -> dict:
+        try:
+            j = json.loads(chunk_text or "{}")
+        except Exception:
+            return {}
+
+        etype = str(j.get("type") or "")
+        content_delta = None
+        reasoning_delta = None
+
+        if etype == "content_block_start":
+            cb = j.get("content_block") or {}
+            cb_idx = int(j.get("index") or 0)
+            cb_type = str(cb.get("type") or "")
+            if cb_type == "tool_use":
+                state["anthropic_current_tool_idx"] = cb_idx
+                tool_id = str(cb.get("id") or f"toolu_{cb_idx}")
+                tool_name = str(cb.get("name") or "")
+                state["tool_calls"][cb_idx] = {
+                    "id": tool_id,
+                    "type": "function",
+                    "function": {"name": tool_name, "arguments": ""}
+                }
+
+        elif etype == "content_block_delta":
+            delta = j.get("delta") or {}
+            dtype = str(delta.get("type") or "")
+            if dtype == "text_delta":
+                text = str(delta.get("text") or "")
+                if text:
+                    content_delta = text
+                    state["content_parts"].append(text)
+            elif dtype == "input_json_delta":
+                partial = str(delta.get("partial_json") or "")
+                if partial:
+                    idx = state.get("anthropic_current_tool_idx", -1)
+                    if idx >= 0 and idx in state["tool_calls"]:
+                        state["tool_calls"][idx]["function"]["arguments"] += partial
+
+        elif etype == "message_delta":
+            delta = j.get("delta") or {}
+            sr = str(delta.get("stop_reason") or "")
+            if sr:
+                state["finish_reason"] = "tool_calls" if sr == "tool_use" else sr
+
+        return {
+            "content_delta": content_delta,
+            "reasoning_delta": reasoning_delta,
+        }
+
+
+class GeminiProvider(BaseLLMProvider):
+    """Google Gemini 原生 API 格式（v1beta / v1 generateContent）。"""
+
+    PROVIDER_ID = "gemini"
+
+    def build_request(self, messages, tools=None, temperature=None, max_tokens=None, stream=False):
+        base = self.base_url.rstrip("/")
+        if not base.endswith("/v1") and not base.endswith("/v1beta"):
+            base = base + "/v1"
+        url = f"{base}/models/{self.model}:generateContent"
+        if stream:
+            url = f"{base}/models/{self.model}:streamGenerateContent"
+
+        headers = {
+            "Content-Type": "application/json",
+            "x-goog-api-key": self.api_key,
+        }
+
+        system_instruction = None
+        contents = []
+        for m in messages:
+            if not isinstance(m, dict):
+                continue
+            role = str(m.get("role") or "")
+            content = m.get("content")
+            if role == "system":
+                if isinstance(content, str) and content.strip():
+                    system_instruction = {"parts": [{"text": content}]}
+            elif role in ("user", "model"):
+                gemini_role = "model" if role == "assistant" else "user"
+                parts = []
+                if isinstance(content, str):
+                    parts.append({"text": content})
+                elif isinstance(content, list):
+                    for p in content:
+                        if isinstance(p, dict):
+                            ptype = str(p.get("type") or "")
+                            if ptype == "text":
+                                parts.append({"text": str(p.get("text") or "")})
+                            elif ptype in ("image_url", "image"):
+                                img = p.get("image_url", {}) if isinstance(p.get("image_url"), dict) else p
+                                url = str(img.get("url") or "")
+                                if url.startswith("data:"):
+                                    idx = url.find(",")
+                                    if idx > 0:
+                                        mime = url[5:idx].split(";")[0]
+                                        b64 = url[idx + 1:]
+                                        parts.append({"inline_data": {"mime_type": mime, "data": b64}})
+                if parts:
+                    contents.append({"role": gemini_role, "parts": parts})
+
+        body = {"contents": contents}
+        if system_instruction:
+            body["system_instruction"] = system_instruction
+
+        gen_cfg = {}
+        if temperature is not None:
+            gen_cfg["temperature"] = float(temperature)
+        if max_tokens and max_tokens > 0:
+            gen_cfg["maxOutputTokens"] = max_tokens
+        if gen_cfg:
+            body["generationConfig"] = gen_cfg
+
+        if tools:
+            gemini_funcs = []
+            for t in tools:
+                if not isinstance(t, dict):
+                    continue
+                func = t.get("function", {}) if t.get("type") == "function" else t
+                name = str(func.get("name") or "")
+                desc = str(func.get("description") or "")
+                params = func.get("parameters", {})
+                if not name:
+                    continue
+                gemini_funcs.append({"name": name, "description": desc, "parameters": params})
+            if gemini_funcs:
+                body["tools"] = [{"function_declarations": gemini_funcs}]
+
+        return url, headers, body
+
+    def parse_response(self, raw_body: str) -> dict:
+        data = json.loads(raw_body or "{}")
+        candidates = data.get("candidates")
+        if not isinstance(candidates, list) or not candidates:
+            return {"content": "", "finish_reason": "", "raw": data}
+
+        cand = candidates[0]
+        content = cand.get("content", {})
+        parts = content.get("parts", []) if isinstance(content, dict) else []
+        if not isinstance(parts, list):
+            parts = []
+
+        text_parts = []
+        tool_calls = []
+        for idx, part in enumerate(parts):
+            if not isinstance(part, dict):
+                continue
+            if "text" in part:
+                text_parts.append(str(part.get("text") or ""))
+            elif "functionCall" in part:
+                fc = part.get("functionCall", {})
+                tool_calls.append({
+                    "id": f"gemini_{idx}",
+                    "type": "function",
+                    "function": {
+                        "name": str(fc.get("name") or ""),
+                        "arguments": json.dumps(fc.get("args", {}), ensure_ascii=False),
+                    },
+                })
+
+        finish_reason = str(cand.get("finishReason") or "")
+        fr_lower = finish_reason.lower()
+        if fr_lower == "stop":
+            finish_reason = "stop"
+        elif fr_lower in ("function_call", "tool_call"):
+            finish_reason = "tool_calls"
+        elif fr_lower == "max_tokens":
+            finish_reason = "length"
+
+        result = {
+            "content": "".join(text_parts).strip(),
+            "reasoning_content": "",
+            "finish_reason": finish_reason,
+            "raw": data,
+        }
+        if tool_calls:
+            result["tool_calls"] = tool_calls
+        return result
+
+    def parse_stream_chunk(self, chunk_text: str) -> dict:
+        try:
+            j = json.loads(chunk_text)
+        except Exception:
+            return None
+        result = {}
+
+        candidates = j.get("candidates")
+        if isinstance(candidates, list) and candidates:
+            cand = candidates[0]
+            content = cand.get("content", {})
+            parts = content.get("parts", []) if isinstance(content, dict) else []
+            if isinstance(parts, list):
+                for part in parts:
+                    if isinstance(part, dict) and "text" in part:
+                        t = str(part.get("text") or "")
+                        if t:
+                            result["content_delta"] = t
+                            break
+
+            fr = str(cand.get("finishReason") or "")
+            if fr:
+                fr_lower = fr.lower()
+                if fr_lower == "stop":
+                    result["finish_reason"] = "stop"
+                elif fr_lower in ("function_call", "tool_call"):
+                    result["finish_reason"] = "tool_calls"
+                elif fr_lower == "max_tokens":
+                    result["finish_reason"] = "length"
+
+        return result
+
+    def stream_is_done(self, chunk_text: str) -> bool:
+        return False  # Gemini 通过 HTTP 流结束自动终止
+
+    def accumulate_chunk(self, state: dict, chunk_text: str) -> dict:
+        try:
+            j = json.loads(chunk_text or "{}")
+        except Exception:
+            return {}
+
+        content_delta = None
+        reasoning_delta = None
+
+        candidates = j.get("candidates")
+        if isinstance(candidates, list) and candidates:
+            cand = candidates[0]
+            content = cand.get("content", {})
+            parts = content.get("parts", []) if isinstance(content, dict) else []
+            if isinstance(parts, list):
+                for part in parts:
+                    if isinstance(part, dict):
+                        if "text" in part:
+                            t = str(part.get("text") or "")
+                            if t:
+                                content_delta = t
+                                state["content_parts"].append(t)
+                        elif "functionCall" in part:
+                            fc = part.get("functionCall", {})
+                            name = str(fc.get("name") or "")
+                            args = fc.get("args", {})
+                            if name and isinstance(args, dict):
+                                args_str = json.dumps(args, ensure_ascii=False)
+                                found = False
+                                for idx, tc in state["tool_calls"].items():
+                                    if tc["function"]["name"] == name and tc["function"]["arguments"] == args_str:
+                                        found = True
+                                        break
+                                if not found:
+                                    idx = len(state["tool_calls"])
+                                    state["tool_calls"][idx] = {
+                                        "id": f"gemini_{idx}",
+                                        "type": "function",
+                                        "function": {"name": name, "arguments": args_str}
+                                    }
+
+            fr = str(cand.get("finishReason") or "")
+            if fr:
+                fr_lower = fr.lower()
+                if fr_lower == "stop":
+                    state["finish_reason"] = "stop"
+                elif fr_lower in ("function_call", "tool_call"):
+                    state["finish_reason"] = "tool_calls"
+                elif fr_lower == "max_tokens":
+                    state["finish_reason"] = "length"
+
+        return {
+            "content_delta": content_delta,
+            "reasoning_delta": reasoning_delta,
+        }
+
+
+_PROVIDER_REGISTRY = {
+    OpenAIProvider.PROVIDER_ID: OpenAIProvider,
+    AnthropicProvider.PROVIDER_ID: AnthropicProvider,
+    GeminiProvider.PROVIDER_ID: GeminiProvider,
+}
+
+
+def _get_provider(profile: dict) -> BaseLLMProvider:
+    """根据 profile 配置获取对应的 Provider 实例。"""
+    if not isinstance(profile, dict):
+        return OpenAIProvider({})
+    provider_id = str(profile.get("provider") or "").strip().lower()
+    if not provider_id:
+        provider_id = OpenAIProvider.PROVIDER_ID
+    cls = _PROVIDER_REGISTRY.get(provider_id, OpenAIProvider)
+    return cls(profile)
+
+
+def ai_chat(messages: list, temperature: float | None = None, profile_id: str | None = None, timeout_s: int = 60, stream: bool = False, on_delta=None, tools: list | None = None):
     with ai_config_lock:
         cfg = load_hivo_ai_config()
     prof = _ai_pick_profile(cfg, profile_id)
@@ -7447,20 +8133,17 @@ def ai_chat(messages: list, temperature: float | None = None, profile_id: str | 
     except Exception:
         max_output_tokens = 0
 
-    base_url = str(prof.get("base_url") or prof.get("endpoint") or "").strip()
-    api_key = str(prof.get("api_key") or "")
-    model = str(prof.get("model") or "").strip()
+    provider = _get_provider(prof)
 
-    if not base_url:
+    if not provider.base_url:
         return False, "未配置 API Base URL", None
-    if not model:
+    if not provider.model:
         return False, "未配置 Model", None
     if not isinstance(messages, list) or not messages:
         return False, "messages 为空", None
 
     msgs2 = _ai_trim_messages_to_budget(messages, max_total_tokens=max_input_tokens, reserve_output_tokens=max_output_tokens)
     if msgs2 is None:
-        # Construct a minimal viable context instead of returning an error
         try:
             budget = max(128, int(max_input_tokens or 0) - int(max_output_tokens or 0))
         except Exception:
@@ -7489,57 +8172,33 @@ def ai_chat(messages: list, temperature: float | None = None, profile_id: str | 
     if not msgs2:
         return False, "messages 为空", None
 
-    url = _ai_build_chat_url(base_url)
+    try:
+        tmo = int(timeout_s or 0)
+    except Exception:
+        tmo = 60
+    tmo = max(5, min(120, int(tmo)))
+
+    def _build_req():
+        url, headers, body = provider.build_request(msgs2, tools=tools, temperature=temperature, max_tokens=max_output_tokens, stream=stream)
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        return url, headers, body, req
+
+    url, headers, payload, req = _build_req()
     if not url:
         return False, "API Base URL 非法", None
 
-    payload = {
-        "model": model,
-        "messages": msgs2,
-    }
-    if temperature is not None:
-        try:
-            payload["temperature"] = float(temperature)
-        except Exception as e:
-            logger.debug(f"Exception ignored: {e}")
-    if max_output_tokens > 0:
-        payload["max_tokens"] = max_output_tokens
-        # Some newer APIs prefer max_completion_tokens; send both for compatibility.
-        payload["max_completion_tokens"] = max_output_tokens
-
-    if stream:
-        payload["stream"] = True
-
-    headers = {
-        "Content-Type": "application/json",
-        "User-Agent": "GitManager/1.0",
-    }
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-        # Some APIs (e.g. Anthropic, Together) use x-api-key instead of Bearer.
-        headers["x-api-key"] = api_key
-
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        headers=headers,
-        method="POST",
-    )
-    try:
-        try:
-            tmo = int(timeout_s or 0)
-        except Exception:
-            tmo = 60
-        tmo = max(5, min(120, int(tmo)))
-        with _ai_build_opener().open(req, timeout=tmo) as resp:
+    def _do_request(req_):
+        with _ai_build_opener().open(req_, timeout=tmo) as resp_:
             if stream:
-                # OpenAI-compatible streaming: SSE lines like "data: {json}\n\n" and terminator "data: [DONE]".
-                parts = []
-                reasoning_parts = []
-                finish_reason = ""
+                stream_state = provider.create_stream_state()
                 while True:
                     try:
-                        line_b = resp.readline()
+                        line_b = resp_.readline()
                     except Exception:
                         break
                     if not line_b:
@@ -7550,119 +8209,78 @@ def ai_chat(messages: list, temperature: float | None = None, profile_id: str | 
                     if not line.startswith("data:"):
                         continue
                     chunk = line[len("data:"):].strip()
-                    if chunk == "[DONE]":
+                    if provider.stream_is_done(chunk):
                         break
-                    try:
-                        j = json.loads(chunk)
-                    except Exception:
+                    delta = provider.accumulate_chunk(stream_state, chunk)
+                    if not delta:
                         continue
-                    try:
-                        choice = (j.get("choices") or [{}])[0]
-                        delta = (choice.get("delta") or {})
-                        # Some APIs use .text, .content, or content as an array
-                        delta_content = delta.get("content")
-                        if not delta_content:
-                            delta_content = delta.get("text")
-                        if isinstance(delta_content, list):
-                            delta_content = "".join(str(it.get("text") or "") if isinstance(it, dict) else str(it or "") for it in delta_content)
-                        # reasoning models output content in reasoning/reasoning_content/reasoning_details fields
-                        delta_reasoning = delta.get("reasoning") or delta.get("reasoning_content")
-                        if not delta_reasoning:
-                            rd = delta.get("reasoning_details")
-                            if isinstance(rd, list):
-                                delta_reasoning = "".join(str(it.get("text") or "") for it in rd if isinstance(it, dict))
-                        if delta_reasoning:
-                            reasoning_parts.append(str(delta_reasoning))
-                        fr = str(choice.get("finish_reason") or "")
-                        if fr:
-                            finish_reason = fr
-                    except Exception:
-                        delta_content = None
+                    delta_content = delta.get("content_delta")
+                    delta_reasoning = delta.get("reasoning_delta")
                     if delta_content:
-                        parts.append(str(delta_content))
                         try:
                             if callable(on_delta):
-                                on_delta(str(delta_content))
+                                on_delta({"delta": str(delta_content), "delta_type": "content"})
                         except Exception as e:
                             logger.debug(f"Exception ignored: {e}")
-                    # For reasoning models: send reasoning tokens via on_delta when no content delta is available.
-                    if not delta_content and delta_reasoning:
+                    if delta_reasoning:
                         try:
                             if callable(on_delta):
-                                on_delta(str(delta_reasoning))
+                                on_delta({"delta": str(delta_reasoning), "delta_type": "reasoning"})
                         except Exception as e:
                             logger.debug(f"Exception ignored: {e}")
-                content = "".join(parts)
-                # Fallback: use reasoning content when the model outputs thinking but no final answer.
-                if not content:
-                    content = "".join(reasoning_parts)
-                return True, "", {"content": content, "raw": {"stream": True}, "finish_reason": finish_reason}
+                result = provider.get_stream_result(stream_state)
+                return True, "", result
+            else:
+                raw = resp_.read().decode("utf-8", errors="replace")
+                try:
+                    parsed = provider.parse_response(raw)
+                except Exception as e:
+                    snip = (raw or "").strip()
+                    if snip:
+                        cf_msg = _parse_upstream_error(200, snip)
+                        if cf_msg:
+                            return False, cf_msg, None
+                    if len(snip) > 400:
+                        snip = snip[:400] + "…"
+                    return False, f"上游响应不是有效 JSON: {e}; snippet={snip}", None
+                return True, "", parsed
 
-            raw = resp.read().decode("utf-8", errors="replace")
-            try:
-                data = json.loads(raw or "{}")
-            except Exception as e:
-                snip = (raw or "").strip()
-                # Detect Cloudflare/HTML error pages even on HTTP 200 (some proxies do this).
-                if snip:
-                    cf_msg = _parse_upstream_error(200, snip)
-                    if cf_msg:
-                        return False, cf_msg, None
-                if len(snip) > 400:
-                    snip = snip[:400] + "…"
-                return False, f"上游响应不是有效 JSON: {e}; snippet={snip}", None
+    try:
+        return _do_request(req)
     except urllib.error.HTTPError as e:
         try:
             body = e.read().decode("utf-8", errors="replace")
         except Exception:
             body = ""
         msg = _parse_upstream_error(e.code, body)
-        # 429 速率限制或 5xx 服务端错误：自动重试（指数退避）
         if e.code == 429 or (500 <= e.code < 600):
             for retry_i in range(3):
                 try:
-                    wait_s = min(2 ** retry_i, 8)  # 1s, 2s, 4s
+                    wait_s = min(2 ** retry_i, 8)
                     time.sleep(wait_s)
                     logger.info(f"[ai_chat] 自动重试 {retry_i + 1}/3 (HTTP {e.code})")
-                    req2 = urllib.request.Request(url, data=json.dumps(payload, ensure_ascii=False).encode("utf-8"), headers=headers, method="POST")
-                    with _ai_build_opener().open(req2, timeout=tmo) as resp2:
-                        raw2 = resp2.read().decode("utf-8", errors="replace")
-                        data2 = json.loads(raw2)
-                        msg2 = data2.get("choices", [{}])[0].get("message", {})
-                        content2 = _ai_extract_content(msg2)
-                        finish_reason2 = str(data2.get("choices", [{}])[0].get("finish_reason") or "")
+                    _, _, _, req2 = _build_req()
+                    ok, err_msg, result = _do_request(req2)
+                    if ok:
                         logger.info(f"[ai_chat] 重试成功 (第 {retry_i + 1} 次)")
-                        return True, "", {"content": content2, "raw": data2, "finish_reason": finish_reason2}
+                        return ok, err_msg, result
                 except Exception:
                     continue
         return False, msg, None
     except Exception as e:
-        # 网络超时等瞬时错误：自动重试 1 次
         err_str = str(e).lower()
         if "timeout" in err_str or "timed out" in err_str or "connection" in err_str:
             try:
                 logger.info(f"[ai_chat] 网络错误自动重试: {err_str[:100]}")
                 time.sleep(2)
-                req3 = urllib.request.Request(url, data=json.dumps(payload, ensure_ascii=False).encode("utf-8"), headers=headers, method="POST")
-                with _ai_build_opener().open(req3, timeout=tmo) as resp3:
-                    raw3 = resp3.read().decode("utf-8", errors="replace")
-                    data3 = json.loads(raw3)
-                    msg3 = data3.get("choices", [{}])[0].get("message", {})
-                    content3 = _ai_extract_content(msg3)
-                    finish_reason3 = str(data3.get("choices", [{}])[0].get("finish_reason") or "")
+                _, _, _, req3 = _build_req()
+                ok, err_msg, result = _do_request(req3)
+                if ok:
                     logger.info("[ai_chat] 网络错误重试成功")
-                    return True, "", {"content": content3, "raw": data3, "finish_reason": finish_reason3}
+                    return ok, err_msg, result
             except Exception:
                 pass
         return False, str(e), None
-
-    try:
-        msg = data.get("choices", [{}])[0].get("message", {})
-        content = _ai_extract_content(msg)
-        finish_reason = str(data.get("choices", [{}])[0].get("finish_reason") or "")
-        return True, "", {"content": content, "raw": data, "finish_reason": finish_reason}
-    except Exception:
-        return False, "解析响应失败", None
 
 
 # ════════════════════════════════════════════════════════
@@ -7798,8 +8416,10 @@ class ActionRegistry:
 AGENT_ACTION_REGISTRY = ActionRegistry()
 
 
-def _ai_build_system_context_text(cfg=None):
-    """构建系统提示词（强约束）。可传入 cfg 避免重复 _hivo_load_cfg()。"""
+def _ai_build_system_context_text(cfg=None, use_native_tools=True):
+    """构建系统提示词（强约束）。可传入 cfg 避免重复 _hivo_load_cfg()。
+    use_native_tools: 是否使用原生 function calling（原生模式下精简工具 JSON 描述，避免与 tools 参数冲突）。
+    """
     try:
         spec = get_capabilities_spec()
     except Exception:
@@ -7850,13 +8470,35 @@ def _ai_build_system_context_text(cfg=None):
     except Exception:
         slim = {"version": "", "generated_at": "", "agent_tools": [], "endpoints": []}
 
-    tool_registry = "TOOL_REGISTRY_JSON:\n" + json.dumps(slim, ensure_ascii=False, indent=2)
+    if use_native_tools:
+        slim_registry = {
+            "version": slim.get("version", ""),
+            "generated_at": slim.get("generated_at", ""),
+            "endpoints": slim.get("endpoints", []),
+            "note": "工具定义通过 function calling 传递，此处仅列出 API 端点供参考",
+        }
+        tool_registry = "TOOL_REGISTRY_JSON:\n" + json.dumps(slim_registry, ensure_ascii=False, indent=2)
+    else:
+        tool_registry = "TOOL_REGISTRY_JSON:\n" + json.dumps(slim, ensure_ascii=False, indent=2)
 
     try:
         cfg0 = cfg if isinstance(cfg, dict) and cfg else _hivo_load_cfg()
         extra = str((cfg0.get("system_context_extra") if isinstance(cfg0, dict) else "") or "").strip()
     except Exception:
         extra = ""
+
+    tool_call_section = (
+        "# 工具调用\n"
+        "- 仅使用系统提供的工具，不要臆造工具名或参数\n"
+        "- 每轮最多同时调用 3 个工具\n"
+        "- 工具调用后等待结果返回再继续下一步\n\n"
+        if use_native_tools else
+        "# 工具调用\n"
+        "- 工具定义见 TOOL_REGISTRY_JSON\n"
+        "- 只使用已定义的工具，确保 required 参数完整\n"
+        "- 每轮最多 3 个工具调用，末尾独占一行\n"
+        "- 工具调用后等待回执再进行下一步\n\n"
+    )
 
     strong = (
         "你是 Hivo，Git Manager 系统的智能助手，负责帮助用户管理 Git 仓库和文件操作。\n\n"
@@ -7874,13 +8516,9 @@ def _ai_build_system_context_text(cfg=None):
         "- 复合操作后说明状态并给出后续选项\n\n"
         "# 输出规范\n"
         "- 使用 Markdown 格式\n"
-        "- 可执行命令用 `run-` 前缀标签（如 run-bash、run-python），前端自动渲染运行按钮\n"
+        "- 可执行命令代码块统一用 `run-` 前缀标签，前端自动渲染运行按钮\n"
         "- 收到【用户已执行命令】消息后基于输出内容分析，不重复执行\n\n"
-        "# 工具调用\n"
-        "- 工具定义见 TOOL_REGISTRY_JSON\n"
-        "- 只使用已定义的工具，确保 required 参数完整\n"
-        "- 每轮最多 3 个工具调用，末尾独占一行\n"
-        "- 工具调用后等待回执再进行下一步\n\n"
+        + tool_call_section +
         "# Agent 动作\n"
         "- 使用 action_type 而非 type 区分\n"
         "- 可用动作：\n" + AGENT_ACTION_REGISTRY.build_system_prompt_text(scope="ai_chat") + "\n"
@@ -7929,6 +8567,98 @@ def _hivo_scan_json_objects(text: str, max_objects: int = 10):
                     start = -1
             continue
     return out
+
+
+def _hivo_tools_to_openai_format(agent_tools: list) -> list:
+    """将内部 agent_tools 格式转换为 OpenAI function calling 格式。
+
+    内部格式: {"type": "tool_name", "desc": "...", "required": [...], "properties": {"name": {"type": "...", "desc": "..."}}}
+    OpenAI 格式: {"type": "function", "function": {"name": "...", "description": "...", "parameters": {"type": "object", "properties": {...}, "required": [...]}}}
+    """
+    if not isinstance(agent_tools, list):
+        return []
+    out = []
+    for t in agent_tools:
+        if not isinstance(t, dict):
+            continue
+        name = str(t.get("type") or "").strip()
+        if not name:
+            continue
+        desc = str(t.get("desc") or t.get("description") or "")
+        props_in = t.get("properties") if isinstance(t.get("properties"), dict) else {}
+        required_in = t.get("required") if isinstance(t.get("required"), list) else []
+
+        properties = {}
+        for k, v in props_in.items():
+            if not isinstance(v, dict):
+                continue
+            ptype = str(v.get("type") or "string").strip()
+            pdesc = str(v.get("desc") or v.get("description") or "")
+            prop = {"type": ptype}
+            if pdesc:
+                prop["description"] = pdesc
+            enum = v.get("enum")
+            if isinstance(enum, list) and enum:
+                prop["enum"] = enum
+            properties[str(k)] = prop
+
+        parameters = {"type": "object", "properties": properties}
+        required = [str(x) for x in required_in if str(x).strip() and str(x) in properties]
+        if required:
+            parameters["required"] = required
+
+        out.append({
+            "type": "function",
+            "function": {
+                "name": name,
+                "description": desc,
+                "parameters": parameters,
+            },
+        })
+    return out
+
+
+def _hivo_parse_native_tool_calls(tool_calls: list) -> list:
+    """将原生 function calling 返回的 tool_calls 转换为内部调用格式。
+
+    原生格式: [{"id": "...", "type": "function", "function": {"name": "...", "arguments": "{...}"}}]
+    内部格式: [{"type": "tool_name", ...arg_fields...}]
+    """
+    if not isinstance(tool_calls, list):
+        return []
+    out = []
+    for tc in tool_calls:
+        if not isinstance(tc, dict):
+            continue
+        func = tc.get("function", {}) if tc.get("type") == "function" else tc
+        name = str(func.get("name") or "").strip()
+        if not name:
+            continue
+        args_str = str(func.get("arguments") or "")
+        try:
+            args = json.loads(args_str) if args_str.strip() else {}
+        except Exception:
+            args = {}
+        if not isinstance(args, dict):
+            args = {}
+        call = {"type": name}
+        call.update(args)
+        out.append(call)
+    return out
+
+
+def _hivo_supports_native_tools(profile: dict) -> bool:
+    """判断 profile 配置的模型是否支持原生 function calling。
+
+    目前策略：OpenAI 兼容格式默认支持；Anthropic/Gemini 也支持。
+    只有显式标记 native_tools=false 时才不支持。
+    """
+    if not isinstance(profile, dict):
+        return True
+    nt = profile.get("native_tools")
+    if nt is not None:
+        return bool(nt)
+    return True
 
 
 def _hivo_extract_tool_calls(text: str, max_calls: int = 3):
@@ -9160,6 +9890,7 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
 def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str, history_messages: list | None = None, dyn_context: str = "", undo_gid: str = "", attachments: list | None = None, resume: dict | None = None):
     cfg = _hivo_load_cfg()
     agent_conf = _hivo_agent_conf(cfg)
+    prof = _ai_pick_profile(cfg, profile_id)
     mem_conf = _hivo_mem_conf(cfg)
     feat = cfg.get("features") if isinstance(cfg, dict) else None
     feat = feat if isinstance(feat, dict) else {}
@@ -9170,6 +9901,12 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
     max_rounds = int(cfg.get("max_rounds") or 12)
     max_calls = int(cfg.get("max_tool_calls_per_round") or 3)
     max_hist = int(cfg.get("max_visible_history") or 80)
+
+    try:
+        cap_spec = get_capabilities_spec()
+        agent_tools = (cap_spec.get("agent_tools") or []) if isinstance(cap_spec, dict) else []
+    except Exception:
+        agent_tools = []
 
     try:
         agent_timeout_s = int(cfg.get("agent_timeout_s") or 0)
@@ -9405,20 +10142,30 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
         sys_text = str(agent_conf.get("system_prompt") or "")
     except Exception:
         sys_text = ""
+
+    use_native_tools = _hivo_supports_native_tools(prof) if prof else False
+
     # Always append tool registry so custom prompts never hide available tools (e.g. run_cmd)
     try:
-        tool_ctx = _ai_build_system_context_text(cfg)
+        tool_ctx = _ai_build_system_context_text(cfg, use_native_tools)
     except Exception:
         tool_ctx = ""
     if sys_text.strip() and tool_ctx:
         sys_text = sys_text.strip() + "\n\n" + tool_ctx
     elif not sys_text.strip():
         sys_text = tool_ctx
-    # 追加工具调用格式说明（合并到系统提示，避免独立消息浪费 token）
-    sys_text = sys_text.rstrip() + "\n\n【工具调用格式】务必输出严格 JSON（不要多余文本/注释）。" \
-        "路径不明确时先 find_files/search_code；读取大文件建议用 read_file_range 分段。" \
-        "用户上传的图片已直接内嵌在消息中，无需再调用工具读取。" \
-        "工具名称和参数格式参见上方工具描述。"
+
+    # 追加工具调用相关提示
+    if use_native_tools:
+        sys_text = sys_text.rstrip() + (
+            "\n\n路径不明确时先 find_files/search_code；读取大文件建议用 read_file_range 分段。"
+            "用户上传的图片已直接内嵌在消息中，无需再调用工具读取。"
+        )
+    else:
+        sys_text = sys_text.rstrip() + "\n\n【工具调用格式】务必输出严格 JSON（不要多余文本/注释）。" \
+            "路径不明确时先 find_files/search_code；读取大文件建议用 read_file_range 分段。" \
+            "用户上传的图片已直接内嵌在消息中，无需再调用工具读取。" \
+            "工具名称和参数格式参见上方工具描述。"
     sys0 = {"role": "system", "content": sys_text}
     msgs = [sys0]
     # One-shot resume guidance (runtime-only): when client hints a resume from last assistant error/aborted
@@ -9472,7 +10219,7 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
             profile_id=profile_id,
             timeout_s=min(llm_timeout_s, rem),
             stream=ai_stream_enabled,
-            on_delta=(lambda d: _hivo_ws_emit_delta(run_id, session_id, d)) if ai_stream_enabled else None,
+            on_delta=(lambda d: _hivo_ws_emit_delta(run_id, session_id, d.get("delta", ""), d.get("delta_type", "content"))) if ai_stream_enabled else None,
         )
         if not ok:
             err = msg or "对话失败"
@@ -9504,12 +10251,14 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
         except Exception as e:
             logger.debug(f"Exception ignored: {e}")
         _hivo_ws_emit(run_id, session_id, "done", _hivo_status_message(cfg, "done"))
-        _hivo_ws_emit_final(run_id, session_id, content, ok=True, extra={"rounds": 1, "tool_receipts": pre_receipts, "finish_reason": (result or {}).get("finish_reason", "")})
+        _hivo_ws_emit_final(run_id, session_id, content, ok=True, extra={"rounds": 1, "tool_receipts": pre_receipts, "finish_reason": (result or {}).get("finish_reason", ""), "reasoning_content": (result or {}).get("reasoning_content", "")})
         return True, content, run_id
 
     tool_sig_hist = []
     last_tool_receipts = []
     rep_escalations = 0
+    reasoning_content_hist = ""
+    openai_tools = _hivo_tools_to_openai_format(agent_tools) if (use_native_tools and agent_tools) else None
     for round_i in range(max(1, max_rounds)):
         if _hivo_agent_is_cancelled(run_id):
             final = "已取消执行。"
@@ -9529,13 +10278,15 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
             _hivo_ws_emit_final(run_id, session_id, final, ok=False, extra={"rounds": round_i + 1, "can_continue": True, "continue_reason": "cancelled"})
             return False, final, run_id
         rem = max(5, int(agent_deadline - time.time()))
+
         ok, msg, result = ai_chat(
             msgs,
             temperature=None,
             profile_id=profile_id,
             timeout_s=min(llm_timeout_s, rem),
             stream=ai_stream_enabled,
-            on_delta=(lambda d: _hivo_ws_emit_delta(run_id, session_id, d)) if ai_stream_enabled else None,
+            on_delta=(lambda d: _hivo_ws_emit_delta(run_id, session_id, d.get("delta", ""), d.get("delta_type", "content"))) if ai_stream_enabled else None,
+            tools=openai_tools,
         )
         if not ok:
             err = msg or "对话失败"
@@ -9548,7 +10299,26 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
 
         content = str((result or {}).get("content") or "")
         finish_reason = str((result or {}).get("finish_reason") or "")
-        if not content.strip():
+        native_tool_calls = (result or {}).get("tool_calls")
+        # 累积所有轮次的思考过程，贴合主流 Agent 的单段思考体验
+        _cur_reasoning = str((result or {}).get("reasoning_content") or "")
+        if _cur_reasoning:
+            if reasoning_content_hist:
+                reasoning_content_hist += "\n\n" + _cur_reasoning
+            else:
+                reasoning_content_hist = _cur_reasoning
+
+        calls = []
+        if use_native_tools and isinstance(native_tool_calls, list) and native_tool_calls:
+            calls = _hivo_parse_native_tool_calls(native_tool_calls)
+            if calls:
+                msgs.append({"role": "assistant", "content": content or None, "tool_calls": native_tool_calls})
+            else:
+                msgs.append({"role": "assistant", "content": content})
+        else:
+            msgs.append({"role": "assistant", "content": content})
+
+        if not content.strip() and not calls:
             err = "模型未返回任何内容，请重试或更换模型。"
             _hivo_ws_emit(run_id, session_id, "error", err)
             _hivo_ws_emit_final(run_id, session_id, err, ok=False, extra={"rounds": round_i + 1})
@@ -9565,7 +10335,8 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
             # 后续轮次被截断：可能丢失了工具调用链，但注入提示引导模型收束
             _trunc_warn = "\n\n[系统提示] 上一轮回复因 token 限制被截断，若干工具调用可能不完整。请在当前轮优先给出阶段性结论，必要时使用更少的工具（≤2个）完成剩余任务。"
             content += _trunc_warn
-        calls = _hivo_extract_tool_calls(content, max_calls=max_calls)
+        if not calls:
+            calls = _hivo_extract_tool_calls(content, max_calls=max_calls)
         # ── Agent Actions: extract and forward to frontend ──
         agent_actions = _hivo_extract_agent_actions(content, max_actions=max_calls)
         if agent_actions:
@@ -9596,7 +10367,7 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
                 _hivo_ws_emit(run_id, session_id, "done", _hivo_status_message(cfg, "done"))
                 _hivo_ws_emit_final(run_id, session_id, content, ok=True,
                     extra={"rounds": round_i + 1, "tool_receipts": (pre_receipts + last_tool_receipts) if pre_receipts else last_tool_receipts,
-                           "agent_actions": valid_actions, "finish_reason": finish_reason})
+                           "agent_actions": valid_actions, "finish_reason": finish_reason, "reasoning_content": reasoning_content_hist})
                 return True, content, run_id
             # Invalid actions: treat as no-ops and continue with tool calls
             _trunc_warn = "\n\n[系统提示] 检测到未注册的 Agent Action，已忽略。请使用已注册的动作类型。"
@@ -9633,7 +10404,7 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
             except Exception as e:
                 logger.debug(f"Exception ignored: {e}")
             _hivo_ws_emit(run_id, session_id, "done", _hivo_status_message(cfg, "done"))
-            _hivo_ws_emit_final(run_id, session_id, content, ok=True, extra={"rounds": round_i + 1, "tool_receipts": (pre_receipts + last_tool_receipts) if pre_receipts else last_tool_receipts, "finish_reason": finish_reason})
+            _hivo_ws_emit_final(run_id, session_id, content, ok=True, extra={"rounds": round_i + 1, "tool_receipts": (pre_receipts + last_tool_receipts) if pre_receipts else last_tool_receipts, "finish_reason": finish_reason, "reasoning_content": reasoning_content_hist})
             return True, content, run_id
 
         sig = _hivo_repeat_signature(calls, mode=rep_sig_mode)
@@ -9917,15 +10688,43 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
         except Exception:
             last_tool_receipts = receipts
 
-        msgs.append({"role": "assistant", "content": content})
-        msgs.append({
-            "role": "system",
-            "content": "【工具回执】\n" + receipt_text
-            + "\n\n请基于上述真实结果生成面向用户的自然语言回复：\n"
-            + "- 不要输出回执原文或内部字段（如 'ok', 'msg', 'data'）\n"
-            + "- 若任务完成，直接给出结论；若还需继续，输出下一步的工具 JSON\n"
-            + "- 若回执中有错误或失败，向用户说明原因并建议替代方案"
-        })
+        if use_native_tools and isinstance(native_tool_calls, list) and native_tool_calls:
+            # 原生工具调用：先添加 assistant 消息（带 tool_calls），再添加对应 tool 消息
+            msgs.append({
+                "role": "assistant",
+                "content": content or "",
+                "tool_calls": native_tool_calls,
+            })
+            for idx, tc in enumerate(native_tool_calls):
+                tc_id = str(tc.get("id") or f"call_{idx}")
+                tc_name = str((tc.get("function") or {}).get("name") or "")
+                receipt_content = receipt_text
+                if idx < len(receipts):
+                    r = receipts[idx]
+                    ok1 = bool(r.get("ok"))
+                    detail = str(r.get("msg") or "")
+                    data1 = r.get("data") if isinstance(r.get("data"), dict) else {}
+                    receipt_content = json.dumps({
+                        "ok": ok1,
+                        "msg": detail,
+                        "data": data1,
+                    }, ensure_ascii=False)
+                msgs.append({
+                    "role": "tool",
+                    "tool_call_id": tc_id,
+                    "name": tc_name,
+                    "content": receipt_content,
+                })
+        else:
+            msgs.append({"role": "assistant", "content": content})
+            msgs.append({
+                "role": "system",
+                "content": "【工具回执】\n" + receipt_text
+                + "\n\n请基于上述真实结果生成面向用户的自然语言回复：\n"
+                + "- 不要输出回执原文或内部字段（如 'ok', 'msg', 'data'）\n"
+                + "- 若任务完成，直接给出结论；若还需继续，输出下一步的工具 JSON\n"
+                + "- 若回执中有错误或失败，向用户说明原因并建议替代方案"
+            })
 
     final = "已达到最大轮次，任务仍未完成。请你缩小问题范围或补充信息后重试。"
     _hivo_ws_emit(run_id, session_id, "error", "达到最大轮次")

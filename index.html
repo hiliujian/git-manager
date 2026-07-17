@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
@@ -2254,7 +2254,7 @@ flex-shrink:0;cursor:pointer;
     
     /* 删除不再使用的样式 */
 
-    .ai-chat{flex:1;overflow:auto;padding:8px;display:flex;flex-direction:column;gap:6px;}
+    .ai-chat{flex:1;overflow:auto;padding:8px;display:flex;flex-direction:column;gap:6px;scrollbar-gutter:stable;}
     .ai-chat-inner{width:100%;max-width:880px;margin:0 auto;display:flex;flex-direction:column;gap:6px;}
     .ai-empty{flex:1;min-height:260px;display:flex;align-items:center;justify-content:center;}
     .ai-empty-card{width:100%;max-width:560px;border-radius:14px;padding:18px 16px;
@@ -3374,6 +3374,14 @@ flex-shrink:0;cursor:pointer;
                 </div>
                 <form class="ai-form">
                   <input type="text" name="username" autocomplete="username" style="display:none">
+                  <div>
+                    <label>Provider</label>
+                    <select id="aiProfProvider" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg2);color:var(--text1);font-size:13px;outline:none;">
+                      <option value="openai">OpenAI 兼容 (OpenAI / Azure / vLLM / Ollama / Qwen / DeepSeek 等)</option>
+                      <option value="anthropic">Anthropic Claude 原生 API</option>
+                      <option value="gemini">Google Gemini 原生 API</option>
+                    </select>
+                  </div>
                   <div>
                     <label>API Base URL</label>
                     <input id="aiProfBaseUrl" type="text" placeholder="https://api.openai.com" autocomplete="url" />
@@ -5602,7 +5610,7 @@ flex-shrink:0;cursor:pointer;
     }
     // one bubble: pending assistant content will be updated via websocket
     const msgIdA = 'a-' + rid0;
-    const pending = { id: msgIdA, role: 'assistant', content: '发送中...', pending: true, stage: 'sending' };
+    const pending = { id: msgIdA, role: 'assistant', content: '发送中...', thinking_content: '', pending: true, stage: 'sending' };
     __gmAiChatMessages.push(pending);
     __gmAiRenderChat();
     try { __gmAiRefreshSendCounter(); } catch (eC0) {}
@@ -6276,6 +6284,17 @@ flex-shrink:0;cursor:pointer;
           if (act === 'selectAiProfile') { e.preventDefault(); selectAiProfile(String(el.getAttribute('data-id') || '')); return; }
           if (act === 'editAiSearchProfile') { e.preventDefault(); editAiSearchProfile(String(el.getAttribute('data-id') || '')); return; }
           if (act === 'aiDeleteMsg') { e.preventDefault(); aiDeleteMsg(parseInt(String(el.getAttribute('data-idx') || ''), 10)); return; }
+          if (act === 'aiToggleThinking') {
+            e.preventDefault();
+            try {
+              const idx = parseInt(String(el.getAttribute('data-idx') || ''), 10);
+              const msg = (__gmAiChatMessages && __gmAiChatMessages[idx]) || null;
+              if (!msg) return;
+              msg.thinking_collapsed = !msg.thinking_collapsed;
+              __gmAiRenderChat();
+            } catch(_){ }
+            return;
+          }
           if (act === 'aiShowToolSummary') { e.preventDefault(); try { (window.aiShowToolSummary||aiShowToolSummary)(e, el); } catch(err){ } return; }
           if (act === 'aiToggleToolItem') {
             e.preventDefault();
@@ -14648,15 +14667,27 @@ flex-shrink:0;cursor:pointer;
           try { if (__gmAiCancelledRunIds && __gmAiCancelledRunIds.has(runId)) { break; } } catch(_) {}
           const delta = String(data.delta || '');
           if (!delta) break;
+          const deltaType = String(data.delta_type || 'content');
           for (let i = __gmAiChatMessages.length - 1; i >= 0; i--) {
             const m = __gmAiChatMessages[i];
             if (m && m.role === 'assistant' && m.pending && String(m.run_id || '') === runId) {
-              // First delta should replace any pending status text (e.g. "思考中...").
-              if (!m.stream_started) {
-                m.stream_started = true;
-                m.content = delta;
+              if (typeof m.thinking_content !== 'string') m.thinking_content = '';
+              if (deltaType === 'reasoning') {
+                // 思考过程追加到 thinking_content
+                if (!m.thinking_stream_started) {
+                  m.thinking_stream_started = true;
+                  m.thinking_content = delta;
+                } else {
+                  m.thinking_content = String(m.thinking_content || '') + delta;
+                }
               } else {
-                m.content = String(m.content || '') + delta;
+                // 正式内容追加到 content
+                if (!m.stream_started) {
+                  m.stream_started = true;
+                  m.content = delta;
+                } else {
+                  m.content = String(m.content || '') + delta;
+                }
               }
               m.stage = 'streaming';
               // RAF-coalesced render: schedule at most one render per animation frame
@@ -14703,6 +14734,12 @@ flex-shrink:0;cursor:pointer;
                 if (finalContent) m.content = finalContent;
                 // If no content in final event but streaming already delivered content, keep it.
                 if (!m.content) m.content = '对话已完成（无内容）';
+                // 同步思考过程
+                const finalReasoning = String(data.reasoning_content || '');
+                if (typeof m.thinking_content !== 'string') m.thinking_content = '';
+                if (finalReasoning) m.thinking_content = finalReasoning;
+                // 回答完成后自动折叠思考过程
+                if (m.thinking_content) m.thinking_collapsed = true;
               }
               try { if (Array.isArray(data.tool_receipts)) m.tool_receipts = data.tool_receipts; } catch(_){ }
               try { if (Array.isArray(data.agent_actions)) m.agent_actions = data.agent_actions; } catch(_){ }
@@ -15767,7 +15804,9 @@ flex-shrink:0;cursor:pointer;
           ? baseForSig.map(a => String(a && a.name || '')).join('|').slice(0, 200)
           : '';
         const effAttLen = isUser ? (attachments.length ? attachments.length : metaLen0) : 0;
-        const sig = `${role}|${isPending ? 1 : 0}|${isError ? 1 : 0}|${userLoading ? 1 : 0}|${isHidden ? 1 : 0}|${content}|${effAttLen}|${attShownSig}|${attNamesSig}`;
+        const thinkingContent = String(m && m.thinking_content ? m.thinking_content : '');
+        const thinkingCollapsed = !!(m && m.thinking_collapsed);
+        const sig = `${role}|${isPending ? 1 : 0}|${isError ? 1 : 0}|${userLoading ? 1 : 0}|${isHidden ? 1 : 0}|${content}|${thinkingContent}|${thinkingCollapsed ? 1 : 0}|${effAttLen}|${attShownSig}|${attNamesSig}`;
         nextCache.push(sig);
         try { if (__gmAiDebug && isUser) { __gmDbg('render sig', { idx, effAttLen, metaLen0, attLen: attachments.length, attNamesSig, shown: attShownSig, hidden: isHidden }); } } catch (eDbgRS) {}
 
@@ -15844,16 +15883,10 @@ flex-shrink:0;cursor:pointer;
             }
           }
           
-          // 仅当存在非 attachments 的工具调用时显示按钮；若当前没有，则回退到相邻消息
-          let trCurr = (m && Array.isArray(m.tool_receipts)) ? m.tool_receipts : [];
-          
-          let trPrev = [];
-          try { if (idx > 0 && __gmAiChatMessages && Array.isArray(__gmAiChatMessages[idx-1] && __gmAiChatMessages[idx-1].tool_receipts)) { trPrev = __gmAiChatMessages[idx-1].tool_receipts; } } catch(_){ }
-          let trNext = [];
-          try { if (__gmAiChatMessages && Array.isArray(__gmAiChatMessages[idx+1] && __gmAiChatMessages[idx+1].tool_receipts)) { trNext = __gmAiChatMessages[idx+1].tool_receipts; } } catch(_){ }
-          const effective = ([]).concat(trCurr || [], trPrev || [], trNext || []).filter(r => String(r && r.type || '') !== 'attachments');
+          // 仅 AI 消息且存在非 attachments 的工具调用时显示按钮
+          let trCurr = (!isUser && m && Array.isArray(m.tool_receipts)) ? m.tool_receipts : [];
+          const effective = (trCurr || []).filter(r => String(r && r.type || '') !== 'attachments');
           const hasRealTools = (effective.length > 0);
-          try { if (__gmAiDebug) { __gmDbg('tool-btn check', { idx, isUser, trCurrLen: (trCurr||[]).length, trPrevLen: (trPrev||[]).length, trNextLen: (trNext||[]).length, effectiveLen: effective.length, hasRealTools }); } } catch(_){ }
           const toolBtn = hasRealTools
             ? `<button title="工具摘要" data-action="aiShowToolSummary" data-idx="${idx}">☰</button>`
             : '';
@@ -15871,7 +15904,21 @@ flex-shrink:0;cursor:pointer;
               +'<div class="ai-cmd-out ' + stCls + '">' + esc(cmdRes.output || '(\u65e0\u8f93\u51fa)') + '</div>'
               +'</div></div>';
           } else {
-          node.innerHTML = `<div class="ai-meta">${esc(isUser ? '你' : 'AI')}</div><div class="ai-bubble${userLoading ? ' user-loading' : ''}${isPending ? ' pending' : ''}${isError ? ' ai-error' : ''}"><div class="ai-msg-actions">${toolBtn}<button title="删除" data-action="aiDeleteMsg" data-idx="${idx}">×</button></div>${attachmentsHtml}<div class="ai-md">${isPending ? esc(content) : aiRenderMarkdown(content)}</div></div>`;
+          const thinkingHidden = thinkingCollapsed ? 'display:none;' : '';
+          const thinkingIcon = thinkingCollapsed ? '+' : '−';
+          const thinkingHtml = (!isUser && thinkingContent)
+            ? `<div class="ai-thinking-wrap" style="margin-bottom:10px;">
+                 <span class="ai-thinking-tag" data-action="aiToggleThinking" data-idx="${idx}" style="display:inline-flex;align-items:center;justify-content:center;gap:4px;padding:2px 8px;border-radius:4px;background:rgba(120,120,120,0.08);color:var(--text2);font-size:12px;cursor:pointer;user-select:none;opacity:0.75;line-height:1.4;">
+                   <span style="font-size:12px;line-height:1;display:inline-flex;align-items:center;justify-content:center;width:12px;height:12px;">${thinkingIcon}</span>
+                   <span>思考过程</span>
+                   <span style="opacity:0.6;">· ${thinkingContent.length} 字</span>
+                 </span>
+                 <div class="ai-thinking-body" style="${thinkingHidden}margin-top:6px;padding:8px 12px;border-radius:6px;background:rgba(120,120,120,0.04);color:var(--text2);font-size:12px;line-height:1.6;user-select:text;border:1px solid rgba(120,120,120,0.08);">
+                   <div class="ai-thinking-content" style="white-space:pre-wrap;">${esc(thinkingContent)}</div>
+                 </div>
+               </div>`
+            : '';
+          node.innerHTML = `<div class="ai-meta">${esc(isUser ? '你' : 'AI')}</div><div class="ai-bubble${userLoading ? ' user-loading' : ''}${isPending ? ' pending' : ''}${isError ? ' ai-error' : ''}"><div class="ai-msg-actions">${toolBtn}<button title="删除" data-action="aiDeleteMsg" data-idx="${idx}">×</button></div>${attachmentsHtml}${thinkingHtml}<div class="ai-md">${isPending ? esc(content) : aiRenderMarkdown(content)}</div></div>`;
           }
           try { __gmAiEnhanceCodeBlocks(node); } catch (eEnh) {}
           try { if (!isPending) __gmAiEnhanceLinkChips(node); } catch (eChip) {}
@@ -15931,6 +15978,10 @@ flex-shrink:0;cursor:pointer;
                 try {
                   const st = String(m && m.stage || '');
                   if (st) item.stage = st;
+                } catch(_) {}
+                try {
+                  const tc = String(m && m.thinking_content || '');
+                  if (tc) item.thinking_content = tc;
                 } catch(_) {}
                 try {
                   const tr = Array.isArray(m && m.tool_receipts) ? m.tool_receipts : [];
@@ -17324,10 +17375,12 @@ flex-shrink:0;cursor:pointer;
       if (!pid) return;
       const idx = (__gmAiConfig.profiles || []).findIndex(p => p && String(p.id || '') === pid);
       if (idx < 0) return;
+      const prov = document.getElementById('aiProfProvider');
       const base = document.getElementById('aiProfBaseUrl');
       const key = document.getElementById('aiApiKey');
       const model = document.getElementById('aiModel');
       const p = __gmAiConfig.profiles[idx];
+      p.provider = prov ? String(prov.value || '') : 'openai';
       p.base_url = base ? String(base.value || '') : '';
       p.api_key = key ? String(key.value || '') : '';
       p.model = model ? String(model.value || '') : '';
@@ -17714,10 +17767,12 @@ flex-shrink:0;cursor:pointer;
         const card = document.getElementById('aiProfileEditorCard');
         if (card) card.style.display = (p && typeof p === 'object' && (p.id || __gmAiEditingProfileId)) ? '' : 'none';
       } catch (eC0) {}
+      const prov = document.getElementById('aiProfProvider');
       const base = document.getElementById('aiProfBaseUrl');
       const key = document.getElementById('aiApiKey');
       const model = document.getElementById('aiModel');
       const del = document.getElementById('aiDeleteProfileBtn');
+      if (prov) prov.value = String((p && p.provider) || 'openai');
       if (base) base.value = String((p && p.base_url) || '');
       if (key) key.value = String((p && p.api_key) || '');
       if (model) model.value = String((p && p.model) || '');
@@ -17727,6 +17782,7 @@ flex-shrink:0;cursor:pointer;
         const m = window.__gmAiProfileDrafts;
         const d = (m && pid && typeof m === 'object') ? m[pid] : null;
         if (d && typeof d === 'object') {
+          if (prov && d.provider !== undefined) prov.value = String(d.provider || 'openai');
           if (base && d.base_url !== undefined) base.value = String(d.base_url || '');
           if (key && d.api_key !== undefined) key.value = String(d.api_key || '');
           if (model && d.model !== undefined) model.value = String(d.model || '');
@@ -17741,10 +17797,12 @@ flex-shrink:0;cursor:pointer;
       const pid = String(__gmAiEditingProfileId || '').trim();
       if (!pid) return;
       if (!window.__gmAiProfileDrafts || typeof window.__gmAiProfileDrafts !== 'object') window.__gmAiProfileDrafts = {};
+      const prov = document.getElementById('aiProfProvider');
       const base = document.getElementById('aiProfBaseUrl');
       const key = document.getElementById('aiApiKey');
       const model = document.getElementById('aiModel');
       window.__gmAiProfileDrafts[pid] = {
+        provider: prov ? String(prov.value || '') : 'openai',
         base_url: base ? String(base.value || '') : '',
         api_key: key ? String(key.value || '') : '',
         model: model ? String(model.value || '') : '',
@@ -19446,10 +19504,21 @@ flex-shrink:0;cursor:pointer;
             if (!m || String(m.role||'') !== 'assistant') continue;
             // Default stage to done if missing
             try { if (!m.stage) m.stage = 'done'; } catch(_){ }
+            // 有思考过程时默认折叠
+            try { if (m.thinking_content && !('thinking_collapsed' in m)) m.thinking_collapsed = true; } catch(_){ }
           }
         } catch(_){ }
         try { __gmAiHydrateAttachmentsFromCache(); } catch (eHyd) {}
         __gmAiRenderChat();
+        // 切换会话后强制滚动到底部（等一帧确保渲染完成）
+        try {
+          requestAnimationFrame(() => {
+            try {
+              const outer = document.getElementById('aiChatList');
+              if (outer) outer.scrollTop = outer.scrollHeight;
+            } catch (eScr2) {}
+          });
+        } catch (eScr) {}
         try {
           const msgs0 = Array.isArray(__gmAiChatMessages) ? __gmAiChatMessages : [];
           let lastA = null;
