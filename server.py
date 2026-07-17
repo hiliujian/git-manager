@@ -9509,7 +9509,11 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
     if tool_mem_block:
         msgs.append({"role": "system", "content": tool_mem_block})
     if dyn_context and str(dyn_context).strip():
-        msgs.append({"role": "system", "content": str(dyn_context)})
+        # 限制 dyn_context 长度，避免占满输入 token 预算
+        _dyn = str(dyn_context).strip()
+        if len(_dyn) > 20000:
+            _dyn = _dyn[:20000] + "\n...（动态上下文已截断）..."
+        msgs.append({"role": "system", "content": _dyn})
     msgs.extend(hist)
 
     _hivo_ws_emit(run_id, session_id, "sending", _hivo_status_message(cfg, "sending"))
@@ -12302,6 +12306,32 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json({"ok": False, "msg": msg or "撤销失败", "group_id": gid}, 500)
                     return
                 self.send_json({"ok": True, "group_id": gid, "noop": False, "applied": True})
+
+            elif p == "/api/ai_trim_session_chat":
+                # 撤回时清理后端 session memory 中指定数量的对话记录
+                logger.info("处理 /api/ai_trim_session_chat 请求")
+                sid = ""
+                trim_count = 0
+                try:
+                    if isinstance(data, dict):
+                        sid = str(data.get("session_id") or "").strip()
+                        trim_count = int(data.get("trim_count") or 0)
+                except Exception:
+                    sid = ""
+                if not sid:
+                    self.send_json({"ok": False, "msg": "缺少 session_id"}, 400)
+                    return
+                try:
+                    st = _hivo_get_session_state(sid)
+                    chat = st.get("chat") if isinstance(st.get("chat"), list) else []
+                    if trim_count > 0 and trim_count <= len(chat):
+                        st["chat"] = chat[:len(chat) - trim_count]
+                    elif trim_count > 0 and trim_count >= len(chat):
+                        st["chat"] = []
+                    self.send_json({"ok": True, "remaining": len(st.get("chat") or [])})
+                except Exception as e:
+                    self.send_json({"ok": False, "error": str(e)}, 500)
+
 
             elif p == "/api/undo_clear":
                 logger.info("处理 /api/undo_clear 请求")

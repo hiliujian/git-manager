@@ -2133,26 +2133,26 @@ flex-shrink:0;cursor:pointer;
     .ai-token-btn:hover{background:var(--bg4);border-color:var(--border);color:var(--accent);}
     .ai-token-btn svg{width:12px;height:12px;display:block;margin:0 auto;}
     /* Token 用量弹窗 */
-    .ai-token-popup{display:none;position:fixed;z-index:2200;width:auto;
+    .ai-token-popup{display:none;position:fixed;z-index:2200;width:auto;max-height:320px;overflow:hidden;
       background:rgba(26,28,36,.96);border:1px solid rgba(61,66,98,.85);border-radius:12px;
       box-shadow:0 22px 60px rgba(0,0,0,0.55);padding:12px 14px;font-size:12px;color:var(--text);
-      backdrop-filter:blur(10px);}
-    .ai-token-popup.show{display:block;}
+      backdrop-filter:blur(10px);flex-direction:column;}
+    .ai-token-popup.show{display:flex;}
     .ai-token-popup .ai-token-title{display:flex;justify-content:space-between;align-items:center;
-      margin-bottom:6px;font-weight:700;font-size:13px;}
-    .ai-token-popup .ai-token-bar-bg{margin-bottom:8px;height:5px;border-radius:999px;
+      margin-bottom:6px;font-weight:700;font-size:13px;flex-shrink:0;}
+    .ai-token-popup .ai-token-bar-bg{margin-bottom:8px;height:5px;border-radius:999px;flex-shrink:0;
       background:var(--bg4);overflow:hidden;}
     .ai-token-popup .ai-token-bar-fill{height:100%;border-radius:999px;background:var(--accent);
       transition:width 0.3s ease;}
     .ai-token-popup .ai-token-bar-fill.warn{background:var(--warn);}
     .ai-token-popup .ai-token-bar-fill.danger{background:var(--danger);}
-    .ai-token-popup .ai-token-list{max-height:180px;overflow-y:auto;}
+    .ai-token-popup .ai-token-list{flex:1;min-height:0;max-height:180px;overflow-y:auto;}
     .ai-token-popup .ai-token-row{display:flex;gap:12px;padding:3px 0;}
     .ai-token-popup .ai-token-col{flex:1;display:flex;justify-content:space-between;color:var(--text2);min-width:0;}
     .ai-token-popup .ai-token-col .ai-token-col-label{flex-shrink:0;margin-right:4px;color:var(--text2);}
     .ai-token-popup .ai-token-col span:last-child{font-variant-numeric:tabular-nums;
       color:var(--text);font-weight:500;}
-    .ai-token-popup .ai-token-footnote{font-size:10px;color:var(--text3);
+    .ai-token-popup .ai-token-footnote{font-size:10px;color:var(--text3);flex-shrink:0;
       margin-top:6px;border-top:1px solid rgba(255,255,255,0.06);padding-top:6px;}
 
     /* 对话内搜索栏 */
@@ -16208,6 +16208,7 @@ flex-shrink:0;cursor:pointer;
 
       let undoOk = false;
       let undoNoop = false;
+      let undoFailed = false;
       try {
         if (undoGidForTurn) {
           const u = await POST('/api/undo', { group_id: undoGidForTurn });
@@ -16216,6 +16217,7 @@ flex-shrink:0;cursor:pointer;
           undoOk = Boolean(u && u.ok) && (!undoNoop) && (u.applied !== false);
           if (!undoOk && !undoNoop) {
             toast('撤销失败：' + (m || '撤销失败'), 'err');
+            undoFailed = true;
           }
         } else {
           const sid = String(__gmAiActiveSessionId || '').trim();
@@ -16226,10 +16228,14 @@ flex-shrink:0;cursor:pointer;
             undoOk = Boolean(u && u.ok) && (!undoNoop) && (u.applied !== false);
             if (!undoOk && !undoNoop) {
               toast('撤销失败：' + (m || '撤销失败'), 'err');
+              undoFailed = true;
             }
           }
         }
       } catch (eU) {}
+
+      // 撤销失败时直接返回，不继续执行撤回逻辑，避免前后端状态不一致
+      if (undoFailed) return;
 
       // Even if there is no data undo available, still allow reverting the chat turn.
       if (!undoGidForTurn) {
@@ -16252,13 +16258,48 @@ flex-shrink:0;cursor:pointer;
           const valid = (att || []).filter(a => a && (a.path || a.url || (typeof a.text==='string' && a.text)) ).map(a => ({ name: a.name||'file', mime: a.mime||'', size: a.size||0, path: a.path||'', url: a.url||'', text: a.text }));
           if (valid.length) {
             const pend = Array.isArray(__gmAiPendingAttachments) ? __gmAiPendingAttachments : [];
-            __gmAiPendingAttachments = pend.concat(valid);
+            // 去重：按 url 或 path 判断是否已存在
+            const existKeys = new Set(pend.map(a => String(a.url || a.path || a.name || '')));
+            const newOnes = valid.filter(a => !existKeys.has(String(a.url || a.path || a.name || '')));
+            __gmAiPendingAttachments = pend.concat(newOnes);
             try { __gmAiRenderAttachList(); } catch(_){ }
           }
         } catch(_){ }
         msgs.splice(lastUser);
         __gmAiRenderChat();
         await __gmAiSaveHistoryNow();
+
+        // 通知后端清理 session memory 中对应的对话记录
+        try {
+          const sid = String(__gmAiActiveSessionId || '').trim();
+          if (sid) {
+            // 撤回一轮 = 2 条消息（user + assistant），清理后端内存中相同数量
+            POST('/api/ai_trim_session_chat', { session_id: sid, trim_count: 2 }).catch(() => {});
+          }
+        } catch (_) {}
+
+        // 清理 localStorage 中该轮的附件缓存
+        try {
+          const sid = String(__gmAiActiveSessionId || '').trim();
+          const cacheKey = __gmAiAttCacheKey(sid);
+          if (undoGidForTurn) {
+            const map = (() => { try { return JSON.parse(localStorage.getItem(cacheKey) || '{}') || {}; } catch (e) { return {}; } })();
+            delete map[undoGidForTurn];
+            localStorage.setItem(cacheKey, JSON.stringify(map));
+          }
+          // 清理 by-content 缓存中该用户消息对应的条目
+          const byContentKey = __gmAiAttByContentKey(sid);
+          const fullByKey = __gmAiAttFullByContentKey(sid);
+          const userContentKey = 'user|' + __gmAiContentKeyNorm(lastUserText);
+          for (const ck of [byContentKey, fullByKey]) {
+            const m = (() => { try { return JSON.parse(localStorage.getItem(ck) || '{}') || {}; } catch (e) { return {}; } })();
+            if (m[userContentKey]) { delete m[userContentKey]; localStorage.setItem(ck, JSON.stringify(m)); }
+          }
+        } catch (_) {}
+
+        // 刷新工作区视图，确保前端文件状态与实际一致
+        try { await refresh(); } catch (_) {}
+
         try {
           if (!__gmAiChatMessages.length) __gmAiLastUndoSteps = 0;
           __gmAiRefreshSendCounter();
@@ -16453,8 +16494,8 @@ flex-shrink:0;cursor:pointer;
       for (const d of details) totalTokens += (d.tok || 0);
       const pct = Math.min(100, Math.round(totalTokens / AI_MAX_TOKENS * 100));
       const barCls = pct >= 90 ? 'danger' : pct >= 70 ? 'warn' : '';
-      // 最近 10 条，逆序（最新在前），两两配对成一行
-      const recent = details.slice(-10).reverse();
+      // 全部消息，逆序（最新在前），两两配对成一行
+      const recent = details.slice().reverse();
       const pairs = [];
       for (let i = 0; i < recent.length; i += 2) {
         pairs.push({ a: recent[i], b: recent[i + 1] || null });
@@ -19462,7 +19503,11 @@ flex-shrink:0;cursor:pointer;
       let refsIndex = [];
       try {
         const t = String(userText || '');
-        const m = t.match(/@[^\u007f\s]+|@[^\s]+/g) || [];
+        const m = (t.match(/@[^\u007f\s]+|@[^\s]+/g) || []).filter(s => {
+          // 排除 email 地址（@ 前面有 . 或字母数字组合且后面有 .）
+          if (/^\w[\w.]*@\w+\.\w+/.test(s)) return false;
+          return true;
+        });
         refsIndex = Array.from(new Set(m.map(x => String(x || '').trim().slice(1)).filter(Boolean))).slice(0, 8);
       } catch (e4b) { refsIndex = []; }
 
