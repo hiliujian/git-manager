@@ -15912,12 +15912,12 @@ flex-shrink:0;cursor:pointer;
           const thinkingIcon = thinkingCollapsed ? '+' : '−';
           const thinkingHtml = (!isUser && thinkingContent)
             ? `<div class="ai-thinking-wrap" style="margin-bottom:10px;">
-                 <span class="ai-thinking-tag" data-action="aiToggleThinking" data-idx="${idx}" style="display:inline-flex;align-items:center;justify-content:center;gap:4px;padding:2px 8px;border-radius:4px;background:rgba(120,120,120,0.08);color:var(--text2);font-size:12px;cursor:pointer;user-select:none;opacity:0.75;line-height:1.4;">
-                   <span style="font-size:12px;line-height:1;display:inline-flex;align-items:center;justify-content:center;width:12px;height:12px;">${thinkingIcon}</span>
+                 <span class="ai-thinking-tag" data-action="aiToggleThinking" data-idx="${idx}" style="display:inline-flex;align-items:center;justify-content:center;gap:4px;padding:2px 8px;border-radius:4px;background:rgba(120,120,120,0.08);color:var(--text2);font-size:11px;cursor:pointer;user-select:none;opacity:0.75;line-height:1.4;">
+                   <span style="font-size:11px;line-height:1;display:inline-flex;align-items:center;justify-content:center;width:11px;height:11px;">${thinkingIcon}</span>
                    <span>思考过程</span>
                    <span style="opacity:0.6;">· ${thinkingContent.length} 字</span>
                  </span>
-                 <div class="ai-thinking-body" style="${thinkingHidden}margin-top:6px;padding:8px 12px;border-radius:6px;background:rgba(120,120,120,0.04);color:var(--text2);font-size:12px;line-height:1.6;user-select:text;border:1px solid rgba(120,120,120,0.08);">
+                 <div class="ai-thinking-body" style="${thinkingHidden}margin-top:6px;padding:8px 12px;border-radius:6px;background:rgba(120,120,120,0.04);color:var(--text2);font-size:11px;line-height:1.6;user-select:text;border:1px solid rgba(120,120,120,0.08);">
                    <div class="ai-thinking-content" style="white-space:pre-wrap;">${esc(thinkingContent)}</div>
                  </div>
                </div>`
