@@ -14587,6 +14587,10 @@ flex-shrink:0;cursor:pointer;
               }
               m.stage = stage;
               const msg = String(data.message || '');
+              // 新一轮思考或执行工具时，重置 stream_started 让状态文本能正常显示
+              if (stage === 'thinking' || stage === 'executing') {
+                try { m.stream_started = false; } catch(_) {}
+              }
               // If streaming already started for this message, do NOT overwrite its content with status text.
               if (!m.stream_started) {
                 if (msg) m.content = __gmAiNormalizePendingStatusText(msg);

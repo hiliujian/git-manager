@@ -1443,9 +1443,6 @@ def _hivo_status_message(cfg: dict, stage: str, **kwargs):
         if not base:
             base = st
 
-        if st == "thinking":
-            return base
-
         if st == "executing":
             n = kwargs.get("tool_count")
             if isinstance(n, int) and n >= 0:
