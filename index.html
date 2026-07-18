@@ -2233,7 +2233,7 @@ flex-shrink:0;cursor:pointer;
     .ai-model-name{font-size:11px;color:var(--text2);font-weight:500;max-width:100%;
       white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex:1;}
 
-    .ai-model-menu{position:fixed;z-index:2200;min-width:var(--ai-menu-minw);max-width:var(--ai-menu-maxw);display:none;
+    .ai-model-menu{position:fixed;z-index:2200;min-width:var(--ai-menu-minw);max-width:var(--ai-menu-maxw);max-height:320px;display:none;
       background:rgba(26,28,36,.96);border:1px solid rgba(61,66,98,.85);border-radius:12px;
       box-shadow:0 22px 60px rgba(0,0,0,0.55);padding:6px;backdrop-filter: blur(10px);
       overflow-y:auto;overflow-x:hidden;}
@@ -2251,8 +2251,6 @@ flex-shrink:0;cursor:pointer;
     .ai-model-mi .sub{display:none;}
     .ai-model-sep{height:1px;background:rgba(255,255,255,0.08);margin:6px 6px;}
     [data-theme="light"] .ai-model-sep{background:rgba(0,0,0,0.08);}
-    
-    /* 删除不再使用的样式 */
 
     .ai-chat{flex:1;overflow:auto;padding:8px;display:flex;flex-direction:column;gap:6px;scrollbar-gutter:stable;}
     .ai-chat-inner{width:100%;max-width:880px;margin:0 auto;display:flex;flex-direction:column;gap:6px;}
@@ -3376,12 +3374,9 @@ flex-shrink:0;cursor:pointer;
                   <input type="text" name="username" autocomplete="username" style="display:none">
                   <div>
                     <label>Provider</label>
-                    <select id="aiProfProvider" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg2);color:var(--text1);font-size:13px;outline:none;">
-                      <option value="openai">OpenAI 兼容 (OpenAI / Azure / vLLM / Ollama / Qwen / DeepSeek 等)</option>
-                      <option value="anthropic">Anthropic Claude 原生 API</option>
-                      <option value="gemini">Google Gemini 原生 API</option>
-                    </select>
+                    <input id="aiProfProvider" type="text" placeholder="openai / anthropic / gemini" autocomplete="off" />
                   </div>
+                  <div id="aiProfProviderSuggest" class="ai-model-suggest"></div>
                   <div>
                     <label>API Base URL</label>
                     <input id="aiProfBaseUrl" type="text" placeholder="https://api.openai.com" autocomplete="url" />
@@ -17384,7 +17379,7 @@ flex-shrink:0;cursor:pointer;
       const key = document.getElementById('aiApiKey');
       const model = document.getElementById('aiModel');
       const p = __gmAiConfig.profiles[idx];
-      p.provider = prov ? String(prov.value || '') : 'openai';
+      p.provider = prov ? __gmAiProviderLabelToValue(prov.value) : 'openai';
       p.base_url = base ? String(base.value || '') : '';
       p.api_key = key ? String(key.value || '') : '';
       p.model = model ? String(model.value || '') : '';
@@ -17776,7 +17771,7 @@ flex-shrink:0;cursor:pointer;
       const key = document.getElementById('aiApiKey');
       const model = document.getElementById('aiModel');
       const del = document.getElementById('aiDeleteProfileBtn');
-      if (prov) prov.value = String((p && p.provider) || 'openai');
+      if (prov) prov.value = __gmAiProviderValueToLabel((p && p.provider) || 'openai');
       if (base) base.value = String((p && p.base_url) || '');
       if (key) key.value = String((p && p.api_key) || '');
       if (model) model.value = String((p && p.model) || '');
@@ -17786,7 +17781,7 @@ flex-shrink:0;cursor:pointer;
         const m = window.__gmAiProfileDrafts;
         const d = (m && pid && typeof m === 'object') ? m[pid] : null;
         if (d && typeof d === 'object') {
-          if (prov && d.provider !== undefined) prov.value = String(d.provider || 'openai');
+          if (prov && d.provider !== undefined) prov.value = __gmAiProviderValueToLabel(d.provider || 'openai');
           if (base && d.base_url !== undefined) base.value = String(d.base_url || '');
           if (key && d.api_key !== undefined) key.value = String(d.api_key || '');
           if (model && d.model !== undefined) model.value = String(d.model || '');
@@ -17806,7 +17801,7 @@ flex-shrink:0;cursor:pointer;
       const key = document.getElementById('aiApiKey');
       const model = document.getElementById('aiModel');
       window.__gmAiProfileDrafts[pid] = {
-        provider: prov ? String(prov.value || '') : 'openai',
+        provider: prov ? __gmAiProviderLabelToValue(prov.value) : 'openai',
         base_url: base ? String(base.value || '') : '',
         api_key: key ? String(key.value || '') : '',
         model: model ? String(model.value || '') : '',
@@ -17850,6 +17845,29 @@ flex-shrink:0;cursor:pointer;
     }
   }
 
+  function __gmAiSuggestItemLabel(it) {
+    try {
+      if (it && typeof it === 'object') return String(it.label || it.value || '');
+      return String(it || '');
+    } catch (e) { return ''; }
+  }
+
+  function __gmAiSuggestItemValue(it) {
+    try {
+      if (it && typeof it === 'object') return String(it.value || it.label || '');
+      return String(it || '');
+    } catch (e) { return ''; }
+  }
+
+  function __gmAiSuggestItemMatches(it, q) {
+    try {
+      if (!q) return true;
+      const lbl = __gmAiSuggestItemLabel(it).toLowerCase();
+      const val = __gmAiSuggestItemValue(it).toLowerCase();
+      return lbl.includes(q) || val.includes(q);
+    } catch (e) { return false; }
+  }
+
   function __gmAiSuggestHide(st) {
     try {
       if (!st) return;
@@ -17878,9 +17896,13 @@ flex-shrink:0;cursor:pointer;
       const inp = document.getElementById(st.inputId);
       if (!el || !inp) return;
       const r = inp.getBoundingClientRect();
+      const vh = window.innerHeight || document.documentElement.clientHeight;
+      const spaceBelow = vh - r.bottom - 16;
+      const maxH = Math.max(160, spaceBelow);
       el.style.left = Math.round(r.left) + 'px';
       el.style.top = Math.round(r.bottom + 6) + 'px';
       el.style.width = Math.round(r.width) + 'px';
+      el.style.maxHeight = Math.round(maxH) + 'px';
     } catch (e) {}
   }
 
@@ -17902,10 +17924,10 @@ flex-shrink:0;cursor:pointer;
 
       const rows = [];
       for (let i = 0; i < items.length; i++) {
-        const v = String(items[i] || '').trim();
-        if (!v) continue;
+        const lbl = __gmAiSuggestItemLabel(items[i]);
+        if (!lbl) continue;
         const cls = (i === idx) ? 'it active' : 'it';
-        rows.push(`<div class="${cls}" data-idx="${i}">${esc(v)}</div>`);
+        rows.push(`<div class="${cls}" data-idx="${i}">${esc(lbl)}</div>`);
       }
       el.innerHTML = rows.join('');
 
@@ -17919,11 +17941,12 @@ flex-shrink:0;cursor:pointer;
           if (!it) return;
           const i = Number(it.getAttribute('data-idx') || -1);
           const arr = __gmAiSuggestGetFilteredItems(st);
-          const pick = (i >= 0 && i < arr.length) ? String(arr[i] || '').trim() : '';
-          if (!pick) return;
-          if (typeof st.onPick === 'function') st.onPick(pick);
+          const pick = (i >= 0 && i < arr.length) ? arr[i] : null;
+          const pickVal = __gmAiSuggestItemValue(pick);
+          if (!pickVal) return;
+          if (typeof st.onPick === 'function') st.onPick(pickVal, pick);
           __gmAiSuggestHide(st);
-          if (typeof st.onAfterPick === 'function') st.onAfterPick(pick);
+          if (typeof st.onAfterPick === 'function') st.onAfterPick(pickVal, pick);
         } catch (e2) {}
       };
 
@@ -17964,12 +17987,13 @@ flex-shrink:0;cursor:pointer;
             }
             if (e.key === 'Enter') {
               const i = Number(st.index || 0);
-              const pick = (i >= 0 && i < arr.length) ? String(arr[i] || '').trim() : '';
-              if (pick) {
+              const pick = (i >= 0 && i < arr.length) ? arr[i] : null;
+              const pickVal = __gmAiSuggestItemValue(pick);
+              if (pickVal) {
                 e.preventDefault();
-                if (typeof st.onPick === 'function') st.onPick(pick);
+                if (typeof st.onPick === 'function') st.onPick(pickVal, pick);
                 __gmAiSuggestHide(st);
-                if (typeof st.onAfterPick === 'function') st.onAfterPick(pick);
+                if (typeof st.onAfterPick === 'function') st.onAfterPick(pickVal, pick);
               }
               return;
             }
@@ -18174,7 +18198,81 @@ flex-shrink:0;cursor:pointer;
         }
         try { __gmAiSuggestBind(window.__gmAiSuggestModel); } catch (e) {}
       }
+      // Provider suggest 初始化
+      const provInput = document.getElementById('aiProfProvider');
+      if (provInput) {
+        if (!provInput.__gmAiDraftBound) {
+          provInput.__gmAiDraftBound = true;
+          provInput.addEventListener('input', () => { try { __gmAiCaptureProfileDraft(); } catch (e) {} });
+          provInput.addEventListener('change', () => { try { __gmAiCaptureProfileDraft(); } catch (e) {} });
+        }
+        if (!window.__gmAiSuggestProfProvider) {
+          const st = __gmAiSuggestEnsureState('prof_provider', 'aiProfProviderSuggest', 'aiProfProvider');
+          if (st) {
+            st.getItems = () => {
+              try {
+                const inp = document.getElementById('aiProfProvider');
+                const q = String((inp && inp.value) || '').trim().toLowerCase();
+                const list = __gmAiProviderList();
+                const out = [];
+                for (let i = 0; i < list.length; i++) {
+                  const it = list[i];
+                  if (__gmAiSuggestItemMatches(it, q)) out.push(it);
+                }
+                return out;
+              } catch (e) {
+                return [];
+              }
+            };
+            st.onPick = (pickVal, pickItem) => {
+              try {
+                const el = document.getElementById('aiProfProvider');
+                if (el && pickItem && typeof pickItem === 'object') {
+                  el.value = String(pickItem.label || pickVal || '');
+                } else if (el) {
+                  el.value = String(pickVal || '');
+                }
+              } catch (e) {}
+            };
+            st.onAfterPick = () => {
+              try { __gmAiSyncEditingProfileFromEditor(); } catch (e) {}
+            };
+            window.__gmAiSuggestProfProvider = st;
+          }
+        }
+        try { __gmAiSuggestBind(window.__gmAiSuggestProfProvider); } catch (e) {}
+      }
     } catch (e) {}
+  }
+
+  function __gmAiProviderList() {
+    return [
+      { value: 'openai', label: 'OpenAI 兼容 API' },
+      { value: 'anthropic', label: 'Anthropic Claude 原生 API' },
+      { value: 'gemini', label: 'Google Gemini 原生 API' }
+    ];
+  }
+
+  function __gmAiProviderValueToLabel(val) {
+    try {
+      const v = String(val || '').trim();
+      const list = __gmAiProviderList();
+      for (let i = 0; i < list.length; i++) {
+        if (list[i].value === v) return list[i].label;
+      }
+      return v;
+    } catch (e) { return String(val || ''); }
+  }
+
+  function __gmAiProviderLabelToValue(lbl) {
+    try {
+      const l = String(lbl || '').trim();
+      const list = __gmAiProviderList();
+      for (let i = 0; i < list.length; i++) {
+        if (list[i].label === l || list[i].value === l) return list[i].value;
+      }
+      return l;
+    } catch (e) { return String(lbl || ''); }
   }
 
   function toggleAiPanel() {
