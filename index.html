@@ -5437,13 +5437,54 @@ flex-shrink:0;cursor:pointer;
       if (!s) return '';
       // normalize ellipsis/dots for consistent style
       s = s.replace(/[·⋯…]/g, '.');
-      s = s.replace(/\.{4,}/g, '...');
-      s = s.replace(/\.{2}/g, '...');
+      s = s.replace(/\.{2,}/g, '...');
       s = s.replace(/\s{2,}/g, ' ');
       return s;
     } catch (e) {
       return String(text || '').trim();
     }
+  }
+
+  function __gmAiCleanToolCalls(tcList) {
+    try {
+      const list = Array.isArray(tcList) ? tcList : [];
+      if (!list.length) return [];
+      const clean = [];
+      for (const tc of list) {
+        if (!tc || typeof tc !== 'object') continue;
+        let tcId = '';
+        for (const k of ['id', 'call_id', 'tool_call_id']) {
+          if (tc[k]) { tcId = String(tc[k]); break; }
+        }
+        const tcType = String(tc.type || 'function');
+        const tcFunc = (tc.function && typeof tc.function === 'object') ? tc.function : {};
+        const tcName = String(tcFunc.name || '');
+        const tcArgs = String(tcFunc.arguments || '');
+        clean.push({ id: tcId, type: tcType, function: { name: tcName, arguments: tcArgs } });
+      }
+      return clean;
+    } catch(_) { return []; }
+  }
+
+  function __gmAiNormalizeMessage(m) {
+    try {
+      if (!m || typeof m !== 'object') return null;
+      const role = String(m.role || '').trim();
+      if (role !== 'user' && role !== 'assistant' && role !== 'tool') return null;
+      const content = String(m.content || '');
+      if (!content && role !== 'assistant' && role !== 'tool') return null;
+      const item = { role, content };
+      if (role === 'assistant') {
+        const tcClean = __gmAiCleanToolCalls(m.tool_calls);
+        if (tcClean.length) item.tool_calls = tcClean;
+      } else if (role === 'tool') {
+        const tcid = String(m.tool_call_id || '');
+        if (tcid) item.tool_call_id = tcid;
+        const tname = String(m.name || '');
+        if (tname) item.name = tname;
+      }
+      return item;
+    } catch(_) { return null; }
   }
 
   function __gmAiBuildMessagesForSend(allMsgs) {
@@ -5454,10 +5495,10 @@ flex-shrink:0;cursor:pointer;
       for (const m of arr) {
         if (!m || typeof m !== 'object') continue;
         const role = String(m.role || '').trim();
-        if (role !== 'user' && role !== 'assistant' && role !== 'system') continue;
+        if (role !== 'user' && role !== 'assistant' && role !== 'system' && role !== 'tool') continue;
         if (role === 'assistant' && m.pending) continue;
         const content = String(m.content || '');
-        if (!content) continue;
+        if (!content && role !== 'assistant' && role !== 'tool') continue;
         const item = { role, content };
         // 保留附件信息（供后端处理为多模态格式）
         if (role === 'user') {
@@ -5475,6 +5516,15 @@ flex-shrink:0;cursor:pointer;
               return o;
             });
           }
+        }
+        if (role === 'assistant') {
+          const tcClean = __gmAiCleanToolCalls(m.tool_calls);
+          if (tcClean.length) item.tool_calls = tcClean;
+        } else if (role === 'tool') {
+          const tcid = String(m.tool_call_id || '');
+          if (tcid) item.tool_call_id = tcid;
+          const tname = String(m.name || '');
+          if (tname) item.name = tname;
         }
         if (role === 'system') sys.push(item);
         else rest.push(item);
@@ -15986,6 +16036,13 @@ flex-shrink:0;cursor:pointer;
                   const tr = Array.isArray(m && m.tool_receipts) ? m.tool_receipts : [];
                   if (tr.length) item.tool_receipts = tr;
                 } catch(_) {}
+                const tcClean = __gmAiCleanToolCalls(m && m.tool_calls);
+                if (tcClean.length) item.tool_calls = tcClean;
+              } else if (role === 'tool') {
+                const tcid = String(m && m.tool_call_id || '');
+                if (tcid) item.tool_call_id = tcid;
+                const tname = String(m && m.name || '');
+                if (tname) item.name = tname;
               }
               return item;
             } catch (e1) {
@@ -19884,6 +19941,8 @@ flex-shrink:0;cursor:pointer;
     __gmAiSelectedProfileId = pid;
     __gmAiEditingProfileId = pid;
     __gmAiConfig.active_profile_id = pid;
+    const activeP = (__gmAiConfig.profiles || []).find(x => x && String(x.id || '') === pid) || null;
+    if (activeP) __gmAiFillEditor(activeP);
     __gmAiRenderProfileList();
     __gmAiRenderProfileModelName();
     try { loadAiChatHistory(pid); } catch (e) {}

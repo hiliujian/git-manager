@@ -5147,6 +5147,128 @@ def _hivo_ai_history_path():
 _AI_GLOBAL_PROFILE_ID = "__global__"
 
 
+def _hivo_ai_get_tool_call_id(tc: dict) -> str:
+    """从 tool_call 对象中提取 id，兼容多种字段名（id/call_id/tool_call_id）。
+    某些 OpenAI 兼容 API（如百度千帆）可能使用非标准的 id 字段名。
+    """
+    if not isinstance(tc, dict):
+        return ""
+    for key in ("id", "call_id", "tool_call_id"):
+        val = tc.get(key)
+        if val is not None:
+            s = str(val).strip()
+            if s:
+                return s
+    return ""
+
+
+def _hivo_ai_clean_tool_calls(tc_list) -> list:
+    """清洗原生 tool_calls 列表，标准化格式并补全缺失的 id。
+    返回标准化后的 tool_calls 列表，每个元素包含 id/type/function{name,arguments}。
+    """
+    if not isinstance(tc_list, list) or not tc_list:
+        return []
+    cleaned = []
+    for idx, tc in enumerate(tc_list):
+        if not isinstance(tc, dict):
+            continue
+        tc_id = _hivo_ai_get_tool_call_id(tc)
+        if not tc_id:
+            tc_id = f"call_{idx}"
+        tc_type = str(tc.get("type") or "function")
+        tc_func = tc.get("function") if isinstance(tc.get("function"), dict) else {}
+        tc_name = str(tc_func.get("name") or "")
+        tc_args = str(tc_func.get("arguments") or "")
+        cleaned.append({
+            "id": tc_id,
+            "type": tc_type,
+            "function": {"name": tc_name, "arguments": tc_args},
+        })
+    return cleaned
+
+
+def _hivo_ai_normalize_message(m: dict) -> dict | None:
+    """将单条消息标准化为核心格式，保留 role/content/tool_calls/tool_call_id/name 等关键字段。
+    返回标准化后的消息字典，若消息无效则返回 None。
+    用于消除多处历史消息加载逻辑中的重复代码。
+    """
+    if not isinstance(m, dict):
+        return None
+    role = str(m.get("role") or "").strip()
+    if role not in ("user", "assistant", "tool"):
+        return None
+    c0 = m.get("content")
+    if isinstance(c0, list):
+        item = {"role": role, "content": c0}
+    else:
+        content = str(c0 or "")
+        if not content and role not in ("assistant", "tool"):
+            return None
+        item = {"role": role, "content": content}
+    if role == "assistant":
+        try:
+            tc_list = m.get("tool_calls")
+            cleaned_tc = _hivo_ai_clean_tool_calls(tc_list)
+            if cleaned_tc:
+                item["tool_calls"] = cleaned_tc
+        except Exception:
+            pass
+    elif role == "tool":
+        try:
+            tcid = str(m.get("tool_call_id") or "").strip()
+            if tcid:
+                item["tool_call_id"] = tcid
+        except Exception:
+            pass
+        try:
+            tname = str(m.get("name") or "").strip()
+            if tname:
+                item["name"] = tname
+        except Exception:
+            pass
+    return item
+
+
+def _hivo_ai_fix_tool_call_ids(messages: list):
+    """修复 tool 消息的 tool_call_id，确保与前一条 assistant 消息的 tool_calls id 一一对应。
+    以 assistant 消息中的 tool_calls id 为准，强制对齐，确保工具调用链路 ID 完全匹配。
+    可以修复旧版历史数据中 tool 消息缺少 tool_call_id 或 id 不一致的问题。
+    """
+    if not isinstance(messages, list) or not messages:
+        return messages
+    try:
+        fixed = []
+        pending_tc = []
+        pending_idx = 0
+        for m in messages:
+            if not isinstance(m, dict):
+                continue
+            role = str(m.get("role") or "")
+            if role == "assistant":
+                tc_list = m.get("tool_calls")
+                if isinstance(tc_list, list) and tc_list:
+                    pending_tc = [_hivo_ai_get_tool_call_id(tc) for tc in tc_list if isinstance(tc, dict)]
+                    pending_idx = 0
+                else:
+                    pending_tc = []
+                    pending_idx = 0
+                fixed.append(m)
+            elif role == "tool":
+                if pending_tc and pending_idx < len(pending_tc):
+                    expected_id = pending_tc[pending_idx]
+                    if expected_id:
+                        m["tool_call_id"] = expected_id
+                    pending_idx += 1
+                fixed.append(m)
+            else:
+                pending_tc = []
+                pending_idx = 0
+                fixed.append(m)
+        return fixed
+    except Exception:
+        return messages
+
+
 def _hivo_ai_clean_messages(messages: list, limit: int):
     if not isinstance(messages, list):
         return []
@@ -5156,9 +5278,9 @@ def _hivo_ai_clean_messages(messages: list, limit: int):
             continue
         role = str(m.get("role") or "").strip()
         content = str(m.get("content") or "")
-        if role not in ("user", "assistant"):
+        if role not in ("user", "assistant", "tool"):
             continue
-        if not content:
+        if not content and role not in ("assistant", "tool"):
             continue
         item = {"role": role, "content": content}
         if role == "user":
@@ -5197,6 +5319,15 @@ def _hivo_ai_clean_messages(messages: list, limit: int):
                 mid = str(m.get("id") or "").strip()
                 if mid:
                     item["id"] = mid
+            except Exception:
+                pass
+            # 保留原生 tool_calls（含 id/type/function），用于会话恢复后继续多轮工具调用
+            # 注意：必须完整保留所有 tool_call，不过滤，确保与后续 tool 消息一一对应
+            try:
+                tc_list = m.get("tool_calls")
+                cleaned_tc = _hivo_ai_clean_tool_calls(tc_list)
+                if cleaned_tc:
+                    item["tool_calls"] = cleaned_tc
             except Exception:
                 pass
             # 保留 tool_receipts（含 request/data），过滤 attachments，做长度截断
@@ -5327,7 +5458,24 @@ def _hivo_ai_clean_messages(messages: list, limit: int):
                     item["__continue_snapshot"] = {"body": body, "_attMeta": meta_snap}
             except Exception:
                 pass
+        elif role == "tool":
+            # 保留 tool 消息的 tool_call_id 和 name，确保工具调用链 ID 匹配
+            try:
+                tcid = str(m.get("tool_call_id") or "").strip()
+                if tcid:
+                    item["tool_call_id"] = tcid
+            except Exception:
+                pass
+            try:
+                tname = str(m.get("name") or "").strip()
+                if tname:
+                    item["name"] = tname
+            except Exception:
+                pass
         cleaned.append(item)
+
+    cleaned = _hivo_ai_fix_tool_call_ids(cleaned)
+
     lim = int(limit) if str(limit).strip() else 80
     if lim < 10:
         lim = 10
@@ -5710,10 +5858,10 @@ def load_ai_chat_history(profile_id: str, limit: int = 40, session_id: str | Non
                 continue
             role = str(m.get("role") or "").strip()
             content = str(m.get("content") or "")
-            if role not in ("user", "assistant", "system"):
+            if role not in ("user", "assistant", "system", "tool"):
                 continue
             # Skip empty content except we still allow tracking for last assistant (for session-level continue)
-            if not content and role != "assistant":
+            if not content and role not in ("assistant", "tool"):
                 continue
             item = {"role": role, "content": content}
             # Preserve common identifiers when present
@@ -5767,8 +5915,31 @@ def load_ai_chat_history(profile_id: str, limit: int = 40, session_id: str | Non
                         item["tool_receipts"] = tr
                 except Exception:
                     pass
+                # 保留原生 tool_calls（含 id），确保会话恢复后工具调用链 ID 匹配
+                # 注意：必须完整保留所有 tool_call，不过滤，确保与后续 tool 消息一一对应
+                try:
+                    tc_list = m.get("tool_calls")
+                    cleaned_tc = _hivo_ai_clean_tool_calls(tc_list)
+                    if cleaned_tc:
+                        item["tool_calls"] = cleaned_tc
+                except Exception:
+                    pass
                 # Track for session-level continue computation
                 last_assistant = m
+            elif role == "tool":
+                # 保留 tool 消息的 tool_call_id 和 name
+                try:
+                    tcid = str(m.get("tool_call_id") or "").strip()
+                    if tcid:
+                        item["tool_call_id"] = tcid
+                except Exception:
+                    pass
+                try:
+                    tname = str(m.get("name") or "").strip()
+                    if tname:
+                        item["name"] = tname
+                except Exception:
+                    pass
             out.append(item)
         # Derive session-level continue strictly from last assistant
         cont_obj = None
@@ -5786,6 +5957,7 @@ def load_ai_chat_history(profile_id: str, limit: int = 40, session_id: str | Non
                     }
         except Exception:
             cont_obj = None
+        out = _hivo_ai_fix_tool_call_ids(out)
         return out, cont_obj
     return [], None
 
@@ -6082,12 +6254,22 @@ def _ai_build_chat_url(base_url: str):
     if not u:
         return ""
     u = u.rstrip("/")
-    # If user provides full path, use it.
-    if u.endswith("/chat/completions") or u.endswith("/v1/chat/completions"):
+    # If user provides full path, use it directly.
+    if u.endswith("/chat/completions"):
         return u
-    # If user provides an explicit version path (e.g. /v1, /v2), do not force /v1.
-    if re.search(r"/v\d+$", u):
+    # Extract path after scheme+host to determine URL depth.
+    try:
+        parsed = urllib.parse.urlparse(u)
+        path = parsed.path or ""
+    except Exception:
+        path = u
+    # Count non-empty path segments.
+    segments = [s for s in path.split("/") if s]
+    # If URL has any path (version-only like /v1, or non-standard like /v2/tokenplan/personal),
+    # just append /chat/completions without forcing /v1 prefix.
+    if len(segments) >= 1:
         return u + "/chat/completions"
+    # Bare domain with no path: use standard /v1/chat/completions.
     return u + "/v1/chat/completions"
 
 
@@ -7229,6 +7411,22 @@ def _ai_estimate_messages_tokens(messages: list):
                     elif pt in ("image_url", "image", "input_image"):
                         # 图片 token 估算（base64 不计入文本 token，固定开销）
                         total += 85  # GPT-4o 每张图片约 85-170 tokens
+            # 估算 tool_calls 的 token 开销
+            role = str(m.get("role") or "")
+            if role == "assistant":
+                tc_list = m.get("tool_calls")
+                if isinstance(tc_list, list):
+                    for tc in tc_list:
+                        if not isinstance(tc, dict):
+                            continue
+                        total += _ai_estimate_text_tokens(tc.get("id"))
+                        total += _ai_estimate_text_tokens(tc.get("type"))
+                        func = tc.get("function") if isinstance(tc.get("function"), dict) else {}
+                        total += _ai_estimate_text_tokens(func.get("name"))
+                        total += _ai_estimate_text_tokens(func.get("arguments"))
+            elif role == "tool":
+                total += _ai_estimate_text_tokens(m.get("tool_call_id"))
+                total += _ai_estimate_text_tokens(m.get("name"))
         total += 8
         return int(total)
     except Exception:
@@ -7282,36 +7480,41 @@ def _ai_trim_messages_to_budget(messages: list, max_total_tokens: int, reserve_o
                 return True
             return False
 
-        cleaned = []
-        last = None
-        for m in arr:
-            r = str(m.get("role") or "")
+        def _msg_has_valid_content(m):
             c = m.get("content")
-            if r not in ("system", "user", "assistant"):
-                continue
-            # 支持 content 为字符串或数组（OpenAI 多模态格式）
             if isinstance(c, str):
-                if not c.strip():
-                    continue
-            elif isinstance(c, list):
-                # 数组格式：至少要有一个有效 part
-                has_valid = False
+                return bool(c.strip())
+            if isinstance(c, list):
                 for p in c:
                     if isinstance(p, dict):
                         pt = str(p.get("type") or "")
                         if pt == "text" and str(p.get("text") or "").strip():
-                            has_valid = True
-                            break
-                        elif pt in ("image_url", "image", "input_image"):
-                            has_valid = True
-                            break
-                if not has_valid:
+                            return True
+                        if pt in ("image_url", "image", "input_image"):
+                            return True
+                return False
+            return False
+
+        cleaned = []
+        last = None
+        for m in arr:
+            r = str(m.get("role") or "")
+            if r not in ("system", "user", "assistant", "tool"):
+                continue
+            # tool 消息和带 tool_calls 的 assistant 消息即使 content 为空也要保留（工具调用链路完整性）
+            if r == "tool":
+                pass
+            elif r == "assistant":
+                tc = m.get("tool_calls")
+                has_tc = isinstance(tc, list) and len(tc) > 0
+                if not has_tc and not _msg_has_valid_content(m):
                     continue
             else:
-                continue
+                if not _msg_has_valid_content(m):
+                    continue
             if is_dup(last, m):
                 continue
-            if r == "assistant" and isinstance(c, str) and c.strip() in ("对话内容过长，已超过限制",):
+            if r == "assistant" and _msg_has_valid_content(m) and str(m.get("content") or "").strip() in ("对话内容过长，已超过限制",):
                 continue
             cleaned.append(m)
             last = m
@@ -7338,16 +7541,27 @@ def _ai_trim_messages_to_budget(messages: list, max_total_tokens: int, reserve_o
         turns = []
         i = 0
         while i < len(non_sys):
-            if str(non_sys[i].get("role") or "") == "user":
-                if i + 1 < len(non_sys) and str(non_sys[i + 1].get("role") or "") == "assistant":
-                    turns.append((non_sys[i], non_sys[i + 1]))
-                    i += 2
-                    continue
-                else:
-                    turns.append((non_sys[i],))
+            r = str(non_sys[i].get("role") or "")
+            if r == "user":
+                turn_msgs = [non_sys[i]]
+                i += 1
+                if i < len(non_sys) and str(non_sys[i].get("role") or "") == "assistant":
+                    turn_msgs.append(non_sys[i])
+                    i += 1
+                    while i < len(non_sys) and str(non_sys[i].get("role") or "") == "tool":
+                        turn_msgs.append(non_sys[i])
+                        i += 1
+                turns.append(tuple(turn_msgs))
+            elif r == "assistant":
+                turn_msgs = [non_sys[i]]
+                i += 1
+                while i < len(non_sys) and str(non_sys[i].get("role") or "") == "tool":
+                    turn_msgs.append(non_sys[i])
+                    i += 1
+                turns.append(tuple(turn_msgs))
             else:
                 turns.append((non_sys[i],))
-            i += 1
+                i += 1
 
         recent = []
         used = total_tokens(base)
@@ -7359,14 +7573,29 @@ def _ai_trim_messages_to_budget(messages: list, max_total_tokens: int, reserve_o
             else:
                 break
 
-        older_count = len(non_sys) - len(recent)
-        if older_count > 0:
+        # 找到 recent 对应的起始位置，确保不会从中间截断一个 turn
+        recent_start_idx = 0
+        if recent:
+            first_recent_msg = recent[0]
+            for idx, m in enumerate(non_sys):
+                if m is first_recent_msg:
+                    recent_start_idx = idx
+                    break
+        older_msgs = non_sys[:recent_start_idx] if recent_start_idx > 0 else []
+        has_older = len(older_msgs) > 0
+
+        summary_txt = ""
+        if has_older:
             parts = []
-            keep_n = max(0, min(6, older_count))
-            for m in non_sys[:older_count]:
+            keep_turns = 6
+            turn_count = 0
+            for m in older_msgs:
                 role = str(m.get("role") or "")
+                if role == "user":
+                    turn_count += 1
+                    if turn_count > keep_turns:
+                        break
                 c = m.get("content")
-                # 提取文本用于摘要（支持数组格式 content）
                 if isinstance(c, str):
                     txt = c
                 elif isinstance(c, list):
@@ -7380,10 +7609,19 @@ def _ai_trim_messages_to_budget(messages: list, max_total_tokens: int, reserve_o
                 if role == "user":
                     parts.append("U:" + txt[:160])
                 elif role == "assistant":
-                    parts.append("A:" + txt[:220])
+                    tc = m.get("tool_calls")
+                    has_tc = isinstance(tc, list) and len(tc) > 0
+                    if has_tc:
+                        tnames = [str((t.get("function") or {}).get("name") or "?") for t in tc if isinstance(t, dict)]
+                        parts.append("A:[tool:" + ",".join(tnames[:3]) + "] " + txt[:120])
+                    else:
+                        parts.append("A:" + txt[:220])
+                elif role == "tool":
+                    tname = str(m.get("name") or "tool")
+                    parts.append("T(" + tname + "):" + txt[:80])
                 else:
                     parts.append(txt[:120])
-            summary_blob = "\n".join(parts[:keep_n])
+            summary_blob = "\n".join(parts)
             sum_allow = max(64, int(budget * 0.25))
             summary_txt = _ai_truncate_text_to_tokens(summary_blob, sum_allow)
             summary_msg = {"role": "system", "content": "历史摘要：\n" + summary_txt}
@@ -7400,15 +7638,25 @@ def _ai_trim_messages_to_budget(messages: list, max_total_tokens: int, reserve_o
         else:
             base = []
 
-        if older_count > 0:
+        if has_older:
             sum_allow2 = max(32, int(budget * 0.2))
             composed = base + [{"role": "system", "content": _ai_truncate_text_to_tokens("历史摘要：\n" + summary_txt, sum_allow2)}] + recent
         else:
             composed = base + recent
 
+        # 从前往后按 turn 粒度裁剪，确保不会从中间截断 assistant + tool 消息对
         while total_tokens(composed) > budget and len(recent) > 1:
-            recent = recent[1:]
-            if older_count > 0:
+            # 找到下一个 turn 的起始位置（user 或 assistant 消息）
+            next_start = 1
+            while next_start < len(recent):
+                r = str(recent[next_start].get("role") or "")
+                if r in ("user", "assistant"):
+                    break
+                next_start += 1
+            if next_start >= len(recent):
+                break
+            recent = recent[next_start:]
+            if has_older:
                 composed = base + [{"role": "system", "content": _ai_truncate_text_to_tokens("历史摘要：\n" + summary_txt, sum_allow2)}] + recent
             else:
                 composed = base + recent
@@ -7541,8 +7789,14 @@ class BaseLLMProvider:
                         "function": {"name": "", "arguments": ""}
                     }
                 acc = state["tool_calls"][idx]
-                if d.get("id"):
-                    acc["id"] = str(d["id"])
+                # 兼容多种 id 字段名（id/call_id/tool_call_id）
+                delta_id = ""
+                for k in ("id", "call_id", "tool_call_id"):
+                    if d.get(k):
+                        delta_id = str(d[k])
+                        break
+                if delta_id:
+                    acc["id"] = delta_id
                 if d.get("type"):
                     acc["type"] = str(d["type"])
                 func_d = d.get("function") or {}
@@ -9968,40 +10222,22 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
         base_mem = st.get("chat") if (memory_enabled and isinstance(st, dict)) else None
         if isinstance(base_mem, list) and base_mem:
             for m in base_mem:
-                if not isinstance(m, dict):
-                    continue
-                role = str(m.get("role") or "").strip()
-                if role not in ("user", "assistant"):
-                    continue
-                c0 = m.get("content")
-                if isinstance(c0, list):
-                    # keep multimodal parts as-is
-                    hist.append({"role": role, "content": c0})
-                    continue
-                content = str(c0 or "")
-                if not content:
-                    continue
-                hist.append({"role": role, "content": content})
+                nm = _hivo_ai_normalize_message(m)
+                if nm:
+                    hist.append(nm)
         else:
             base = history_messages if isinstance(history_messages, list) else []
             for m in base:
-                if not isinstance(m, dict):
+                if isinstance(m, dict) and bool(m.get("pending")) and str(m.get("role") or "").strip() == "assistant":
                     continue
-                role = str(m.get("role") or "").strip()
-                if role not in ("user", "assistant"):
-                    continue
-                if bool(m.get("pending")) and role == "assistant":
-                    continue
-                c0 = m.get("content")
-                if isinstance(c0, list):
-                    hist.append({"role": role, "content": c0})
-                    continue
-                content = str(c0 or "")
-                if not content:
-                    continue
-                hist.append({"role": role, "content": content})
+                nm = _hivo_ai_normalize_message(m)
+                if nm:
+                    hist.append(nm)
     except Exception:
         hist = []
+
+    # 确保 tool 消息的 tool_call_id 与 assistant 消息的 tool_calls id 一致
+    hist = _hivo_ai_fix_tool_call_ids(hist)
 
     # Short-term memory window: use max_visible_history (capped to avoid token overflow)
     keep_n = max_hist if max_hist > 0 else 80
@@ -10308,9 +10544,7 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
         calls = []
         if use_native_tools and isinstance(native_tool_calls, list) and native_tool_calls:
             calls = _hivo_parse_native_tool_calls(native_tool_calls)
-            if calls:
-                msgs.append({"role": "assistant", "content": content or None, "tool_calls": native_tool_calls})
-            else:
+            if not calls:
                 msgs.append({"role": "assistant", "content": content})
         else:
             msgs.append({"role": "assistant", "content": content})
@@ -10686,32 +10920,35 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
             last_tool_receipts = receipts
 
         if use_native_tools and isinstance(native_tool_calls, list) and native_tool_calls:
-            # 原生工具调用：先添加 assistant 消息（带 tool_calls），再添加对应 tool 消息
-            msgs.append({
-                "role": "assistant",
-                "content": content or "",
-                "tool_calls": native_tool_calls,
-            })
-            for idx, tc in enumerate(native_tool_calls):
-                tc_id = str(tc.get("id") or f"call_{idx}")
-                tc_name = str((tc.get("function") or {}).get("name") or "")
-                receipt_content = receipt_text
-                if idx < len(receipts):
-                    r = receipts[idx]
-                    ok1 = bool(r.get("ok"))
-                    detail = str(r.get("msg") or "")
-                    data1 = r.get("data") if isinstance(r.get("data"), dict) else {}
-                    receipt_content = json.dumps({
-                        "ok": ok1,
-                        "msg": detail,
-                        "data": data1,
-                    }, ensure_ascii=False)
+            # 统一清洗 tool_calls：补全缺失的 id，确保 assistant 消息和 tool 消息的 id 完全一致
+            cleaned_tool_calls = _hivo_ai_clean_tool_calls(native_tool_calls)
+            if cleaned_tool_calls:
+                # 原生工具调用：先添加 assistant 消息（带 tool_calls），再添加对应 tool 消息
                 msgs.append({
-                    "role": "tool",
-                    "tool_call_id": tc_id,
-                    "name": tc_name,
-                    "content": receipt_content,
+                    "role": "assistant",
+                    "content": content or "",
+                    "tool_calls": cleaned_tool_calls,
                 })
+                for idx, tc in enumerate(cleaned_tool_calls):
+                    tc_id = tc["id"]
+                    tc_name = tc["function"]["name"]
+                    receipt_content = receipt_text
+                    if idx < len(receipts):
+                        r = receipts[idx]
+                        ok1 = bool(r.get("ok"))
+                        detail = str(r.get("msg") or "")
+                        data1 = r.get("data") if isinstance(r.get("data"), dict) else {}
+                        receipt_content = json.dumps({
+                            "ok": ok1,
+                            "msg": detail,
+                            "data": data1,
+                        }, ensure_ascii=False)
+                    msgs.append({
+                        "role": "tool",
+                        "tool_call_id": tc_id,
+                        "name": tc_name,
+                        "content": receipt_content,
+                    })
         else:
             msgs.append({"role": "assistant", "content": content})
             msgs.append({
