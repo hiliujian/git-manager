@@ -3545,7 +3545,7 @@ flex-shrink:0;cursor:pointer;
 
 <!-- Tag 管理 Modal -->
 <div class="overlay" id="tagModal">
-  <div class="modal" style="max-width:760px">
+  <div class="modal" style="width:680px;max-width:90vw">
     <h3>Tag 标签管理</h3>
     <div style="display:flex;gap:8px;margin:10px 0;align-items:center;flex-wrap:wrap">
       <input type="text" id="tagNameInput" placeholder="标签名（如 v1.0.0）" style="flex:1;min-width:160px;padding:6px 10px;background:var(--bg2);border:1px solid var(--border);color:var(--text);border-radius:6px;font-size:13px">
@@ -3556,9 +3556,9 @@ flex-shrink:0;cursor:pointer;
       <button class="btn blue" id="tagCreateBtn" data-action="createTag" style="white-space:nowrap">创建</button>
     </div>
     <div class="gm-tag-table-wrap" style="max-height:400px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;margin-top:8px">
-      <table class="gm-tag-table" style="width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed">
+      <table class="gm-tag-table" style="width:100%;border-collapse:collapse;font-size:12px;min-width:600px">
         <colgroup>
-          <col style="width:24%"><col style="width:18%"><col style="width:22%"><col style="width:24%"><col style="width:12%">
+          <col style="width:160px"><col style="width:120px"><col style="width:130px"><col style="width:150px"><col style="width:80px">
         </colgroup>
         <thead>
           <tr style="background:var(--bg2)">
@@ -3583,7 +3583,7 @@ flex-shrink:0;cursor:pointer;
 
 <!-- 冲突解决 Modal -->
 <div class="overlay" id="conflictModal">
-  <div class="modal" style="max-width:900px">
+  <div class="modal" style="width:900px;max-width:90vw">
     <h3>冲突解决</h3>
     <div id="conflictEmptyHint" style="padding:30px;text-align:center;color:var(--text3)">当前没有冲突文件</div>
     <div id="conflictFileList" style="max-height:540px;overflow-y:auto"></div>
@@ -16773,29 +16773,76 @@ flex-shrink:0;cursor:pointer;
 
   // ── Tag 管理 ────────────────────────────────────────────────
   async function __gmLoadTags() {
+    const _placeholder = (text, color = 'var(--text3)') => {
+      const tr = document.createElement('tr');
+      const td = document.createElement('td');
+      td.colSpan = 5;
+      td.style.cssText = `padding:24px;text-align:center;color:${color}`;
+      td.textContent = text;
+      tr.appendChild(td);
+      return tr;
+    };
     try {
       const body = document.getElementById('tagListBody');
       if (!body) return;
-      body.innerHTML = '<tr><td colspan="5" style="padding:24px;text-align:center;color:var(--text3)">加载中...</td></tr>';
+      body.innerHTML = '';
+      body.appendChild(_placeholder('加载中...'));
       const res = await fetch('/api/tags').then(r => r.json()).catch(() => ({ ok: false, error: '网络错误' }));
       if (!res.ok) {
-        body.innerHTML = `<tr><td colspan="5" style="padding:24px;text-align:center;color:var(--danger)">${String(res.error || '加载失败')}</td></tr>`;
+        body.innerHTML = '';
+        body.appendChild(_placeholder(String(res.error || '加载失败'), 'var(--danger)'));
         return;
       }
       const tags = Array.isArray(res.tags) ? res.tags : [];
       if (!tags.length) {
-        body.innerHTML = '<tr><td colspan="5" style="padding:24px;text-align:center;color:var(--text3)">暂无标签</td></tr>';
+        body.innerHTML = '';
+        body.appendChild(_placeholder('暂无标签'));
         return;
       }
-      const esc = (s) => String(s || '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
-      body.innerHTML = tags.map(t => `
-        <tr style="border-bottom:1px solid var(--border)">
-          <td style="padding:8px;font-weight:600;color:var(--accent);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(t.name)}">${esc(t.name)}</td>
-          <td style="padding:8px;font-family:monospace;font-size:11px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(t.short || (t.commit || '').slice(0, 7))}">${esc(t.short || (t.commit || '').slice(0, 7))}</td>
-          <td style="padding:8px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(t.tagger || '-')}">${esc(t.tagger || '-')}</td>
-          <td style="padding:8px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(t.date || '-')}">${esc(t.date || '-')}</td>
-          <td style="padding:8px;text-align:center"><button class="btn red" style="padding:2px 10px;font-size:11px;line-height:1.4" data-action="deleteTag" data-name="${esc(t.name)}">删除</button></td>
-        </tr>`).join('');
+      body.innerHTML = '';
+      for (const t of tags) {
+        const tr = document.createElement('tr');
+        tr.style.borderBottom = '1px solid var(--border)';
+        // 标签名
+        const td1 = document.createElement('td');
+        td1.style.cssText = 'padding:8px;font-weight:600;color:var(--accent);overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+        td1.textContent = t.name || '';
+        td1.title = t.name || '';
+        tr.appendChild(td1);
+        // 提交
+        const td2 = document.createElement('td');
+        td2.style.cssText = 'padding:8px;font-family:monospace;font-size:11px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+        const commitVal = t.short || (t.commit || '').slice(0, 7);
+        td2.textContent = commitVal;
+        td2.title = commitVal;
+        tr.appendChild(td2);
+        // 打标签人
+        const td3 = document.createElement('td');
+        td3.style.cssText = 'padding:8px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+        const taggerVal = t.tagger || '-';
+        td3.textContent = taggerVal;
+        td3.title = taggerVal;
+        tr.appendChild(td3);
+        // 日期
+        const td4 = document.createElement('td');
+        td4.style.cssText = 'padding:8px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+        const dateVal = t.date || '-';
+        td4.textContent = dateVal;
+        td4.title = dateVal;
+        tr.appendChild(td4);
+        // 操作
+        const td5 = document.createElement('td');
+        td5.style.cssText = 'padding:8px;text-align:center';
+        const delBtn = document.createElement('button');
+        delBtn.className = 'btn red';
+        delBtn.style.cssText = 'padding:2px 10px;font-size:11px;line-height:1.4';
+        delBtn.textContent = '删除';
+        delBtn.setAttribute('data-action', 'deleteTag');
+        delBtn.setAttribute('data-name', t.name || '');
+        td5.appendChild(delBtn);
+        tr.appendChild(td5);
+        body.appendChild(tr);
+      }
     } catch (e) {
       console.error('[Tags]', e);
     }
@@ -16869,15 +16916,23 @@ flex-shrink:0;cursor:pointer;
   }
 
   async function __gmLoadConflicts() {
+    const _msg = (text, color = 'var(--text3)') => {
+      const div = document.createElement('div');
+      div.style.cssText = `padding:20px;text-align:center;color:${color}`;
+      div.textContent = text;
+      return div;
+    };
     try {
       const list = document.getElementById('conflictFileList');
       const emptyHint = document.getElementById('conflictEmptyHint');
       if (!list) return;
-      list.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text3)">加载中...</div>';
+      list.innerHTML = '';
+      list.appendChild(_msg('加载中...'));
       if (emptyHint) emptyHint.style.display = 'none';
       const res = await fetch('/api/conflicts').then(r => r.json()).catch(() => ({ ok: false, error: '网络错误' }));
       if (!res.ok) {
-        list.innerHTML = `<div style="padding:20px;text-align:center;color:var(--danger)">${String(res.error || '加载失败')}</div>`;
+        list.innerHTML = '';
+        list.appendChild(_msg(String(res.error || '加载失败'), 'var(--danger)'));
         return;
       }
       const files = Array.isArray(res.files) ? res.files : [];
