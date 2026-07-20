@@ -5466,27 +5466,6 @@ flex-shrink:0;cursor:pointer;
     } catch(_) { return []; }
   }
 
-  function __gmAiNormalizeMessage(m) {
-    try {
-      if (!m || typeof m !== 'object') return null;
-      const role = String(m.role || '').trim();
-      if (role !== 'user' && role !== 'assistant' && role !== 'tool') return null;
-      const content = String(m.content || '');
-      if (!content && role !== 'assistant' && role !== 'tool') return null;
-      const item = { role, content };
-      if (role === 'assistant') {
-        const tcClean = __gmAiCleanToolCalls(m.tool_calls);
-        if (tcClean.length) item.tool_calls = tcClean;
-      } else if (role === 'tool') {
-        const tcid = String(m.tool_call_id || '');
-        if (tcid) item.tool_call_id = tcid;
-        const tname = String(m.name || '');
-        if (tname) item.name = tname;
-      }
-      return item;
-    } catch(_) { return null; }
-  }
-
   function __gmAiBuildMessagesForSend(allMsgs) {
     try {
       const arr = Array.isArray(allMsgs) ? allMsgs : [];
@@ -5523,8 +5502,6 @@ flex-shrink:0;cursor:pointer;
         } else if (role === 'tool') {
           const tcid = String(m.tool_call_id || '');
           if (tcid) item.tool_call_id = tcid;
-          const tname = String(m.name || '');
-          if (tname) item.name = tname;
         }
         if (role === 'system') sys.push(item);
         else rest.push(item);
@@ -16041,8 +16018,6 @@ flex-shrink:0;cursor:pointer;
               } else if (role === 'tool') {
                 const tcid = String(m && m.tool_call_id || '');
                 if (tcid) item.tool_call_id = tcid;
-                const tname = String(m && m.name || '');
-                if (tname) item.name = tname;
               }
               return item;
             } catch (e1) {
@@ -29811,6 +29786,10 @@ flex-shrink:0;cursor:pointer;
       if (u.startsWith('#')) return u;
       if (u.startsWith('/')) return u;
       if (u.startsWith('./') || u.startsWith('../')) return u;
+      // Windows 绝对路径（如 D:\path 或 D:/path）
+      if (/^[a-zA-Z]:[\\\/]/.test(u)) return u;
+      // 普通相对路径（不带 ./ 前缀，如 folder/file.png）
+      if (!/^[a-zA-Z]+:/i.test(u) && !u.startsWith('/')) return u;
       return '';
     } catch (e) {
       return '';
@@ -29823,6 +29802,12 @@ flex-shrink:0;cursor:pointer;
       if (!u) return '';
       if (/^https?:\/\//i.test(u)) return u;
       if (u.startsWith('/api/')) return u; // allow any API-served attachment URLs
+      // Windows 绝对路径（如 D:\path 或 C:/path）也尝试转换
+      if (/^[a-zA-Z]:[\\\/]/.test(u)) {
+        const mapped = __gmMediaUrlFromMaybePath(u);
+        if (mapped && String(mapped).startsWith('/api/raw_file?path=')) return mapped;
+        return '';
+      }
       if (u.startsWith('./') || u.startsWith('../') || (!u.startsWith('/') && !/^[a-zA-Z]+:/i.test(u))) {
         const mapped = __gmMediaUrlFromMaybePath(u);
         if (mapped && String(mapped).startsWith('/api/raw_file?path=')) return mapped;
@@ -29842,7 +29827,12 @@ flex-shrink:0;cursor:pointer;
       if (s.startsWith('/api/raw_file?path=')) return s;
       if (s.startsWith('file://')) s = s.slice(7);
       if (s.startsWith('@')) s = s.slice(1);
+      // 统一路径分隔符为正斜杠
       s = s.replace(/\\/g, '/');
+      // Windows 绝对路径（如 D:/path）：保留完整路径，后端会验证是否在仓库内
+      if (/^[a-zA-Z]:\//.test(s)) {
+        return '/api/raw_file?path=' + encodeURIComponent(s);
+      }
       s = s.replace(/^\.(\/|\\)/, '');
       s = s.replace(/^\//, '');
       if (!s) return '';

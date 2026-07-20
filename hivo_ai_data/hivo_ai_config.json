@@ -54,6 +54,14 @@
   },
   "profiles": [
     {
+      "id": "19f747ee390a755e82405c8e8",
+      "name": "glm-5",
+      "base_url": "https://qianfan.baidubce.com/v2/tokenplan/personal/chat/completions",
+      "api_key": "bce-v3/ALTAKSP-vlv9rEXK09ykM7DvUTVFD/07d44e625187bc4c58880bbdc7c6c53230de46e0",
+      "model": "qianfan-code-latest",
+      "supports_vision": false
+    },
+    {
       "id": "19f650caee0f13a52862bac98",
       "name": "Profile",
       "base_url": "https://opencode.ai/zen/v1",
@@ -74,7 +82,7 @@
       "name": "qwen/qwen2.5-coder-32b-instruct",
       "base_url": "https://integrate.api.nvidia.com/v1",
       "api_key": "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",
-      "model": "qwen/qwen3-coder-480b-a35b-instruct",
+      "model": "qwen/qwen3-next-80b-a3b-instruct",
       "supports_vision": false
     },
     {

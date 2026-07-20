@@ -1721,6 +1721,31 @@ def _hivo_resolve_path_if_needed(rp: str) -> str:
         return str(rp or "").strip()
 
 
+def _hivo_resolve_full_path(rp: str):
+    """将相对路径解析为绝对路径，支持附件路径和仓库路径。
+    返回 (relative_path, absolute_path) 元组。
+    """
+    try:
+        p0 = str(rp or "").strip()
+        p0 = _hivo_resolve_path_if_needed(p0)
+        base_data = str(_hivo_ai_data_dir())
+        p_norm = str(p0 or "").replace("\\", "/")
+        if p_norm.startswith("hivo_ai_data/attachments/"):
+            suffix = p_norm.split("hivo_ai_data/", 1)[1]
+            rp_out = suffix
+            full = os.path.abspath(os.path.join(base_data, suffix))
+        elif p_norm.startswith("attachments/"):
+            rp_out = p_norm
+            full = os.path.abspath(os.path.join(base_data, p_norm))
+        else:
+            rp_out = p_norm
+            full = _safe_repo_abspath(p_norm)
+        return rp_out, full
+    except Exception:
+        p_out = str(rp or "").strip()
+        return p_out, _safe_repo_abspath(p_out)
+
+
 def _hivo_tool_call_sig(call: dict):
     try:
         if not isinstance(call, dict):
@@ -2291,7 +2316,7 @@ def _hivo_parse_context_refs_structured(context_refs: list, per_file_chars: int 
                     ok = False
             except Exception:
                 ok = False
-            return True, "", {"file": {"file_name": bn, "file_type": "application/pdf", "file_size": int(os.path.getsize(full) if os.path.exists(full) else 0), "page_count": int(page_count), "pages": pages, **({"note": "pdf_parser_unavailable"} if (not ok and not pages) else {})}}
+            return True, "", {"file": {"path": resolved, "file_type": "application/pdf", "file_size": int(os.path.getsize(full) if os.path.exists(full) else 0), "page_count": int(page_count), "pages": pages, **({"note": "pdf_parser_unavailable"} if (not ok and not pages) else {})}}
 
         # Office 文档结构化解析（尽力而为）
         if is_docx:
@@ -2322,8 +2347,8 @@ def _hivo_parse_context_refs_structured(context_refs: list, per_file_chars: int 
                 ok = False
             if not ok:
                 # 退化为简单正文（不可用时留空）
-                return True, "", {"file": {"file_name": bn, "file_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "content": "", "note": "docx_parser_unavailable"}}
-            return True, "", {"file": {"file_name": bn, "file_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "sections": sections}}
+                return True, "", {"file": {"path": resolved, "file_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "content": "", "note": "docx_parser_unavailable"}}
+            return True, "", {"file": {"path": resolved, "file_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "sections": sections}}
 
         if is_xlsx:
             sheets = []
@@ -2346,8 +2371,8 @@ def _hivo_parse_context_refs_structured(context_refs: list, per_file_chars: int 
             except Exception:
                 ok = False
             if not ok:
-                return True, "", {"file": {"file_name": bn, "file_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "sheets": [], "note": "xlsx_parser_unavailable"}}
-            return True, "", {"file": {"file_name": bn, "file_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "sheets": sheets}}
+                return True, "", {"file": {"path": resolved, "file_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "sheets": [], "note": "xlsx_parser_unavailable"}}
+            return True, "", {"file": {"path": resolved, "file_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "sheets": sheets}}
 
         # Legacy Office: DOC (binary)
         if is_doc:
@@ -2355,7 +2380,7 @@ def _hivo_parse_context_refs_structured(context_refs: list, per_file_chars: int 
                 size0 = int(os.path.getsize(full) if os.path.exists(full) else 0)
             except Exception:
                 size0 = 0
-            return True, "", {"file": {"file_name": bn, "file_type": "application/msword", "file_size": size0, "note": "legacy_office_doc_unparsed"}}
+            return True, "", {"file": {"path": resolved, "file_type": "application/msword", "file_size": size0, "note": "legacy_office_doc_unparsed"}}
 
         # Legacy Office: XLS (binary)
         if is_xls:
@@ -2363,7 +2388,7 @@ def _hivo_parse_context_refs_structured(context_refs: list, per_file_chars: int 
                 size0 = int(os.path.getsize(full) if os.path.exists(full) else 0)
             except Exception:
                 size0 = 0
-            return True, "", {"file": {"file_name": bn, "file_type": "application/vnd.ms-excel", "file_size": size0, "sheets": [], "note": "legacy_office_xls_unparsed"}}
+            return True, "", {"file": {"path": resolved, "file_type": "application/vnd.ms-excel", "file_size": size0, "sheets": [], "note": "legacy_office_xls_unparsed"}}
 
         # Legacy Office: PPT (binary)
         if is_ppt:
@@ -2371,7 +2396,7 @@ def _hivo_parse_context_refs_structured(context_refs: list, per_file_chars: int 
                 size0 = int(os.path.getsize(full) if os.path.exists(full) else 0)
             except Exception:
                 size0 = 0
-            return True, "", {"file": {"file_name": bn, "file_type": "application/vnd.ms-powerpoint", "file_size": size0, "slides": [], "note": "legacy_office_ppt_unparsed"}}
+            return True, "", {"file": {"path": resolved, "file_type": "application/vnd.ms-powerpoint", "file_size": size0, "slides": [], "note": "legacy_office_ppt_unparsed"}}
 
         if is_pptx:
             slides = []
@@ -2400,8 +2425,8 @@ def _hivo_parse_context_refs_structured(context_refs: list, per_file_chars: int 
             except Exception:
                 ok = False
             if not ok:
-                return True, "", {"file": {"file_name": bn, "file_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation", "slides": [], "note": "pptx_parser_unavailable"}}
-            return True, "", {"file": {"file_name": bn, "file_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation", "slides": slides}}
+                return True, "", {"file": {"path": resolved, "file_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation", "slides": [], "note": "pptx_parser_unavailable"}}
+            return True, "", {"file": {"path": resolved, "file_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation", "slides": slides}}
 
         if is_zip:
             entries = []
@@ -2413,7 +2438,7 @@ def _hivo_parse_context_refs_structured(context_refs: list, per_file_chars: int 
                         entries.append({"name": n, "type": t or "application/octet-stream"})
             except Exception:
                 entries = []
-            return True, "", {"file": {"file_name": bn, "file_type": "application/zip", "entries": entries}}
+            return True, "", {"file": {"path": resolved, "file_type": "application/zip", "entries": entries}}
 
         if is_media:
             item["资源类型"] = "媒体/二进制"
@@ -5199,12 +5224,13 @@ def _hivo_ai_normalize_message(m: dict) -> dict | None:
         return None
     c0 = m.get("content")
     if isinstance(c0, list):
-        item = {"role": role, "content": c0}
+        content = c0
     else:
         content = str(c0 or "")
-        if not content and role not in ("assistant", "tool"):
-            return None
-        item = {"role": role, "content": content}
+    # 无有效内容且非 assistant/tool 消息则返回 None
+    if not _hivo_ai_msg_has_valid_content({"content": content}) and role not in ("assistant", "tool"):
+        return None
+    item = {"role": role, "content": content}
     if role == "assistant":
         try:
             tc_list = m.get("tool_calls")
@@ -5218,12 +5244,6 @@ def _hivo_ai_normalize_message(m: dict) -> dict | None:
             tcid = str(m.get("tool_call_id") or "").strip()
             if tcid:
                 item["tool_call_id"] = tcid
-        except Exception:
-            pass
-        try:
-            tname = str(m.get("name") or "").strip()
-            if tname:
-                item["name"] = tname
         except Exception:
             pass
     return item
@@ -5269,6 +5289,32 @@ def _hivo_ai_fix_tool_call_ids(messages: list):
         return messages
 
 
+def _hivo_ai_clean_att_meta(meta_in, include_path: bool = False) -> list:
+    """清洗 _attMeta 列表，标准化为 name/mime/size/url(可选 path) 格式。
+    用于消除多处 _attMeta 处理的重复代码。
+    """
+    if not isinstance(meta_in, list) or not meta_in:
+        return []
+    meta_out = []
+    for a in meta_in:
+        if not isinstance(a, dict):
+            continue
+        o = {
+            "name": str(a.get("name") or "file"),
+            "mime": str(a.get("mime") or ""),
+            "size": int(a.get("size") or 0),
+        }
+        u = str(a.get("url") or "").strip()
+        if u:
+            o["url"] = u
+        if include_path:
+            pth = str(a.get("path") or "").strip()
+            if pth:
+                o["path"] = pth.replace("\\", "/")
+        meta_out.append(o)
+    return meta_out
+
+
 def _hivo_ai_clean_messages(messages: list, limit: int):
     if not isinstance(messages, list):
         return []
@@ -5277,10 +5323,31 @@ def _hivo_ai_clean_messages(messages: list, limit: int):
         if not isinstance(m, dict):
             continue
         role = str(m.get("role") or "").strip()
-        content = str(m.get("content") or "")
         if role not in ("user", "assistant", "tool"):
             continue
-        if not content and role not in ("assistant", "tool"):
+        # 处理 content：支持字符串和多模态数组两种格式
+        raw_content = m.get("content")
+        if isinstance(raw_content, list):
+            if role == "tool":
+                # tool 消息的多模态 content：剥离图片数据，只保留文本（避免历史记录臃肿）
+                text_parts = []
+                for p in raw_content:
+                    if isinstance(p, dict):
+                        pt = str(p.get("type") or "")
+                        if pt == "text":
+                            text_parts.append({"type": "text", "text": str(p.get("text") or "")})
+                if len(text_parts) == 1:
+                    content = text_parts[0]["text"]
+                elif text_parts:
+                    content = text_parts
+                else:
+                    content = ""
+            else:
+                content = raw_content
+        else:
+            content = str(raw_content or "")
+        # 无有效内容且非 assistant/tool 消息则跳过
+        if not _hivo_ai_msg_has_valid_content({"content": content}) and role not in ("assistant", "tool"):
             continue
         item = {"role": role, "content": content}
         if role == "user":
@@ -5295,23 +5362,9 @@ def _hivo_ai_clean_messages(messages: list, limit: int):
                 item["undo_gid"] = ug
             # persist sanitized _attMeta for reliable client render after reload (preserve url if present)
             try:
-                meta_in = m.get("_attMeta")
-                if isinstance(meta_in, list) and meta_in:
-                    meta_out = []
-                    for a in meta_in:
-                        if not isinstance(a, dict):
-                            continue
-                        o = {
-                            "name": str(a.get("name") or "file"),
-                            "mime": str(a.get("mime") or ""),
-                            "size": int(a.get("size") or 0),
-                        }
-                        u = str(a.get("url") or "").strip()
-                        if u:
-                            o["url"] = u
-                        meta_out.append(o)
-                    if meta_out:
-                        item["_attMeta"] = meta_out
+                meta_out = _hivo_ai_clean_att_meta(m.get("_attMeta"))
+                if meta_out:
+                    item["_attMeta"] = meta_out
             except Exception:
                 pass
         elif role == "assistant":
@@ -5389,26 +5442,9 @@ def _hivo_ai_clean_messages(messages: list, limit: int):
                 pass
             # 持久化最小化 _attMeta（渲染附件缩略图）与 __continue_snapshot（用于 Continue 恢复）
             try:
-                meta_in = m.get("_attMeta")
-                if isinstance(meta_in, list) and meta_in:
-                    meta_out = []
-                    for a in meta_in:
-                        if not isinstance(a, dict):
-                            continue
-                        o = {
-                            "name": str(a.get("name") or "file"),
-                            "mime": str(a.get("mime") or ""),
-                            "size": int(a.get("size") or 0),
-                        }
-                        u = str(a.get("url") or "").strip()
-                        if u:
-                            o["url"] = u
-                        pth = str(a.get("path") or "").strip()
-                        if pth:
-                            o["path"] = pth.replace("\\", "/")
-                        meta_out.append(o)
-                    if meta_out:
-                        item["_attMeta"] = meta_out
+                meta_out = _hivo_ai_clean_att_meta(m.get("_attMeta"), include_path=True)
+                if meta_out:
+                    item["_attMeta"] = meta_out
             except Exception:
                 pass
             try:
@@ -5436,40 +5472,15 @@ def _hivo_ai_clean_messages(messages: list, limit: int):
                         ],
                         "env_observation": str(b.get("env_observation") or ""),
                     }
-                    meta_snap = []
-                    try:
-                        for a in (snap.get("_attMeta") if isinstance(snap.get("_attMeta"), list) else []):
-                            if not isinstance(a, dict):
-                                continue
-                            o = {
-                                "name": str(a.get("name") or "file"),
-                                "mime": str(a.get("mime") or ""),
-                                "size": int(a.get("size") or 0),
-                            }
-                            u = str(a.get("url") or "").strip()
-                            if u:
-                                o["url"] = u
-                            pth = str(a.get("path") or "").strip()
-                            if pth:
-                                o["path"] = pth.replace("\\", "/")
-                            meta_snap.append(o)
-                    except Exception:
-                        meta_snap = []
+                    meta_snap = _hivo_ai_clean_att_meta(snap.get("_attMeta"), include_path=True)
                     item["__continue_snapshot"] = {"body": body, "_attMeta": meta_snap}
             except Exception:
                 pass
         elif role == "tool":
-            # 保留 tool 消息的 tool_call_id 和 name，确保工具调用链 ID 匹配
             try:
                 tcid = str(m.get("tool_call_id") or "").strip()
                 if tcid:
                     item["tool_call_id"] = tcid
-            except Exception:
-                pass
-            try:
-                tname = str(m.get("name") or "").strip()
-                if tname:
-                    item["name"] = tname
             except Exception:
                 pass
         cleaned.append(item)
@@ -5857,11 +5868,16 @@ def load_ai_chat_history(profile_id: str, limit: int = 40, session_id: str | Non
             if not isinstance(m, dict):
                 continue
             role = str(m.get("role") or "").strip()
-            content = str(m.get("content") or "")
+            # 处理 content：支持字符串和多模态数组两种格式
+            raw_content = m.get("content")
+            if isinstance(raw_content, list):
+                content = raw_content
+            else:
+                content = str(raw_content or "")
             if role not in ("user", "assistant", "system", "tool"):
                 continue
             # Skip empty content except we still allow tracking for last assistant (for session-level continue)
-            if not content and role not in ("assistant", "tool"):
+            if not _hivo_ai_msg_has_valid_content({"content": content}) and role not in ("assistant", "tool"):
                 continue
             item = {"role": role, "content": content}
             # Preserve common identifiers when present
@@ -5927,17 +5943,10 @@ def load_ai_chat_history(profile_id: str, limit: int = 40, session_id: str | Non
                 # Track for session-level continue computation
                 last_assistant = m
             elif role == "tool":
-                # 保留 tool 消息的 tool_call_id 和 name
                 try:
                     tcid = str(m.get("tool_call_id") or "").strip()
                     if tcid:
                         item["tool_call_id"] = tcid
-                except Exception:
-                    pass
-                try:
-                    tname = str(m.get("name") or "").strip()
-                    if tname:
-                        item["name"] = tname
                 except Exception:
                     pass
             out.append(item)
@@ -6626,13 +6635,24 @@ def get_capabilities_spec():
             "example": {"type": "save_file", "path": "README.md", "content": "# Title"},
         },
         {
+            "type": "edit_file",
+            "desc": "局部编辑文件内容（将文件中指定的 old_string 替换为 new_string）。适用于修改大文件的一小部分，比 save_file 更高效。old_string 必须在文件中唯一匹配，否则返回错误。",
+            "required": ["path", "old_string", "new_string"],
+            "properties": {
+                "path": {"type": "string", "desc": "相对路径，必须在仓库内"},
+                "old_string": {"type": "string", "desc": "要替换的旧文本（必须在文件中唯一存在）"},
+                "new_string": {"type": "string", "desc": "新文本内容"},
+            },
+            "example": {"type": "edit_file", "path": "README.md", "old_string": "# Old Title", "new_string": "# New Title"},
+        },
+        {
             "type": "find_files",
-            "desc": "按文件名搜索工作区内的文件（用于定位真实路径）。",
+            "desc": "按文件名模糊搜索工作区内的文件（子串匹配，不区分大小写），返回匹配文件的相对路径列表。用户只给文件名或部分名称时，先用此工具定位真实路径。",
             "required": ["name"],
             "properties": {
-                "name": {"type": "string", "desc": "文件名（可包含扩展名），例如 server.py / index.html"},
+                "name": {"type": "string", "desc": "文件名或部分名称（支持模糊匹配，如 server / .py / 123 均可）"},
             },
-            "example": {"type": "find_files", "name": "server.py"},
+            "example": {"type": "find_files", "name": "server"},
         },
         {
             "type": "delete_file",
@@ -6652,6 +6672,16 @@ def get_capabilities_spec():
                 "new_path": {"type": "string", "desc": "新相对路径"},
             },
             "example": {"type": "rename_file", "old_path": "a.txt", "new_path": "b.txt"},
+        },
+        {
+            "type": "copy_file",
+            "desc": "复制文件或目录（支持复制到另一个目录，或复制为新文件名）。",
+            "required": ["source", "destination"],
+            "properties": {
+                "source": {"type": "string", "desc": "源相对路径（文件或目录）"},
+                "destination": {"type": "string", "desc": "目标相对路径（文件或目录）"},
+            },
+            "example": {"type": "copy_file", "source": "a.txt", "destination": "b.txt"},
         },
         {
             "type": "mkdir",
@@ -6837,45 +6867,6 @@ def get_capabilities_spec():
             "example": {"type": "set_origin", "url": "https://gitee.com/gzgdata/ntos-test.git"},
         },
         {
-            "type": "staged_files",
-            "desc": "列出暂存区（index）文件列表（只读）。",
-            "required": [],
-            "properties": {},
-            "example": {"type": "staged_files"},
-        },
-        {
-            "type": "unstage_file",
-            "desc": "将指定文件从暂存区恢复到工作区（取消暂存，保留工作区改动）。",
-            "required": ["path"],
-            "properties": {
-                "path": {"type": "string", "desc": "文件相对路径"},
-            },
-            "example": {"type": "unstage_file", "path": "server.py"},
-        },
-        {
-            "type": "discard_staged_file",
-            "desc": "丢弃指定文件在暂存区的内容（并同步丢弃工作区该文件改动，恢复到 HEAD）。",
-            "required": ["path"],
-            "properties": {
-                "path": {"type": "string", "desc": "文件相对路径"},
-            },
-            "example": {"type": "discard_staged_file", "path": "server.py"},
-        },
-        {
-            "type": "unstage_all_staged",
-            "desc": "将全部暂存区文件恢复到工作区（取消全部暂存，保留工作区改动）。",
-            "required": [],
-            "properties": {},
-            "example": {"type": "unstage_all_staged"},
-        },
-        {
-            "type": "discard_all_staged",
-            "desc": "丢弃全部暂存区内容（并同步丢弃相关工作区改动，恢复到 HEAD）。",
-            "required": [],
-            "properties": {},
-            "example": {"type": "discard_all_staged"},
-        },
-        {
             "type": "workspace_context",
             "desc": "获取工作区上下文摘要（用于让 AI 了解当前工作区、文件树摘要等）。",
             "required": [],
@@ -6956,12 +6947,52 @@ def get_capabilities_spec():
         },
         {
             "type": "get_file",
-            "desc": "统一文件接口：文本直接返回 content；媒体/二进制直接返回 data_url（base64，受限大小），不返回本地URL。仅使用 path（相对路径或 attachments/...）",
+            "desc": "统一文件接口：文本直接返回 content；媒体/二进制直接返回 data_url（base64，受限大小），不返回本地URL。路径不确定时，先用 find_files 按文件名搜索定位。",
             "required": ["path"],
             "properties": {
-                "path": {"type": "string", "desc": "相对路径或 attachments/..."}
+                "path": {"type": "string", "desc": "相对路径（路径不确定请先用 find_files 搜索定位）"}
             },
             "example": {"type": "get_file", "path": "README.md"},
+        },
+        {
+            "type": "file_stat",
+            "desc": "获取文件或目录的元信息（是否存在、大小、修改时间、类型等）。不返回文件内容，仅用于确认文件状态。",
+            "required": ["path"],
+            "properties": {
+                "path": {"type": "string", "desc": "相对路径"}
+            },
+            "example": {"type": "file_stat", "path": "README.md"},
+        },
+        {
+            "type": "read_pdf",
+            "desc": "读取 PDF 文件内容。将 PDF 文本提取为纯文本返回。支持读取部分页面。",
+            "required": ["path"],
+            "properties": {
+                "path": {"type": "string", "desc": "PDF 文件相对路径"},
+                "page_num": {"type": "integer", "desc": "指定页码（1 开始），不指定则读取全部"},
+                "max_pages": {"type": "integer", "desc": "最多读取页数（默认 50 页）"},
+            },
+            "example": {"type": "read_pdf", "path": "docs/report.pdf", "max_pages": 10},
+        },
+        {
+            "type": "read_docx",
+            "desc": "读取 Word（.docx）文件内容。将文档文本提取为纯文本返回。",
+            "required": ["path"],
+            "properties": {
+                "path": {"type": "string", "desc": "docx 文件相对路径"},
+            },
+            "example": {"type": "read_docx", "path": "docs/report.docx"},
+        },
+        {
+            "type": "read_xlsx",
+            "desc": "读取 Excel（.xlsx）文件内容。将表格数据提取为文本或 JSON 返回。",
+            "required": ["path"],
+            "properties": {
+                "path": {"type": "string", "desc": "xlsx 文件相对路径"},
+                "sheet_name": {"type": "string", "desc": "指定工作表名称，不指定则读取第一个"},
+                "max_rows": {"type": "integer", "desc": "最多读取行数（默认 200 行）"},
+            },
+            "example": {"type": "read_xlsx", "path": "data/sheet.xlsx", "max_rows": 50},
         },
         {
             "type": "undo_stats",
@@ -7050,6 +7081,25 @@ def get_capabilities_spec():
                 "cwd": {"type": "string", "desc": "可选，工作目录（相对仓库根目录）"},
             },
             "example": {"type": "run_cmd", "cmd": "git status", "timeout": 30},
+        },
+        {
+            "type": "list_processes",
+            "desc": "列出系统进程和端口占用情况。支持按名称过滤进程或按端口查找占用进程。",
+            "required": [],
+            "properties": {
+                "filter": {"type": "string", "desc": "可选，按进程名或端口号过滤"},
+                "limit": {"type": "integer", "desc": "最多返回条数（默认 50）"},
+            },
+            "example": {"type": "list_processes", "filter": "python"},
+        },
+        {
+            "type": "env_info",
+            "desc": "获取当前运行环境信息（Python版本、操作系统、已安装的关键依赖包版本等）。",
+            "required": [],
+            "properties": {
+                "type": {"type": "string", "desc": "可选，all/python/system/packages，默认 all"},
+            },
+            "example": {"type": "env_info", "type": "all"},
         },
         {
             "type": "web_search",
@@ -7426,7 +7476,6 @@ def _ai_estimate_messages_tokens(messages: list):
                         total += _ai_estimate_text_tokens(func.get("arguments"))
             elif role == "tool":
                 total += _ai_estimate_text_tokens(m.get("tool_call_id"))
-                total += _ai_estimate_text_tokens(m.get("name"))
         total += 8
         return int(total)
     except Exception:
@@ -7450,6 +7499,45 @@ def _ai_truncate_text_to_tokens(text: str, keep_tokens: int):
             return s
     except Exception:
         return str(text or "")
+
+
+def _hivo_normalize_tool_data(obj):
+    """递归地把工具返回数据中的反斜杠路径替换为正斜杠，避免 markdown-it 转义破坏。"""
+    try:
+        if isinstance(obj, str):
+            # 不处理 URL 协议（http://、https://、data: 等）
+            if re.match(r'^[a-zA-Z]+://', obj):
+                return obj
+            return obj.replace('\\', '/')
+        if isinstance(obj, list):
+            return [_hivo_normalize_tool_data(item) for item in obj]
+        if isinstance(obj, dict):
+            return {k: _hivo_normalize_tool_data(v) for k, v in obj.items()}
+        return obj
+    except Exception:
+        return obj
+
+
+def _hivo_ai_msg_has_valid_content(m):
+    """判断消息是否有有效内容（支持字符串和多模态数组两种 content 格式）。"""
+    try:
+        if not isinstance(m, dict):
+            return False
+        c = m.get("content")
+        if isinstance(c, str):
+            return bool(c.strip())
+        if isinstance(c, list):
+            for p in c:
+                if isinstance(p, dict):
+                    pt = str(p.get("type") or "")
+                    if pt == "text" and str(p.get("text") or "").strip():
+                        return True
+                    if pt in ("image_url", "image", "input_image"):
+                        return True
+            return False
+        return False
+    except Exception:
+        return False
 
 
 def _ai_trim_messages_to_budget(messages: list, max_total_tokens: int, reserve_output_tokens: int = 0):
@@ -7480,21 +7568,6 @@ def _ai_trim_messages_to_budget(messages: list, max_total_tokens: int, reserve_o
                 return True
             return False
 
-        def _msg_has_valid_content(m):
-            c = m.get("content")
-            if isinstance(c, str):
-                return bool(c.strip())
-            if isinstance(c, list):
-                for p in c:
-                    if isinstance(p, dict):
-                        pt = str(p.get("type") or "")
-                        if pt == "text" and str(p.get("text") or "").strip():
-                            return True
-                        if pt in ("image_url", "image", "input_image"):
-                            return True
-                return False
-            return False
-
         cleaned = []
         last = None
         for m in arr:
@@ -7507,14 +7580,14 @@ def _ai_trim_messages_to_budget(messages: list, max_total_tokens: int, reserve_o
             elif r == "assistant":
                 tc = m.get("tool_calls")
                 has_tc = isinstance(tc, list) and len(tc) > 0
-                if not has_tc and not _msg_has_valid_content(m):
+                if not has_tc and not _hivo_ai_msg_has_valid_content(m):
                     continue
             else:
-                if not _msg_has_valid_content(m):
+                if not _hivo_ai_msg_has_valid_content(m):
                     continue
             if is_dup(last, m):
                 continue
-            if r == "assistant" and _msg_has_valid_content(m) and str(m.get("content") or "").strip() in ("对话内容过长，已超过限制",):
+            if r == "assistant" and _hivo_ai_msg_has_valid_content(m) and str(m.get("content") or "").strip() in ("对话内容过长，已超过限制",):
                 continue
             cleaned.append(m)
             last = m
@@ -7589,12 +7662,22 @@ def _ai_trim_messages_to_budget(messages: list, max_total_tokens: int, reserve_o
             parts = []
             keep_turns = 6
             turn_count = 0
+            last_tc_map = {}
             for m in older_msgs:
                 role = str(m.get("role") or "")
                 if role == "user":
                     turn_count += 1
                     if turn_count > keep_turns:
                         break
+                if role == "assistant":
+                    tc = m.get("tool_calls")
+                    if isinstance(tc, list):
+                        for t in tc:
+                            if isinstance(t, dict):
+                                tid = str(t.get("id") or "")
+                                tname = str((t.get("function") or {}).get("name") or "")
+                                if tid and tname:
+                                    last_tc_map[tid] = tname
                 c = m.get("content")
                 if isinstance(c, str):
                     txt = c
@@ -7617,7 +7700,8 @@ def _ai_trim_messages_to_budget(messages: list, max_total_tokens: int, reserve_o
                     else:
                         parts.append("A:" + txt[:220])
                 elif role == "tool":
-                    tname = str(m.get("name") or "tool")
+                    tcid = str(m.get("tool_call_id") or "")
+                    tname = last_tc_map.get(tcid) or "tool"
                     parts.append("T(" + tname + "):" + txt[:80])
                 else:
                     parts.append(txt[:120])
@@ -7693,6 +7777,31 @@ def _ai_trim_messages_to_budget(messages: list, max_total_tokens: int, reserve_o
                         remain3 -= 85
                 if parts:
                     final_out.append({"role": "user", "content": parts})
+
+        # 简化超大的 tool 消息，避免 base64 图片等大内容撑爆上下文
+        if final_out and max_total_tokens > 0:
+            tool_content_limit = max(512, int(max_total_tokens * 0.05))
+            for m in final_out:
+                if not isinstance(m, dict):
+                    continue
+                if str(m.get("role") or "") != "tool":
+                    continue
+                c = m.get("content")
+                if not isinstance(c, str):
+                    continue
+                # 粗略估算：长度 / 4 ≈ token 数
+                est_tokens = len(c) // 4
+                if est_tokens <= tool_content_limit:
+                    continue
+                # 检测是否是 base64 图片
+                is_b64_img = c.startswith("data:image") or (len(c) > 100 and all(ch in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=" for ch in c[:80]))
+                if is_b64_img:
+                    m["content"] = "[image content omitted - too large to fit in context window]"
+                else:
+                    # 长文本：截断前 200 字符 + 摘要
+                    head = c[:200]
+                    m["content"] = f"[truncated - content too large ({est_tokens} tokens)]\n{head}..."
+
         if final_out:
             return final_out
         return None
@@ -8742,13 +8851,27 @@ def _ai_build_system_context_text(cfg=None, use_native_tools=True):
         "# 工具调用\n"
         "- 仅使用系统提供的工具，不要臆造工具名或参数\n"
         "- 每轮最多同时调用 3 个工具\n"
-        "- 工具调用后等待结果返回再继续下一步\n\n"
+        "- 工具调用后等待结果返回再继续下一步\n"
+        "- 文件路径不明确时先用 find_files 模糊搜索，支持部分文件名匹配\n"
+        "- 修改大文件时优先用 edit_file（局部替换），比 save_file 更高效可靠\n"
+        "- 只需确认文件是否存在或获取元信息时用 file_stat，不要用 get_file\n"
+        "- 所有路径使用正斜杠 /，不要用反斜杠 \\\n"
+        "- 需要读取文档文件时用 read_pdf/read_docx/read_xlsx\n"
+        "- 排查端口冲突或查看运行进程时用 list_processes\n"
+        "- 排查环境问题时用 env_info 查看 Python 版本和依赖\n\n"
         if use_native_tools else
         "# 工具调用\n"
         "- 工具定义见 TOOL_REGISTRY_JSON\n"
         "- 只使用已定义的工具，确保 required 参数完整\n"
         "- 每轮最多 3 个工具调用，末尾独占一行\n"
-        "- 工具调用后等待回执再进行下一步\n\n"
+        "- 工具调用后等待回执再进行下一步\n"
+        "- 文件路径不明确时先用 find_files 模糊搜索，支持部分文件名匹配\n"
+        "- 修改大文件时优先用 edit_file（局部替换），比 save_file 更高效可靠\n"
+        "- 只需确认文件是否存在或获取元信息时用 file_stat，不要用 get_file\n"
+        "- 所有路径使用正斜杠 /，不要用反斜杠 \\\n"
+        "- 需要读取文档文件时用 read_pdf/read_docx/read_xlsx\n"
+        "- 排查端口冲突或查看运行进程时用 list_processes\n"
+        "- 排查环境问题时用 env_info 查看 Python 版本和依赖\n\n"
     )
 
     strong = (
@@ -9131,33 +9254,14 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
             })
         except Exception as e:
             logger.debug(f"Exception ignored: {e}")
-        return True, "", {"file": {"path": pick, "file_name": os.path.basename(pick), "view": view, "encoding": encoding, "content": content}}
+        return True, "", {"file": {"path": pick, "view": view, "encoding": encoding, "content": content}}
 
     # File/Workspace
     if t in ("get_file",):
-        rp = str(tool.get("path") or tool.get("name") or "").strip()
-        rp = _hivo_resolve_path_if_needed(rp)
-        # 不再支持 URL 解析；仅使用 path
-        # 若是对话附件，改从 hivo_ai_data/attachments 读取
-        full = ""
-        try:
-            base_data = str(_hivo_ai_data_dir())
-            rp_norm = str(rp or "").replace("\\", "/")
-            if rp_norm.startswith("hivo_ai_data/attachments/"):
-                suffix = rp_norm.split("hivo_ai_data/", 1)[1]
-                rp = suffix
-                full = os.path.abspath(os.path.join(base_data, suffix))
-            elif rp_norm.startswith("attachments/"):
-                rp = rp_norm
-                full = os.path.abspath(os.path.join(base_data, rp_norm))
-            else:
-                full = _safe_repo_abspath(rp_norm)
-        except Exception:
-            full = _safe_repo_abspath(rp)
-        # 可观测性（已按需禁用详细日志）
+        rp_in = str(tool.get("path") or tool.get("name") or "").strip()
+        rp, full = _hivo_resolve_full_path(rp_in)
         if not (full and os.path.exists(full)) or os.path.isdir(full):
-            bn0 = os.path.basename(str(rp).replace("\\", "/"))
-            return False, "文件不存在", {"file": {"file_name": bn0}}
+            return False, "文件不存在", {"file": {"path": rp}}
         # 判定媒体 or 文本
         try:
             mime0, _enc0 = mimetypes.guess_type(full)
@@ -9198,9 +9302,9 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
             try:
                 cfg0 = _hivo_load_cfg()
                 lim0 = cfg0.get("limits") if isinstance(cfg0.get("limits"), dict) else {}
-                max_bytes = int(lim0.get("media_base64_max_bytes") or 2*1024*1024)
+                max_bytes = int(lim0.get("media_base64_max_bytes") or 256*1024)
             except Exception:
-                max_bytes = 2*1024*1024
+                max_bytes = 256*1024
 
             b: bytes = b""
             truncated = False
@@ -9255,24 +9359,25 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
 
             import base64
             b64 = ""
+            data_url = ""
             try:
                 if b:
                     b64 = base64.b64encode(b).decode("ascii", errors="ignore")
+                    if b64:
+                        data_url = f"data:{ftype};base64,{b64}"
             except Exception:
                 b64 = ""
+                data_url = ""
             if ftype.startswith("image/"):
-                # 返回纯数据与维度信息，不返回 path
                 return True, "", {
                     "file": {
-                        "file_name": bn,
+                        "path": rp,
                         "file_type": ftype,
-                        "file_size": size0,
-                        "mime_type": ftype,
-                        "image_data": b64,
+                        "size": size0,
+                        "data_url": data_url,
                         "width": int(width),
                         "height": int(height),
                         "truncated": bool(truncated) and (not downscaled),
-                        "max_bytes": int(max_bytes),
                     }
                 }
             else:
@@ -9280,7 +9385,7 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
                 if ftype.startswith("audio/") or ftype.startswith("video/"):
                     return True, "", {
                         "file": {
-                            "file_name": bn,
+                            "path": rp,
                             "file_type": ftype,
                             "size": size0,
                             "supported": False,
@@ -9299,7 +9404,7 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
                         sha256 = ""
                     return True, "", {
                         "file": {
-                            "file_name": bn,
+                            "path": rp,
                             "file_type": ftype or "application/octet-stream",
                             "size": size0,
                             "sha256": sha256,
@@ -9327,7 +9432,7 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
             except Exception:
                 data = b""
             if not data:
-                return True, "", {"file": {"file_name": bn, "file_type": "text/plain", "encoding": "utf-8", "content": ""}}
+                return True, "", {"file": {"path": rp, "file_type": "text/plain", "encoding": "utf-8", "content": ""}}
             encoding = None
             try:
                 try:
@@ -9362,28 +9467,130 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
             except Exception:
                 content = ""
                 encoding = "utf-8"
-            # 返回文本内容，不返回 path
             ftype_txt = None
             try:
                 ftype_txt, _ = mimetypes.guess_type(bn)
             except Exception:
                 ftype_txt = None
-            return True, "", {"file": {"file_name": bn, "file_type": (ftype_txt or "text/plain"), "encoding": encoding, "content": content}}
+            return True, "", {"file": {"path": rp, "file_type": (ftype_txt or "text/plain"), "encoding": encoding, "content": content}}
         else:
             # 仓库内文件：按相对路径读取
             rp_norm = str(rp or "").replace("\\", "/")
             content, encoding = get_file_content(rp_norm, return_encoding=True)
             if content is None:
-                bn2 = os.path.basename(str(rp).replace("\\", "/"))
-                return False, "无法读取文件内容", {"file": {"file_name": bn2}}
+                return False, "无法读取文件内容", {"file": {"path": rp}}
             ftype_txt = None
             try:
                 ftype_txt, _ = mimetypes.guess_type(bn)
             except Exception:
                 ftype_txt = None
-            return True, "", {"file": {"file_name": bn, "file_type": (ftype_txt or "text/plain"), "encoding": encoding, "content": content}}
+            return True, "", {"file": {"path": rp, "file_type": (ftype_txt or "text/plain"), "encoding": encoding, "content": content}}
 
-    
+    if t == "file_stat":
+        rp_in = str(tool.get("path") or "").strip()
+        rp, full = _hivo_resolve_full_path(rp_in)
+        if not full:
+            return False, "非法路径", {"path": rp, "exists": False}
+        if not os.path.exists(full):
+            return True, "", {"path": rp, "exists": False}
+        try:
+            st = os.stat(full)
+            is_dir = os.path.isdir(full)
+            ftype = None
+            if not is_dir:
+                try:
+                    ftype, _ = mimetypes.guess_type(full)
+                except Exception:
+                    ftype = None
+            return True, "", {
+                "path": rp,
+                "exists": True,
+                "is_dir": is_dir,
+                "is_file": not is_dir,
+                "size": int(st.st_size),
+                "modified_time": int(st.st_mtime),
+                "file_type": ftype or ("inode/directory" if is_dir else "application/octet-stream"),
+            }
+        except Exception as e:
+            return False, str(e), {"path": rp, "exists": True}
+
+    # 文档文件读取工具（PDF/Word/Excel）
+    if t == "read_pdf":
+        rp = str(tool.get("path") or "").strip()
+        if not rp:
+            return False, "path 不能为空", {}
+        full = _safe_repo_abspath(rp)
+        if not full or not os.path.exists(full) or os.path.isdir(full):
+            return False, "文件不存在", {}
+        try:
+            import PyPDF2
+            page_num = tool.get("page_num")
+            max_pages = int(tool.get("max_pages") or 50)
+            texts = []
+            with open(full, "rb") as f:
+                reader = PyPDF2.PdfReader(f)
+                total = len(reader.pages)
+                if page_num is not None:
+                    idx = int(page_num) - 1
+                    if 0 <= idx < total:
+                        texts.append(f"--- Page {page_num} ---\n" + (reader.pages[idx].extract_text() or ""))
+                    else:
+                        return False, f"页码超出范围（共 {total} 页）", {}
+                else:
+                    for i in range(min(total, max_pages)):
+                        texts.append(f"--- Page {i + 1} ---\n" + (reader.pages[i].extract_text() or ""))
+            return True, "", {"path": rp, "total_pages": total, "content": "\n\n".join(texts)}
+        except ImportError:
+            return False, "未安装 PyPDF2，请先执行 pip install PyPDF2", {}
+        except Exception as e:
+            return False, str(e), {}
+
+    if t == "read_docx":
+        rp = str(tool.get("path") or "").strip()
+        if not rp:
+            return False, "path 不能为空", {}
+        full = _safe_repo_abspath(rp)
+        if not full or not os.path.exists(full) or os.path.isdir(full):
+            return False, "文件不存在", {}
+        try:
+            import docx
+            doc = docx.Document(full)
+            texts = []
+            for para in doc.paragraphs:
+                if para.text:
+                    texts.append(para.text)
+            return True, "", {"path": rp, "content": "\n".join(texts)}
+        except ImportError:
+            return False, "未安装 python-docx，请先执行 pip install python-docx", {}
+        except Exception as e:
+            return False, str(e), {}
+
+    if t == "read_xlsx":
+        rp = str(tool.get("path") or "").strip()
+        if not rp:
+            return False, "path 不能为空", {}
+        full = _safe_repo_abspath(rp)
+        if not full or not os.path.exists(full) or os.path.isdir(full):
+            return False, "文件不存在", {}
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(full, data_only=True)
+            sheet_name = str(tool.get("sheet_name") or "").strip()
+            if sheet_name and sheet_name in wb.sheetnames:
+                ws = wb[sheet_name]
+            else:
+                ws = wb.active
+            max_rows = int(tool.get("max_rows") or 200)
+            rows = []
+            for idx, row in enumerate(ws.iter_rows(values_only=True), start=1):
+                if idx > max_rows:
+                    break
+                rows.append([str(cell) if cell is not None else "" for cell in row])
+            return True, "", {"path": rp, "sheet": ws.title, "rows": rows}
+        except ImportError:
+            return False, "未安装 openpyxl，请先执行 pip install openpyxl", {}
+        except Exception as e:
+            return False, str(e), {}
 
     if t in ("read_file_range",):
         rp = _hivo_resolve_path_if_needed(str(tool.get("path") or "").strip())
@@ -9396,11 +9603,9 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
         start_i = max(1, start)
         end_i = max(start_i, end)
         if start_i > len(lines):
-            bn = os.path.basename(rp.replace("\\", "/"))
-            return True, "", {"file": {"path": rp, "file_name": bn, "encoding": encoding, "content": ""}}
+            return True, "", {"file": {"path": rp, "encoding": encoding, "content": ""}}
         seg = lines[start_i - 1:min(len(lines), end_i)]
-        bn = os.path.basename(rp.replace("\\", "/"))
-        return True, "", {"file": {"path": rp, "file_name": bn, "encoding": encoding, "content": "\n".join(seg), "range": {"start": start_i, "end": min(len(lines), end_i)}}}
+        return True, "", {"file": {"path": rp, "encoding": encoding, "content": "\n".join(seg), "range": {"start": start_i, "end": min(len(lines), end_i)}}}
 
     if t in ("list_dir_tree",):
         p0 = str(tool.get("path") or "").strip() or "."
@@ -9415,10 +9620,10 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
         q = str(tool.get("query") or "").strip()
         case_sensitive = bool(tool.get("case_sensitive"))
         max_results = int(tool.get("max_results") or 50)
-        ok, msg, hits = search_code(q, case_sensitive=case_sensitive, max_results=max_results)
-        if not ok:
-            return False, msg or "search_code failed", {}
-        return True, "", {"query": q, "case_sensitive": case_sensitive, "max_results": max_results, "hits": hits}
+        hits, err = search_code(q, case_sensitive=case_sensitive, max_results=max_results)
+        if err:
+            return False, str(err or "search_code failed"), {}
+        return True, "", {"query": q, "case_sensitive": case_sensitive, "max_results": max_results, "hits": hits if isinstance(hits, list) else []}
 
     if t in ("find_files",):
         name = str(tool.get("name") or "").strip()
@@ -9449,8 +9654,7 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
         diff0, err0 = get_file_diff(rp, st, ctx_lines=ctx_lines)
         if err0:
             return False, err0, {"path": rp}
-        bn = os.path.basename(rp.replace("\\", "/"))
-        return True, "", {"file": {"path": rp, "file_name": bn, "diff": diff0, "status": st, "ctx_lines": ctx_lines}}
+        return True, "", {"file": {"path": rp, "diff": diff0, "status": st, "ctx_lines": ctx_lines}}
 
     if t in ("staged_files",):
         files0, err0 = get_staged_files()
@@ -9541,6 +9745,42 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
             notify_files_updated()
         return bool(ok), msg or "", {"path": rp}
 
+    if t == "edit_file":
+        rp = str(tool.get("path") or "").strip()
+        old_str = str(tool.get("old_string") or "")
+        new_str = str(tool.get("new_string") or "")
+        if not rp:
+            return False, "path 不能为空", {}
+        if not old_str:
+            return False, "old_string 不能为空", {}
+        try:
+            cur = get_file_content(rp)
+            if not isinstance(cur, str):
+                return False, "文件不是文本文件", {}
+        except Exception as e:
+            return False, f"读取文件失败: {e}", {}
+        # 检查 old_string 是否唯一匹配
+        count = cur.count(old_str)
+        if count == 0:
+            return False, "未找到匹配的 old_string", {"found": 0}
+        if count > 1:
+            return False, f"old_string 不唯一，匹配到 {count} 处，请提供更多上下文", {"found": count}
+        # 无变化则直接返回
+        if old_str == new_str:
+            return True, "", {"path": rp, "no_change": True}
+        # 保存快照用于 undo
+        if undo_gid:
+            snap = _undo_capture_file_snapshot(rp)
+            if snap is not None:
+                op0 = "modify"
+                _undo_record(undo_gid, {"type": "file_snapshot", "op": op0, "snapshot": snap})
+        new_content = cur.replace(old_str, new_str, 1)
+        ok, msg = save_file_content(rp, new_content)
+        if ok:
+            invalidate_changed_files_cache()
+            notify_files_updated()
+        return bool(ok), msg or "", {"path": rp, "replaced": 1}
+
     if t == "delete_file":
         rp = str(tool.get("path") or "").strip()
         if undo_gid:
@@ -9573,6 +9813,40 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
             invalidate_changed_files_cache()
             notify_files_updated()
         return bool(ok1), msg1 or "", {"old_path": oldp, "new_path": newp}
+
+    if t == "copy_file":
+        src = str(tool.get("source") or "").strip()
+        dst = str(tool.get("destination") or "").strip()
+        if not src or not dst:
+            return False, "source 和 destination 不能为空", {}
+        full_src = _safe_repo_abspath(src)
+        full_dst = _safe_repo_abspath(dst)
+        if not full_src or not full_dst:
+            return False, "非法路径", {}
+        if not os.path.exists(full_src):
+            return False, "源文件不存在", {}
+        try:
+            # 确保目标目录存在
+            dst_dir = os.path.dirname(full_dst)
+            if dst_dir and not os.path.exists(dst_dir):
+                os.makedirs(dst_dir, exist_ok=True)
+            # 如果目标是已存在的目录，则将源复制到目录内
+            if os.path.isdir(full_dst):
+                dst_name = os.path.basename(full_src)
+                full_dst = os.path.join(full_dst, dst_name)
+            if os.path.isdir(full_src):
+                import shutil
+                shutil.copytree(full_src, full_dst)
+                is_dir = True
+            else:
+                import shutil
+                shutil.copy2(full_src, full_dst)
+                is_dir = False
+            invalidate_changed_files_cache()
+            notify_files_updated()
+            return True, "", {"source": src, "destination": dst, "is_dir": is_dir}
+        except Exception as e:
+            return False, str(e), {}
 
     if t == "mkdir":
         rp = str(tool.get("path") or "").strip()
@@ -10109,6 +10383,81 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
             return False, msg1 or "run_cmd failed", {"result": {"cmd": cmd, "timeout": timeout, "cwd": cwd, "output": out1}}
         return True, "", {"result": {"cmd": cmd, "timeout": timeout, "cwd": cwd, "output": out1}}
 
+    if t == "list_processes":
+        try:
+            import psutil
+            flt = str(tool.get("filter") or "").strip().lower()
+            limit = int(tool.get("limit") or 50)
+            procs = []
+            for p in psutil.process_iter(["pid", "name", "exe", "cmdline", "connections", "status"]):
+                try:
+                    info = p.info
+                    name = str(info.get("name") or "").lower()
+                    pid = int(info.get("pid") or 0)
+                    # 按名称过滤
+                    if flt and flt not in name and flt != str(pid):
+                        continue
+                    # 获取端口
+                    ports = []
+                    try:
+                        for conn in p.connections(kind="inet"):
+                            if conn.laddr:
+                                ports.append(str(conn.laddr.port))
+                    except Exception:
+                        pass
+                    cmdline = ""
+                    try:
+                        cl = info.get("cmdline")
+                        if cl:
+                            cmdline = " ".join(str(c) for c in cl)
+                    except Exception:
+                        pass
+                    exe = str(info.get("exe") or "")
+                    procs.append({
+                        "pid": pid,
+                        "name": str(info.get("name") or ""),
+                        "exe": exe,
+                        "cmdline": cmdline,
+                        "ports": ports,
+                        "status": str(info.get("status") or ""),
+                    })
+                except Exception:
+                    pass
+                if len(procs) >= limit:
+                    break
+            return True, "", {"processes": procs, "total": len(procs)}
+        except ImportError:
+            return False, "未安装 psutil，请先执行 pip install psutil", {}
+        except Exception as e:
+            return False, str(e), {}
+
+    if t == "env_info":
+        try:
+            etype = str(tool.get("type") or "all").strip().lower()
+            import sys
+            import platform
+            result = {}
+            if etype in ("all", "python"):
+                result["python_version"] = sys.version
+                result["python_executable"] = sys.executable
+                result["python_path"] = sys.path
+            if etype in ("all", "system"):
+                result["os"] = platform.platform()
+                result["machine"] = platform.machine()
+                result["processor"] = platform.processor()
+            if etype in ("all", "packages"):
+                try:
+                    import pkg_resources
+                    installed = []
+                    for dist in pkg_resources.working_set:
+                        installed.append({"name": dist.project_name, "version": dist.version})
+                    result["packages"] = sorted(installed, key=lambda x: x["name"].lower())[:100]
+                except Exception:
+                    result["packages"] = "无法获取（缺少 setuptools）"
+            return True, "", result
+        except Exception as e:
+            return False, str(e), {}
+
     if t == "web_search":
         q = str(tool.get("query") or "").strip()
         try:
@@ -10284,6 +10633,75 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
             pass
         return False
     attachments_present = _has_meaningful_attachments(atts)
+
+    # 自动提取文档附件（PDF/Word/Excel）的文本内容，回填到 text 字段
+    # 主流 AI Agent 做法：上传文档后 AI 直接看到内容，无需额外工具调用
+    def _extract_attachment_doc(a: dict) -> str:
+        """尝试从附件中提取文档文本内容，失败返回空字符串。"""
+        try:
+            mime = str(a.get("mime") or "")
+            if not any(k in mime for k in ["pdf", "wordprocessingml", "spreadsheetml"]):
+                return ""
+            # 解析文件路径
+            pth = str(a.get("path") or "").strip()
+            if not pth:
+                # 从 url 解析 path
+                u = str(a.get("url") or "").strip()
+                if u and "/api/ai_attachment" in u and "path=" in u:
+                    from urllib.parse import urlparse, parse_qs
+                    pr = urlparse(u)
+                    qs = parse_qs(pr.query or "")
+                    p0 = (qs.get("path") or [""])[0]
+                    pth = str(p0 or "").strip()
+            if not pth:
+                return ""
+            _, full = _hivo_resolve_full_path(pth)
+            if not full or not os.path.exists(full) or os.path.isdir(full):
+                return ""
+            if "pdf" in mime:
+                import PyPDF2
+                reader = PyPDF2.PdfReader(full)
+                pages = []
+                for i in range(min(len(reader.pages), 50)):
+                    t = reader.pages[i].extract_text() or ""
+                    pages.append(t)
+                content = "\n".join(pages)
+            elif "wordprocessingml" in mime:
+                import docx
+                doc = docx.Document(full)
+                paras = [p.text for p in doc.paragraphs if p.text]
+                content = "\n".join(paras)
+            elif "spreadsheetml" in mime:
+                import openpyxl
+                wb = openpyxl.load_workbook(full, data_only=True)
+                ws = wb.active
+                rows = []
+                for idx, row in enumerate(ws.iter_rows(values_only=True), start=1):
+                    if idx > 200:
+                        break
+                    rows.append("\t".join(str(c) if c is not None else "" for c in row))
+                content = "\n".join(rows)
+            else:
+                return ""
+            if content.strip():
+                return content[:8000] + ("\n...（已截断）..." if len(content) > 8000 else "")
+        except ImportError:
+            pass  # 依赖未安装，跳过
+        except Exception:
+            pass
+        return ""
+    try:
+        for a in (atts or []):
+            if not isinstance(a, dict):
+                continue
+            if a.get("text") is not None:
+                continue  # 已有文本内容
+            extracted = _extract_attachment_doc(a)
+            if extracted:
+                a["text"] = extracted
+    except Exception:
+        pass
+
     # 预置回执：即便模型未调用任何工具，但用户本轮携带了附件，也生成一条摘要回执便于前端展示"工具摘要"按钮
     pre_receipts: list[dict] = []
     try:
@@ -10300,16 +10718,34 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
     if user_text:
         if atts:
             # 方案 B：OpenAI 多模态格式
-            # 图片用 image_url 注入 content 数组；文本文件内容拼入 text 部分
+            # 图片用 image_url 注入 content 数组；文本文件内容拼入 text 部分；文档文件自动提取文本
             # 构造 OpenAI 多模态 content 数组
             content_parts = []
-            # 文本部分：用户文本 + 文本附件内容
+            # 文本部分：用户文本 + 文本附件内容 + 文档附件内容（已回填到 text） + 其他附件提示
             txt_files = _format_text_attachments(atts)
             joined_text = []
             if str(user_text):
                 joined_text.append(str(user_text))
             if txt_files:
                 joined_text.append(txt_files)
+            # 其他附件（非图片、无 text 内容）：告知 AI 文件存在
+            other_files = []
+            for a in (atts or []):
+                if not isinstance(a, dict):
+                    continue
+                mime = str(a.get("mime") or "")
+                name = str(a.get("name") or "").strip()
+                size = a.get("size")
+                if not name:
+                    continue
+                if mime.startswith("image/"):
+                    continue  # 图片已单独注入 image_url
+                if a.get("text") is not None and str(a.get("text") or "").strip():
+                    continue  # 已有文本内容（原始文本或自动提取的文档内容）
+                sz_str = f" ({size} bytes)" if isinstance(size, (int, float)) and size > 0 else ""
+                other_files.append(f"{name} / {mime}{sz_str}")
+            if other_files:
+                joined_text.append("【上传的文件】\n" + "\n".join(other_files))
             text_content = "\n\n".join([x for x in joined_text if x]).strip()
             if text_content:
                 content_parts.append({"type": "text", "text": text_content})
@@ -10393,11 +10829,13 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
         sys_text = sys_text.rstrip() + (
             "\n\n路径不明确时先 find_files/search_code；读取大文件建议用 read_file_range 分段。"
             "用户上传的图片已直接内嵌在消息中，无需再调用工具读取。"
+            "用户上传的文档（PDF/Word/Excel）已自动提取内容并显示在消息中，无需再调用工具读取。"
         )
     else:
         sys_text = sys_text.rstrip() + "\n\n【工具调用格式】务必输出严格 JSON（不要多余文本/注释）。" \
             "路径不明确时先 find_files/search_code；读取大文件建议用 read_file_range 分段。" \
             "用户上传的图片已直接内嵌在消息中，无需再调用工具读取。" \
+            "用户上传的文档（PDF/Word/Excel）已自动提取内容并显示在消息中，无需再调用工具读取。" \
             "工具名称和参数格式参见上方工具描述。"
     sys0 = {"role": "system", "content": sys_text}
     msgs = [sys0]
@@ -10914,8 +11352,14 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
             except Exception as e:
                 logger.debug(f"Exception ignored: {e}")
         receipt_text = "\n".join(receipt_lines)
+        # 统一把工具摘要中的反斜杠路径替换为正斜杠（避免 markdown-it 转义破坏）
+        receipt_text = _hivo_normalize_tool_data(receipt_text)
+        # 累积所有轮次的工具回执（多轮工具调用时，每轮都追加，而不是覆盖）
         try:
-            last_tool_receipts = (pre_receipts + receipts) if pre_receipts else receipts[:]
+            if isinstance(last_tool_receipts, list) and isinstance(receipts, list):
+                last_tool_receipts.extend(receipts)
+            else:
+                last_tool_receipts = receipts[:] if isinstance(receipts, list) else []
         except Exception:
             last_tool_receipts = receipts
 
@@ -10931,23 +11375,39 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
                 })
                 for idx, tc in enumerate(cleaned_tool_calls):
                     tc_id = tc["id"]
-                    tc_name = tc["function"]["name"]
                     receipt_content = receipt_text
+                    image_data_url = ""
                     if idx < len(receipts):
                         r = receipts[idx]
                         ok1 = bool(r.get("ok"))
                         detail = str(r.get("msg") or "")
                         data1 = r.get("data") if isinstance(r.get("data"), dict) else {}
+                        # 检查是否是图片返回（get_file 返回 data_url）
+                        try:
+                            f0 = data1.get("file") if isinstance(data1.get("file"), dict) else {}
+                            if f0:
+                                du = str(f0.get("data_url") or "").strip()
+                                if du and du.startswith("data:image/"):
+                                    image_data_url = du
+                        except Exception:
+                            pass
                         receipt_content = json.dumps({
                             "ok": ok1,
                             "msg": detail,
-                            "data": data1,
+                            "data": _hivo_normalize_tool_data(data1),
                         }, ensure_ascii=False)
+                    # 构造 tool 消息内容：有图片则用多模态数组，否则用纯文本
+                    if image_data_url:
+                        tool_content = [
+                            {"type": "text", "text": receipt_content},
+                            {"type": "image_url", "image_url": {"url": image_data_url}},
+                        ]
+                    else:
+                        tool_content = receipt_content
                     msgs.append({
                         "role": "tool",
                         "tool_call_id": tc_id,
-                        "name": tc_name,
-                        "content": receipt_content,
+                        "content": tool_content,
                     })
         else:
             msgs.append({"role": "assistant", "content": content})
