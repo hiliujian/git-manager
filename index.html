@@ -6621,7 +6621,7 @@ flex-shrink:0;cursor:pointer;
             else wrap.classList.remove('is-dragover');
           } catch (e0) {}
         };
-        // Ctrl+F 拦截已移到 if 块外独立注册（见下方 __gmAiCtrlFHandler，document 级捕获阶段监听器）
+        // Ctrl+F 拦截已移到 if 块外独立注册（见下方 __gmCtrlFHandler，document 级捕获阶段监听器）
         aiChatInput.addEventListener('keydown', (e) => {
           try { aiChatInputKeydown(e); } catch (e2) {}
         });
@@ -6674,50 +6674,65 @@ flex-shrink:0;cursor:pointer;
       }
       try { __gmAiChipInit(aiChatInput); } catch (eChipInit) {}
 
-      // 独立注册 Ctrl+F 拦截器（不依赖 aiChatInput.__gmBound）
+      // 全局唯一的 Ctrl+F 派发器：焦点在 Hivo AI 区域就打开对话搜索，否则打开编辑器查找框。
+      // 之前是两个独立注册的 keydown 监听器（AI 一个、编辑器一个）分别判断，谁先谁后
+      // 全靠注册时机，一旦顺序不如预期就会两边同时触发；现在只有这一个入口来做判断和派发，
+      // 不再存在"两边各判断一次、互相不知道对方是否已经处理"的问题。
       if (!window.__gmAiCtrlFBound) {
         window.__gmAiCtrlFBound = true;
-        // 记录鼠标位置，用于判断是否在 AI 面板内
-        let __gmAiMouseX = 0, __gmAiMouseY = 0;
-        document.addEventListener('mousemove', (e) => {
-          __gmAiMouseX = e.clientX;
-          __gmAiMouseY = e.clientY;
-        }, true);
-        const __gmIsMouseInAi = () => {
+
+        // 记录"最近一次点击落在哪个面板里"：聊天记录区域大多是不可 focus 的普通 div，
+        // 点上去 document.activeElement 根本不会变，所以单纯判断真实焦点会导致用户明明
+        // 点了 Hivo AI 聊天区域、Ctrl+F 却没反应，得先点一下输入框才行。这里用点击（而非
+        // 之前用过的、已被移除的"鼠标悬停坐标"方案）来判断——只有真正点进 AI 面板才算数，
+        // 点其他地方立刻清掉，比停留在原位置的鼠标坐标更准确、也不会被无意划过的鼠标误触发。
+        window.__gmAiPanelActive = false;
+        document.addEventListener('mousedown', (e) => {
           try {
             const aiWrap = document.querySelector('.ai-wrap');
-            if (!aiWrap) return false;
-            const r = aiWrap.getBoundingClientRect();
-            return __gmAiMouseX >= r.left && __gmAiMouseX <= r.right &&
-                   __gmAiMouseY >= r.top && __gmAiMouseY <= r.bottom;
-          } catch (_) { return false; }
+            if (!aiWrap) return;
+            window.__gmAiPanelActive = !!(e.target && aiWrap.contains(e.target));
+          } catch (_) {}
+        }, true);
+
+        window.__gmIsCtrlFAiFocused = function () {
+          try {
+            const aiChatView = document.getElementById('aiChatView');
+            if (!aiChatView || aiChatView.style.display === 'none') return false;
+            const ae = document.activeElement;
+            const focusInAi = !!(ae && ae.closest && ae.closest('#aiChatView, #aiChatList, .ai-composer-wrap, .ai-chat-searchbar, .ai-sessions-scroll, .ai-wrap'));
+            return focusInAi || !!window.__gmAiPanelActive;
+          } catch (_) {
+            return false;
+          }
         };
-        const __gmAiCtrlFHandler = (e) => {
+
+        const __gmCtrlFHandler = (e) => {
           try {
             const k = (e.key || '').toLowerCase();
-            if (e.ctrlKey && !e.shiftKey && !e.altKey && k === 'f') {
-              const aiChatView = document.getElementById('aiChatView');
-              if (!aiChatView || aiChatView.style.display === 'none') return;
-              // 焦点在 AI 区域 或 鼠标在 AI 区域 → 触发对话搜索
-              const ae = document.activeElement;
-              const focusInAi = ae && ae.closest && ae.closest('#aiChatView, #aiChatList, .ai-composer-wrap, .ai-chat-searchbar, .ai-sessions-scroll, .ai-wrap');
-              if (!focusInAi && !__gmIsMouseInAi()) return;
-              e.preventDefault();
-              e.stopImmediatePropagation();
+            if (!(e.ctrlKey && !e.shiftKey && !e.altKey && k === 'f')) return;
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            try { e.stopPropagation(); } catch (e2) {}
+
+            if (window.__gmIsCtrlFAiFocused()) {
               try {
                 const bar = document.getElementById('aiChatSearchbar');
                 if (bar && bar.classList.contains('show')) {
-                  const inp = document.getElementById('aiChatSearchInput');
-                  if (inp) { inp.focus(); inp.select(); }
+                  if (typeof __gmAiCloseChatSearch === 'function') __gmAiCloseChatSearch();
                 } else if (typeof __gmAiOpenChatSearch === 'function') {
                   __gmAiOpenChatSearch();
                 }
               } catch (_) {}
-              return;
+            } else {
+              try {
+                if (typeof isFindBarOpen === 'function' && isFindBarOpen()) closeFindBar();
+                else if (typeof openFindBar === 'function') openFindBar();
+              } catch (_) {}
             }
           } catch (_) {}
         };
-        document.addEventListener('keydown', __gmAiCtrlFHandler, true);
+        document.addEventListener('keydown', __gmCtrlFHandler, true);
       }
 
       const aiAttachInput = document.getElementById('aiAttachInput');
@@ -7878,14 +7893,7 @@ flex-shrink:0;cursor:pointer;
         return;
       }
     }
-    
-    if (e.ctrlKey && !e.shiftKey && !e.altKey && k === 'f') {
-      // AI 对话区的 Ctrl+F 已在捕获阶段由 __gmAiCtrlFHandler 处理（preventDefault + stopPropagation）
-      // 如果事件能到达这里，说明不在 AI 区域，走编辑器查找
-      e.preventDefault();
-      if (isFindBarOpen()) closeFindBar();
-      else openFindBar();
-    }
+    // Ctrl+F 已由全局唯一的 __gmCtrlFHandler（document 捕获阶段）统一处理和派发，这里不再重复处理。
 
     if (e.ctrlKey && !e.shiftKey && !e.altKey && k === 's') {
       // 支持普通编辑器模式和diff模式的保存
