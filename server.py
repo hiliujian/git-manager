@@ -10,6 +10,7 @@ import re
 from collections import deque, OrderedDict
 import subprocess, os, sys, logging, logging.handlers, threading, hashlib, difflib, shutil, mimetypes, base64, tempfile, shlex, atexit
 import queue
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 import urllib.request
 import urllib.error
@@ -4939,12 +4940,6 @@ def revert_line(filepath: str, hunk_idx: int, line_idx: int, status: str, ctx_li
     eol = "\r\n" if "\r\n" in str(content) else "\n"
     cur_lines = normalized.split("\n")
 
-    def _ensure_eol(s: str) -> str:
-        if s is None:
-            s = ""
-        s = str(s)
-        return s
-
     t = (dl.get("type") or "").lower()
     if t == "context":
         return False, "无法撤回上下文行"
@@ -5126,11 +5121,6 @@ def get_log(limit: int = 50):
     
     logger.info(f"成功获取提交历史，共 {len(commits)} 条")
     return commits
-
-
-def _ai_config_path():
-    # Backward-compatible alias: we now use a single unified config file.
-    return _hivo_cfg_path()
 
 
 def _hivo_ai_pick_latest_history_path(base_dir: Path) -> Path | None:
@@ -9172,6 +9162,21 @@ def _hivo_tool_receipt_line(name: str, ok: bool, detail: str = ""):
     return s
 
 
+# 无副作用（不修改仓库/文件系统/远端状态）的工具类型白名单。
+# 仅这些类型允许在同一轮内并发执行——写类操作（save_file/commit/push/run_cmd 等）
+# 一律保持原有顺序串行执行，避免竞态或执行顺序语义被破坏。
+_HIVO_READONLY_TOOL_TYPES = frozenset({
+    "status", "workspace_context", "get_file", "file_stat",
+    "read_pdf", "read_docx", "read_xlsx", "read_file_range",
+    "list_dir_tree", "search_code", "find_files", "list_files",
+    "diff_file", "staged_files", "stash_list",
+    "branches", "commits", "commit_detail", "commit_file_diff", "commit_push_status",
+    "verify_python", "list_processes", "env_info",
+    "web_search", "web_fetch",
+    "browser_text", "browser_screenshot",
+})
+
+
 def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_deadline: float = 0.0):
     t = str((tool or {}).get("type") or "").strip()
     if not t:
@@ -11105,19 +11110,9 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
             ws_enabled, _sc0 = _ai_load_web_search_cfg()
         except Exception:
             ws_enabled = False
-        receipts = []
-        for i_tool, c in enumerate(calls or []):
-            if _hivo_agent_is_cancelled(run_id):
-                final = "已取消执行。"
-                _hivo_ws_emit(run_id, session_id, "error", "用户取消")
-                _hivo_ws_emit_final(run_id, session_id, final, ok=False, extra={"rounds": round_i + 1, "can_continue": True, "continue_reason": "cancelled"})
-                return False, final, run_id
-            if time.time() > agent_deadline:
-                final = "执行超时，已中止。"
-                _hivo_ws_emit(run_id, session_id, "error", "执行超时")
-                _hivo_ws_emit_final(run_id, session_id, final, ok=False, extra={"rounds": round_i + 1, "can_continue": True, "continue_reason": "timeout"})
-                return False, final, run_id
+        receipts_lock = threading.Lock()
 
+        def _process_one_call(i_tool, c):
             name = str(c.get("type") or "")
             try:
                 msg0 = _hivo_status_message(cfg, "executing", tool_count=len(calls))
@@ -11157,7 +11152,8 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
             cached = None
             try:
                 if tool_cache_enabled and cache_key and isinstance(tool_cache, OrderedDict):
-                    cached = tool_cache.get(cache_key)
+                    with receipts_lock:
+                        cached = tool_cache.get(cache_key)
             except Exception:
                 cached = None
 
@@ -11175,33 +11171,79 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
                 ok1, msg1, data1 = _hivo_exec_tool(c2, undo_gid=undo_gid_eff, run_id=run_id, agent_deadline=agent_deadline)
                 # 写操作后清理工具缓存，避免返回旧内容
                 _tool_type = str(c2.get("type") or "").strip()
-                if _tool_type in ("save_file", "delete_file", "rename_file", "unstage_file", "discard_staged_file", "unstage_all_staged", "discard_all_staged") and isinstance(tool_cache, OrderedDict):
+                with receipts_lock:
+                    if _tool_type in ("save_file", "delete_file", "rename_file", "unstage_file", "discard_staged_file", "unstage_all_staged", "discard_all_staged") and isinstance(tool_cache, OrderedDict):
+                        try:
+                            tool_cache.clear()
+                        except Exception:
+                            pass
                     try:
-                        tool_cache.clear()
-                    except Exception:
-                        pass
-                try:
-                    if tool_cache_enabled and cache_key and isinstance(tool_cache, OrderedDict):
-                        tool_cache[cache_key] = {"ok": bool(ok1), "msg": str(msg1 or ""), "data": data1 if isinstance(data1, dict) else {}}
-                        while len(tool_cache) > int(mem_conf.get("tool_cache_items") or 120):
-                            try:
-                                tool_cache.popitem(last=False)
-                            except Exception:
-                                break
-                except Exception as e:
-                    logger.debug(f"Exception ignored: {e}")
+                        if tool_cache_enabled and cache_key and isinstance(tool_cache, OrderedDict):
+                            tool_cache[cache_key] = {"ok": bool(ok1), "msg": str(msg1 or ""), "data": data1 if isinstance(data1, dict) else {}}
+                            while len(tool_cache) > int(mem_conf.get("tool_cache_items") or 120):
+                                try:
+                                    tool_cache.popitem(last=False)
+                                except Exception:
+                                    break
+                    except Exception as e:
+                        logger.debug(f"Exception ignored: {e}")
 
             try:
                 if tool_memory_enabled and memory_enabled:
-                    rec = _hivo_tool_log_record(name, c, bool(ok1), str(msg1 or ""), data=data1 if isinstance(data1, dict) else {})
-                    tool_log0.append(rec)
-                    while len(tool_log0) > int(mem_conf.get("tool_log_items") or 80):
-                        tool_log0.pop(0)
-                    st["tool_log"] = tool_log0
+                    with receipts_lock:
+                        rec = _hivo_tool_log_record(name, c, bool(ok1), str(msg1 or ""), data=data1 if isinstance(data1, dict) else {})
+                        tool_log0.append(rec)
+                        while len(tool_log0) > int(mem_conf.get("tool_log_items") or 80):
+                            tool_log0.pop(0)
+                        st["tool_log"] = tool_log0
             except Exception as e:
                 logger.debug(f"Exception ignored: {e}")
 
-            receipts.append({"type": name, "ok": bool(ok1), "msg": msg1 or "", "request": c2 if isinstance(c2, dict) else {}, "data": data1})
+            return {"type": name, "ok": bool(ok1), "msg": msg1 or "", "request": c2 if isinstance(c2, dict) else {}, "data": data1}
+
+        calls_list = calls or []
+        n_calls = len(calls_list)
+        receipts_slots = [None] * n_calls
+        idx = 0
+        while idx < n_calls:
+            if _hivo_agent_is_cancelled(run_id):
+                final = "已取消执行。"
+                _hivo_ws_emit(run_id, session_id, "error", "用户取消")
+                _hivo_ws_emit_final(run_id, session_id, final, ok=False, extra={"rounds": round_i + 1, "can_continue": True, "continue_reason": "cancelled"})
+                return False, final, run_id
+            if time.time() > agent_deadline:
+                final = "执行超时，已中止。"
+                _hivo_ws_emit(run_id, session_id, "error", "执行超时")
+                _hivo_ws_emit_final(run_id, session_id, final, ok=False, extra={"rounds": round_i + 1, "can_continue": True, "continue_reason": "timeout"})
+                return False, final, run_id
+
+            cur_name = str(calls_list[idx].get("type") or "")
+            if cur_name in _HIVO_READONLY_TOOL_TYPES:
+                # 收集连续的只读工具调用为一批，仅这类调用之间没有先后依赖，允许并发执行；
+                # 一旦遇到写类工具（或到达列表末尾）就结束当前批次，保持与原始调用顺序一致的语义。
+                batch = [idx]
+                j = idx + 1
+                while j < n_calls and str(calls_list[j].get("type") or "") in _HIVO_READONLY_TOOL_TYPES:
+                    batch.append(j)
+                    j += 1
+                if len(batch) == 1:
+                    receipts_slots[batch[0]] = _process_one_call(batch[0], calls_list[batch[0]])
+                else:
+                    with ThreadPoolExecutor(max_workers=min(4, len(batch))) as pool:
+                        fut_map = {pool.submit(_process_one_call, k, calls_list[k]): k for k in batch}
+                        for fut in as_completed(fut_map):
+                            k = fut_map[fut]
+                            try:
+                                receipts_slots[k] = fut.result()
+                            except Exception as e:
+                                nm_err = str(calls_list[k].get("type") or "")
+                                receipts_slots[k] = {"type": nm_err, "ok": False, "msg": f"并行执行异常: {e}", "request": calls_list[k], "data": {}}
+                idx = j
+            else:
+                receipts_slots[idx] = _process_one_call(idx, calls_list[idx])
+                idx += 1
+
+        receipts = receipts_slots
 
         # Auto browser screenshot: only when the round includes a state-changing browser action
         # (open/click/type) but no screenshot was taken, append one extra receipt.
@@ -11426,6 +11468,47 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
     return False, final, run_id
 
 
+# run_cmd 的破坏性命令特征（不区分大小写匹配）。
+# 说明：shlex.split + Popen(shell=False) 已经从根源上阻止了 shell 元字符被解释执行
+# （如 "&&"、"|"、"$(...)" 会被当作字面参数传给第一个程序，而不会触发命令拼接/管道），
+# 但为避免误用/防御性纵深，这里仍然在字符串层面拦截明显的控制字符和已知的破坏性指令，
+# 而不是仅仅依赖 system_prompt 里"禁止管道/重定向"这类纯文本约束（模型可能不遵守）。
+_HIVO_RUN_CMD_BLOCKED_CHARS = (";", "|", "&", "`", "$(", ">", "<")
+_HIVO_RUN_CMD_DANGEROUS_PATTERNS = [
+    r"\brm\s+-[a-z]*r[a-z]*f[a-z]*\s+(/|~|\$home|\.\.)(\s|$)",  # rm -rf / , rm -rf ~ , rm -rf ..
+    r"\brm\s+-[a-z]*f[a-z]*r[a-z]*\s+(/|~|\$home|\.\.)(\s|$)",  # rm -fr / 等参数顺序变体
+    r"\brd\s+/s\b",                                              # Windows: rd /s
+    r"\brmdir\s+/s\b",
+    r"\bdel\s+/[fsq]{1,3}\b.*[\\/]\s*$",                        # del /f /s /q ... 指向根路径
+    r"\bformat\s+[a-z]:",                                        # format C:
+    r"\bmkfs(\.[a-z0-9]+)?\b",                                   # mkfs / mkfs.ext4
+    r"\bdd\s+if=",                                               # dd if=... （磁盘级覆写）
+    r"\bshutdown\b",
+    r"\breboot\b",
+    r"\bhalt\b",
+    r":\(\)\s*\{",                                               # fork bomb :(){ :|:& };:
+]
+
+
+def _hivo_run_cmd_safety_check(cmd: str):
+    """对 run_cmd 工具的命令做代码层强制校验。
+
+    返回 (blocked: bool, reason: str)。命中任一规则即拦截，不进入 subprocess 执行。
+    """
+    c = str(cmd or "")
+    for ch in _HIVO_RUN_CMD_BLOCKED_CHARS:
+        if ch in c:
+            return True, f"命令包含被禁止的控制字符 '{ch}'（不允许管道/重定向/命令拼接，请拆分为单条命令后逐条调用）"
+    low = c.lower()
+    for pat in _HIVO_RUN_CMD_DANGEROUS_PATTERNS:
+        try:
+            if re.search(pat, low):
+                return True, "命令疑似具有破坏性（如递归删除系统目录、格式化磁盘、关机等），已被拦截"
+        except Exception:
+            continue
+    return False, ""
+
+
 def _run_cmd_simple(cmd: str, timeout: int = 30, cwd: str = "", run_id: str = "", agent_deadline: float = 0.0, undo_gid: str = ""):
     if not REPO_PATH:
         return False, "未打开仓库", ""
@@ -11434,6 +11517,10 @@ def _run_cmd_simple(cmd: str, timeout: int = 30, cwd: str = "", run_id: str = ""
         return False, "缺少 cmd", ""
     if "\n" in c or "\r" in c:
         return False, "cmd 必须是单行命令", ""
+    _blocked, _reason = _hivo_run_cmd_safety_check(c)
+    if _blocked:
+        logger.warning(f"[run_cmd] 已拦截高风险命令: {c!r} ({_reason})")
+        return False, _reason, ""
     rid = str(run_id or "").strip()
     try:
         workdir = REPO_PATH
@@ -15511,3 +15598,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
