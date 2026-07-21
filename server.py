@@ -10,6 +10,8 @@ import re
 from collections import deque, OrderedDict
 import subprocess, os, sys, logging, logging.handlers, threading, hashlib, difflib, shutil, mimetypes, base64, tempfile, shlex, atexit
 import queue
+import locale
+import ctypes
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 import urllib.request
@@ -482,6 +484,46 @@ _hivo_agent_run_state: dict = {}  # run_id -> {session_id:str, started_at:float,
 _hivo_agent_session_active: dict = {}  # session_id -> run_id
 _hivo_agent_run_proc: dict = {}  # run_id -> subprocess.Popen
 _hivo_agent_proc_lock = threading.Lock()
+
+
+def _hivo_terminate_process_async(p, grace: float = 3.0):
+    """终止子进程并保证最终被回收，避免僵尸/孤儿进程堆积。
+
+    之前的代码在取消/超时分支里只调用了 `p.terminate()` 就直接 return，从不
+    `wait()`：`terminate()` 只是发送终止信号（POSIX 是 SIGTERM，Windows 是
+    TerminateProcess），并不保证进程已经退出，也不会回收它——不 wait() 的子
+    进程在 POSIX 上会变成僵尸进程，直到本进程退出才被系统回收；如果目标进程
+    忽略/捕获了 SIGTERM（不少脚本会这样做），孤儿进程甚至会一直挂着继续跑。
+    这里用后台线程做“terminate → 等待 grace 秒 → 仍未退出则 kill() → 再 wait()”，
+    不阻塞调用方（取消操作应该立刻返回），但保证进程最终被清理。
+    """
+    try:
+        p.terminate()
+    except Exception:
+        pass
+
+    def _reap():
+        try:
+            p.wait(timeout=grace)
+        except Exception:
+            try:
+                p.kill()
+            except Exception:
+                pass
+            try:
+                p.wait(timeout=2)
+            except Exception:
+                pass
+        for stream in (getattr(p, "stdout", None), getattr(p, "stderr", None), getattr(p, "stdin", None)):
+            try:
+                if stream:
+                    stream.close()
+            except Exception:
+                pass
+
+    threading.Thread(target=_reap, daemon=True, name="hivo-proc-reap").start()
+
+
 undo_lock = threading.Lock()
 # Serialize revert/undo apply operations to prevent race conditions on rapid consecutive actions
 _apply_revert_lock = threading.Lock()
@@ -887,7 +929,7 @@ def _hivo_agent_request_cancel(run_id: str) -> bool:
             proc = _hivo_agent_run_proc.get(rid)
             if proc is not None:
                 try:
-                    proc.terminate()
+                    _hivo_terminate_process_async(proc)
                 except Exception as e:
                     logger.debug(f"Exception ignored: {e}")
         except Exception as e:
@@ -7043,18 +7085,6 @@ def get_capabilities_spec():
             "example": {"type": "commit_push_status", "hash": "abc1234"},
         },
         {
-            "type": "api_request",
-            "desc": "调用 /api/* HTTP 接口。**仅在无更具体工具时使用**，优先使用本列表中的专用工具（如 file_content, diff_file 等）。",
-            "required": ["method", "path"],
-            "properties": {
-                "method": {"type": "string", "desc": "GET 或 POST"},
-                "path": {"type": "string", "desc": "/api/ 开头的路径，例如 /api/workspace_context"},
-                "query": {"type": "object", "desc": "可选，URL 查询参数"},
-                "body": {"type": "object", "desc": "可选，POST 请求的 JSON body"},
-            },
-            "example": {"type": "api_request", "method": "GET", "path": "/api/branches"},
-        },
-        {
             "type": "undo_last_turn",
             "desc": "撤销上一轮操作（文件修改、重命名、AI 配置变更等）。",
             "required": [],
@@ -7213,27 +7243,11 @@ def get_capabilities_spec():
             "example": {"type": "commit", "message": "fix: ...", "files": ["README.md"]},
         },
         {
-            "type": "pull",
-            "desc": "Git pull 拉取远端。",
-            "required": [],
-            "properties": {},
-            "example": {"type": "pull"},
-        },
-        {
             "type": "push",
             "desc": "Git push 推送远端。",
             "required": [],
             "properties": {},
             "example": {"type": "push"},
-        },
-        {
-            "type": "switch_branch",
-            "desc": "切换分支。",
-            "required": ["branch"],
-            "properties": {
-                "branch": {"type": "string", "desc": "分支名"},
-            },
-            "example": {"type": "switch_branch", "branch": "main"},
         },
         {
             "type": "stash_pop",
@@ -9169,7 +9183,7 @@ _HIVO_READONLY_TOOL_TYPES = frozenset({
     "status", "workspace_context", "get_file", "file_stat",
     "read_pdf", "read_docx", "read_xlsx", "read_file_range",
     "list_dir_tree", "search_code", "find_files", "list_files",
-    "diff_file", "staged_files", "stash_list",
+    "diff_file", "staged_files", "stash_list", "undo_stats",
     "branches", "commits", "commit_detail", "commit_file_diff", "commit_push_status",
     "verify_python", "list_processes", "env_info",
     "web_search", "web_fetch",
@@ -10359,6 +10373,20 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
         notify_files_updated()
         return True, "", {"group_id": gid}
 
+    if t == "undo_stats":
+        try:
+            steps = _undo_get_steps()
+        except Exception as e:
+            return False, str(e), {}
+        return True, "", {"result": {"undo_steps": steps}}
+
+    if t == "ai_cache_clear":
+        try:
+            _ai_cache_clear()
+        except Exception as e:
+            return False, str(e), {}
+        return True, "", {"result": {"cleared": True}}
+
     if t == "verify_python":
         arr = tool.get("paths") or tool.get("files") or []
         if not isinstance(arr, list):
@@ -11110,7 +11138,7 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
             ws_enabled, _sc0 = _ai_load_web_search_cfg()
         except Exception:
             ws_enabled = False
-        receipts_lock = threading.Lock()
+        _shared_state_lock = threading.Lock()
 
         def _process_one_call(i_tool, c):
             name = str(c.get("type") or "")
@@ -11152,7 +11180,7 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
             cached = None
             try:
                 if tool_cache_enabled and cache_key and isinstance(tool_cache, OrderedDict):
-                    with receipts_lock:
+                    with _shared_state_lock:
                         cached = tool_cache.get(cache_key)
             except Exception:
                 cached = None
@@ -11171,7 +11199,7 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
                 ok1, msg1, data1 = _hivo_exec_tool(c2, undo_gid=undo_gid_eff, run_id=run_id, agent_deadline=agent_deadline)
                 # 写操作后清理工具缓存，避免返回旧内容
                 _tool_type = str(c2.get("type") or "").strip()
-                with receipts_lock:
+                with _shared_state_lock:
                     if _tool_type in ("save_file", "delete_file", "rename_file", "unstage_file", "discard_staged_file", "unstage_all_staged", "discard_all_staged") and isinstance(tool_cache, OrderedDict):
                         try:
                             tool_cache.clear()
@@ -11190,7 +11218,7 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
 
             try:
                 if tool_memory_enabled and memory_enabled:
-                    with receipts_lock:
+                    with _shared_state_lock:
                         rec = _hivo_tool_log_record(name, c, bool(ok1), str(msg1 or ""), data=data1 if isinstance(data1, dict) else {})
                         tool_log0.append(rec)
                         while len(tool_log0) > int(mem_conf.get("tool_log_items") or 80):
@@ -11509,6 +11537,49 @@ def _hivo_run_cmd_safety_check(cmd: str):
     return False, ""
 
 
+def _hivo_decode_console_bytes(data) -> str:
+    """将子进程 stdout/stderr 的原始字节安全解码为字符串。
+
+    根因：Windows 下的控制台程序（ipconfig、netstat、tasklist、chkdsk 等系统自带命令）
+    即使 stdout 被重定向为管道，仍然按"控制台/OEM 代码页"输出字节——简体中文 Windows
+    通常是 GBK/CP936，而不是 UTF-8。之前代码里固定 encoding="utf-8" 会把这些字节按
+    UTF-8 解析，多字节字符被拆散、triggers errors="replace"，最终前端看到乱码。
+    这里按最可能命中的编码顺序做**严格解码**尝试，只有全部失败才退化为 UTF-8 + replace
+    （保底不抛异常，但正常情况下不会走到这一步）。
+    """
+    if not data:
+        return ""
+    if isinstance(data, str):
+        return data
+    candidates = []
+    if os.name == "nt":
+        try:
+            oem_cp = ctypes.windll.kernel32.GetOEMCP()
+            if oem_cp:
+                candidates.append(f"cp{int(oem_cp)}")
+        except Exception:
+            pass
+        candidates.append("gbk")
+    candidates.append("utf-8")
+    try:
+        pref = locale.getpreferredencoding(False)
+        if pref:
+            candidates.append(pref)
+    except Exception:
+        pass
+    seen = set()
+    for enc in candidates:
+        enc_l = str(enc or "").strip().lower()
+        if not enc_l or enc_l in seen:
+            continue
+        seen.add(enc_l)
+        try:
+            return data.decode(enc)
+        except Exception:
+            continue
+    return data.decode("utf-8", errors="replace")
+
+
 def _run_cmd_simple(cmd: str, timeout: int = 30, cwd: str = "", run_id: str = "", agent_deadline: float = 0.0, undo_gid: str = ""):
     if not REPO_PATH:
         return False, "未打开仓库", ""
@@ -11552,9 +11623,6 @@ def _run_cmd_simple(cmd: str, timeout: int = 30, cwd: str = "", run_id: str = ""
             shell=False,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
         )
         if rid:
             try:
@@ -11567,22 +11635,13 @@ def _run_cmd_simple(cmd: str, timeout: int = 30, cwd: str = "", run_id: str = ""
         err_chunks = []
         while True:
             if rid and _hivo_agent_is_cancelled(rid):
-                try:
-                    p.terminate()
-                except Exception as e:
-                    logger.debug(f"Exception ignored: {e}")
+                _hivo_terminate_process_async(p)
                 return False, "已取消", ""
             if agent_deadline and agent_deadline > 0 and time.time() > agent_deadline:
-                try:
-                    p.terminate()
-                except Exception as e:
-                    logger.debug(f"Exception ignored: {e}")
+                _hivo_terminate_process_async(p)
                 return False, "执行超时", ""
             if (time.time() - start_t) > to_s:
-                try:
-                    p.terminate()
-                except Exception as e:
-                    logger.debug(f"Exception ignored: {e}")
+                _hivo_terminate_process_async(p)
                 return False, "命令超时", ""
 
             rc = p.poll()
@@ -11590,11 +11649,13 @@ def _run_cmd_simple(cmd: str, timeout: int = 30, cwd: str = "", run_id: str = ""
                 try:
                     o, e = p.communicate(timeout=1)
                 except Exception:
-                    o, e = "", ""
-                if o:
-                    out_chunks.append(o)
-                if e:
-                    err_chunks.append(e)
+                    o, e = b"", b""
+                o_s = _hivo_decode_console_bytes(o)
+                e_s = _hivo_decode_console_bytes(e)
+                if o_s:
+                    out_chunks.append(o_s)
+                if e_s:
+                    err_chunks.append(e_s)
                 out = ("".join(out_chunks) + ("\n" + "".join(err_chunks) if err_chunks else "")).strip()
                 if rc != 0:
                     return False, f"exit={rc}", out
@@ -13505,12 +13566,16 @@ class Handler(BaseHTTPRequestHandler):
                 if dangerous:
                     self.send_json({"ok": False, "msg": "命令包含不允许的特殊字符"}, 400)
                     return
+                _blocked, _reason = _hivo_run_cmd_safety_check(cmd)
+                if _blocked:
+                    logger.warning(f"[/api/run_cmd] 已拦截高风险命令: {cmd!r} ({_reason})")
+                    self.send_json({"ok": False, "msg": _reason}, 400)
+                    return
                 try:
                     r = subprocess.run(
                         ["cmd.exe", "/c", cmd],
                         cwd=cwd,
                         capture_output=True,
-                        text=True,
                         timeout=timeout,
                     )
 
@@ -13532,8 +13597,8 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json({
                         "ok": (r.returncode == 0),
                         "exit_code": int(r.returncode),
-                        "stdout": r.stdout or "",
-                        "stderr": r.stderr or "",
+                        "stdout": _hivo_decode_console_bytes(r.stdout),
+                        "stderr": _hivo_decode_console_bytes(r.stderr),
                     })
                 except subprocess.TimeoutExpired:
                     self.send_json({"ok": False, "msg": f"命令超时(超过{timeout}秒)", "exit_code": 124, "stdout": "", "stderr": ""}, 500)
@@ -13587,10 +13652,7 @@ class Handler(BaseHTTPRequestHandler):
                             ["cmd.exe", "/c", script_path],
                             cwd=cwd,
                             capture_output=True,
-                            text=True,
                             timeout=timeout,
-                            encoding='utf-8',
-                            errors='replace',
                         )
                         try:
                             logger.warning(f"run_cmd_script 完成 (ok={1 if r.returncode == 0 else 0}, cmds={len(cmds)})")
@@ -13604,7 +13666,8 @@ class Handler(BaseHTTPRequestHandler):
                         except Exception as e:
                             logger.debug(f"Exception ignored: {e}")
 
-                        full_output = (r.stdout or "")
+                        full_output = _hivo_decode_console_bytes(r.stdout)
+                        stderr_text = _hivo_decode_console_bytes(r.stderr)
                         outputs = []
                         exit_matches = re.findall(r'\[GM:EXIT:(\d+):(-?\d+)\]', full_output)
                         parts = re.split(r'\[GM:EXIT:\d+:-?\d+\]', full_output)
@@ -13624,8 +13687,8 @@ class Handler(BaseHTTPRequestHandler):
                         self.send_json({
                             "ok": r.returncode == 0,
                             "exit_code": r.returncode,
-                            "stdout": r.stdout or "",
-                            "stderr": r.stderr or "",
+                            "stdout": full_output,
+                            "stderr": stderr_text,
                             "outputs": outputs,
                         })
                     except subprocess.TimeoutExpired:
@@ -15598,4 +15661,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
