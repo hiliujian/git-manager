@@ -6621,30 +6621,10 @@ flex-shrink:0;cursor:pointer;
             else wrap.classList.remove('is-dragover');
           } catch (e0) {}
         };
-        // Ctrl+F 拦截已移到 if 块外独立注册
+        // Ctrl+F 拦截已移到 if 块外独立注册（见下方 __gmAiCtrlFHandler，document 级捕获阶段监听器）
         aiChatInput.addEventListener('keydown', (e) => {
           try { aiChatInputKeydown(e); } catch (e2) {}
         });
-        // 在输入框上直接拦截 Ctrl+F（捕获阶段，确保最先执行）
-        aiChatInput.addEventListener('keydown', (e) => {
-          try {
-            const k = (e.key || '').toLowerCase();
-            if (e.ctrlKey && !e.shiftKey && !e.altKey && k === 'f') {
-              e.preventDefault();
-              e.stopImmediatePropagation();
-              try {
-                const bar = document.getElementById('aiChatSearchbar');
-                if (bar && bar.classList.contains('show')) {
-                  const inp = document.getElementById('aiChatSearchInput');
-                  if (inp) { inp.focus(); inp.select(); }
-                } else if (typeof __gmAiOpenChatSearch === 'function') {
-                  __gmAiOpenChatSearch();
-                }
-              } catch (_) {}
-              return;
-            }
-          } catch (_) {}
-        }, true);
         // drag & drop attachments
         aiChatInput.addEventListener('dragenter', (e) => {
           try { e.preventDefault(); } catch (e2) {}
@@ -9998,68 +9978,6 @@ flex-shrink:0;cursor:pointer;
     if (!window.__gmCeHostEditingInited) {
       window.__gmCeHostEditingInited = true;
 
-      
-
-      // Debug: trace who prevents/blocks Backspace at line-start by patching event methods.
-      try {
-        if (!window.__gmEventTracePatched) {
-          window.__gmEventTracePatched = true;
-          const __gmInDiffView = (ev) => {
-            try {
-              const host = document.getElementById('diffView');
-              if (!host) return false;
-              const t = ev && ev.target;
-              const el = t ? ((t.nodeType === Node.ELEMENT_NODE) ? t : (t.parentElement || null)) : null;
-              if (el && host.contains(el)) return true;
-              const sel = window.getSelection ? window.getSelection() : null;
-              const node = sel && sel.rangeCount ? (sel.focusNode || sel.anchorNode || sel.getRangeAt(0).startContainer) : null;
-              const el2 = node ? ((node.nodeType === Node.ELEMENT_NODE) ? node : (node.parentElement || null)) : null;
-              return !!(el2 && host.contains(el2));
-            } catch (e2) {
-              return false;
-            }
-          };
-          const _pd = Event.prototype.preventDefault;
-          const _sp = Event.prototype.stopPropagation;
-          const _sip = Event.prototype.stopImmediatePropagation;
-          Event.prototype.preventDefault = function () {
-            try {
-              if (this && this.type === 'keydown' && this.key === 'Backspace' && __gmInDiffView(this)) { }
-            } catch (e2) {}
-            return _pd.apply(this, arguments);
-          };
-          Event.prototype.stopPropagation = function () {
-            try {
-              if (this && this.type === 'keydown' && this.key === 'Backspace' && __gmInDiffView(this)) { }
-            } catch (e2) {}
-            return _sp.apply(this, arguments);
-          };
-          Event.prototype.stopImmediatePropagation = function () {
-            try {
-              if (this && this.type === 'keydown' && this.key === 'Backspace' && __gmInDiffView(this)) { }
-            } catch (e2) {}
-            return _sip.apply(this, arguments);
-          };
-        }
-      } catch (e0) {}
-
-      document.addEventListener('keydown', (e) => {
-        try {
-          const host = document.getElementById('diffView');
-          if (!host) return;
-          if (!e || e.key !== 'Backspace') return;
-          const t = e.target;
-          const el = t ? ((t.nodeType === Node.ELEMENT_NODE) ? t : (t.parentElement || null)) : null;
-          if (el && !host.contains(el)) {
-            const sel = window.getSelection ? window.getSelection() : null;
-            const node = sel && sel.rangeCount ? (sel.focusNode || sel.anchorNode || sel.getRangeAt(0).startContainer) : null;
-            const el2 = node ? ((node.nodeType === Node.ELEMENT_NODE) ? node : (node.parentElement || null)) : null;
-            if (!(el2 && host.contains(el2))) return;
-          }
-          const sel = window.getSelection ? window.getSelection() : null;
-        } catch (e0) {}
-      }, true);
-
       document.addEventListener('beforeinput', (e) => {
         try {
           const host = document.getElementById('diffView');
@@ -10856,6 +10774,23 @@ flex-shrink:0;cursor:pointer;
 
           const sel = window.getSelection ? window.getSelection() : null;
           if (!sel || sel.rangeCount === 0) return;
+
+          // 必须确认当前事件真的发生在 diffView 内部，否则会拦截页面上其他 contenteditable
+          // 区域（例如 Hivo AI 输入框 aiChatInput）的 Backspace/Delete/Enter，导致其无法编辑。
+          const __inDiffHost = (() => {
+            try {
+              const el0 = tgt && tgt.nodeType ? ((tgt.nodeType === Node.ELEMENT_NODE) ? tgt : (tgt.parentElement || null)) : null;
+              if (el0 && host.contains(el0)) return true;
+            } catch (e2) {}
+            try {
+              const node = sel.focusNode || sel.anchorNode || sel.getRangeAt(0).startContainer;
+              const el1 = node ? ((node.nodeType === Node.ELEMENT_NODE) ? node : (node.parentElement || null)) : null;
+              return !!(el1 && host.contains(el1));
+            } catch (e2) {
+              return false;
+            }
+          })();
+          if (!__inDiffHost) return;
 
           if (isEnter) {
             e.preventDefault();
@@ -33153,8 +33088,27 @@ flex-shrink:0;cursor:pointer;
       resetStickPosition();
     }
 
+    // 导航盘只支持"纯文本编辑器"和"对比视图"两种滚动场景（见 getScrollableElement）。
+    // 在其他输入/富文本区域（如 Hivo AI 输入框、提交信息框、冲突解决框等）按下 Alt
+    // 不应被这里劫持，否则会吞掉这些区域里 Alt 相关的正常按键行为。
+    const __gmNavDialShouldIgnoreTarget = (e) => {
+      try {
+        const t = e && e.target;
+        if (!t) return false;
+        const plainEditor = document.getElementById('plainEditorTextarea');
+        if (t === plainEditor) return false;
+        const diffView = document.getElementById('diffView');
+        if (diffView && diffView.contains(t)) return false;
+        const tag = t.tagName ? String(t.tagName).toLowerCase() : '';
+        return (tag === 'input' || tag === 'textarea' || !!t.isContentEditable);
+      } catch (_) {
+        return false;
+      }
+    };
+
     // 监听 keydown 事件
     document.addEventListener('keydown', (e) => {
+      if (__gmNavDialShouldIgnoreTarget(e)) return;
       // Alt键按下 - 单独的Alt，不与其他修饰键组合
       if (e.key === 'Alt' && !e.ctrlKey && !e.shiftKey && !e.metaKey) {
         // 阻止浏览器默认的Alt行为（如激活菜单栏）
@@ -33180,16 +33134,16 @@ flex-shrink:0;cursor:pointer;
 
     // 监听 keyup 事件
     document.addEventListener('keyup', (e) => {
-      if (e.key === 'Alt') {
-        // 阻止浏览器默认的Alt行为
-        e.preventDefault();
-        try { e.stopImmediatePropagation(); } catch (e2) {}
-        try { e.stopPropagation(); } catch (e2) {}
-        
-        clearTimeout(altTimeout);
-        hideNavDial();
-        altPressed = false;
-      }
+      if (e.key !== 'Alt') return;
+      if (!altPressed && __gmNavDialShouldIgnoreTarget(e)) return;
+      // 阻止浏览器默认的Alt行为
+      e.preventDefault();
+      try { e.stopImmediatePropagation(); } catch (e2) {}
+      try { e.stopPropagation(); } catch (e2) {}
+
+      clearTimeout(altTimeout);
+      hideNavDial();
+      altPressed = false;
     }, true); // 使用捕获阶段，确保最先执行
 
     // 监听窗口失焦
