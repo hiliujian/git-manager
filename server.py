@@ -477,6 +477,7 @@ _hivo_session_mem: dict = {}  # session_id -> {summary:str, chat:list[dict], too
 
 _hivo_cfg_lock = threading.Lock()
 _hivo_cfg_cache: dict = {}
+_hivo_cfg_mtime: float | None = None
 
 # Hivo agent run control (cancel / concurrency)
 _hivo_agent_run_lock = threading.Lock()
@@ -1203,14 +1204,24 @@ def _atomic_write_json(path, data, indent=2):
 
 
 def _hivo_load_cfg():
+    global _hivo_cfg_mtime
     with _hivo_cfg_lock:
         try:
             p = _hivo_cfg_path()
             if p.exists():
-                data = json.loads(p.read_text(encoding="utf-8") or "{}")
-                if isinstance(data, dict):
-                    _hivo_cfg_cache.clear()
-                    _hivo_cfg_cache.update(data)
+                try:
+                    mtime = p.stat().st_mtime
+                except Exception:
+                    mtime = None
+                # 配置文件 mtime 未变化且已有缓存时，跳过磁盘读取和 JSON 解析——
+                # 这个函数在 Agent 工具执行等热路径里被高频调用，配置文件本身
+                # 几乎不变，之前每次调用都无条件重新读盘+解析，是纯粹的浪费。
+                if not (_hivo_cfg_cache and mtime is not None and mtime == _hivo_cfg_mtime):
+                    data = json.loads(p.read_text(encoding="utf-8") or "{}")
+                    if isinstance(data, dict):
+                        _hivo_cfg_cache.clear()
+                        _hivo_cfg_cache.update(data)
+                    _hivo_cfg_mtime = mtime
         except Exception as e:
             logger.debug(f"Exception ignored: {e}")
         if not _hivo_cfg_cache:
@@ -1308,6 +1319,7 @@ def _hivo_load_cfg():
 
 
 def _hivo_save_cfg(cfg: dict):
+    global _hivo_cfg_mtime
     if not isinstance(cfg, dict):
         return False, "config 必须是对象"
     with _hivo_cfg_lock:
@@ -1316,6 +1328,10 @@ def _hivo_save_cfg(cfg: dict):
             _atomic_write_json(p, cfg, indent=2)
             _hivo_cfg_cache.clear()
             _hivo_cfg_cache.update(cfg)
+            try:
+                _hivo_cfg_mtime = p.stat().st_mtime
+            except Exception:
+                _hivo_cfg_mtime = None
             return True, "保存成功"
         except Exception as e:
             return False, str(e)
@@ -3259,6 +3275,21 @@ def get_staged_files():
         files.append({"path": p, "status": st2})
     return files, None
 
+
+# 遍历仓库文件树时默认排除的重量级/自动生成目录（依赖、构建产物、虚拟环境、IDE 配置等）。
+# search_code / list_dir_tree 之前只排除 .git 和点开头目录，遇到 node_modules、venv 这类
+# 常见的海量依赖目录时会整个遍历甚至逐行读取每个文件——在真实项目上可能非常慢，
+# 这里给出一份行业惯例的默认排除清单（与 ripgrep/VS Code 搜索的默认排除大体一致）。
+_HIVO_WALK_EXCLUDE_DIRS = frozenset({
+    ".git", "node_modules", "bower_components",
+    "venv", ".venv", "env", ".env",
+    "__pycache__", ".mypy_cache", ".pytest_cache", ".tox", ".ruff_cache",
+    "dist", "build", "target", ".next", ".nuxt", ".output",
+    "vendor", ".gradle", ".cache", ".parcel-cache",
+    ".idea", ".vscode",
+})
+
+
 def _safe_repo_abspath(rel_path: str):
     """Resolve a repo-relative path to an absolute path, preventing path traversal."""
     if not REPO_PATH:
@@ -3576,7 +3607,7 @@ def list_dir_tree(rel_path: str = "", max_depth: int = 3, max_entries: int = 500
         if (cur_depth - base_depth) >= depth:
             dirs[:] = []
 
-        dirs[:] = [d for d in sorted(dirs) if d != ".git" and not d.startswith(".")]
+        dirs[:] = [d for d in sorted(dirs) if d not in _HIVO_WALK_EXCLUDE_DIRS and not d.startswith(".")]
         files = [f for f in sorted(files) if not f.startswith(".")]
 
         indent_level = max(0, cur_depth - base_depth)
@@ -3675,9 +3706,7 @@ def search_code(query: str, case_sensitive: bool = False, max_results: int = 50,
 
     out = []
     for root, dirs, files in os.walk(repo_root):
-        if ".git" in dirs:
-            dirs.remove(".git")
-        dirs[:] = [d for d in dirs if not d.startswith(".")]
+        dirs[:] = [d for d in dirs if d not in _HIVO_WALK_EXCLUDE_DIRS and not d.startswith(".")]
         for fn in files:
             if fn.startswith("."):
                 continue
@@ -6148,9 +6177,7 @@ def find_files_by_name(name: str, max_results: int = 20):
     out = []
     try:
         for root, dirs, files in os.walk(repo_root):
-            if ".git" in dirs:
-                dirs.remove(".git")
-            dirs[:] = [d for d in dirs if not d.startswith(".")]
+            dirs[:] = [d for d in dirs if d not in _HIVO_WALK_EXCLUDE_DIRS and not d.startswith(".")]
             try:
                 dirs.sort()
             except Exception as e:
@@ -7085,6 +7112,38 @@ def get_capabilities_spec():
             "example": {"type": "commit_push_status", "hash": "abc1234"},
         },
         {
+            "type": "blame",
+            "desc": "查看文件逐行的最后修改记录（git blame，只读）：每一行是谁在哪次提交、什么时间改的。用于排查某段代码的历史来源。",
+            "required": ["path"],
+            "properties": {
+                "path": {"type": "string", "desc": "相对路径"},
+            },
+            "example": {"type": "blame", "path": "src/main.py"},
+        },
+        {
+            "type": "tags",
+            "desc": "列出仓库所有 tag（含指向的提交、tagger、日期、message，只读）。",
+            "required": [],
+            "properties": {},
+            "example": {"type": "tags"},
+        },
+        {
+            "type": "conflicts",
+            "desc": "获取当前合并冲突的文件列表及每个文件内的冲突块详情（只读）。合并/变基后如需处理冲突，先用此工具查看冲突内容再决定如何编辑。",
+            "required": [],
+            "properties": {},
+            "example": {"type": "conflicts"},
+        },
+        {
+            "type": "diff_commit",
+            "desc": "查看某次提交相对其父提交改动的文件列表及增删改统计（只读）。只需要单个文件的具体 diff 内容时改用 commit_file_diff。",
+            "required": ["hash"],
+            "properties": {
+                "hash": {"type": "string", "desc": "提交 hash"},
+            },
+            "example": {"type": "diff_commit", "hash": "abc1234"},
+        },
+        {
             "type": "undo_last_turn",
             "desc": "撤销上一轮操作（文件修改、重命名、AI 配置变更等）。",
             "required": [],
@@ -7266,6 +7325,13 @@ def get_capabilities_spec():
             "example": {"type": "stash_list"},
         },
         {
+            "type": "stash_push",
+            "desc": "暂存当前所有本地修改（git stash push -u，包含未跟踪文件）。若工作区无修改则不执行，返回 stashed:false。",
+            "required": [],
+            "properties": {},
+            "example": {"type": "stash_push"},
+        },
+        {
             "type": "stash_drop",
             "desc": "丢弃指定 stash（git stash drop <ref>）。",
             "required": ["ref"],
@@ -7280,6 +7346,52 @@ def get_capabilities_spec():
             "required": [],
             "properties": {},
             "example": {"type": "fetch_remotes"},
+        },
+        {
+            "type": "restore_file",
+            "desc": "将单个文件恢复为某次历史提交中的内容（git checkout <hash> -- <path>），会直接覆盖该文件当前内容。",
+            "required": ["hash", "path"],
+            "properties": {
+                "hash": {"type": "string", "desc": "提交 hash"},
+                "path": {"type": "string", "desc": "相对路径"},
+            },
+            "example": {"type": "restore_file", "hash": "abc1234", "path": "src/main.py"},
+        },
+        {
+            "type": "restore_workspace",
+            "desc": "将整个工作区还原为某次历史提交的状态（git reset --hard <hash> + clean）。若工作区存在未提交修改会拒绝执行并提示先提交/暂存，避免误丢改动。",
+            "required": ["hash"],
+            "properties": {
+                "hash": {"type": "string", "desc": "提交 hash"},
+            },
+            "example": {"type": "restore_workspace", "hash": "abc1234"},
+        },
+        {
+            "type": "revert_commit",
+            "desc": "以创建新提交的方式撤销某次历史提交的改动（git revert --no-edit，不改写历史，适合已推送的提交）。若工作区存在未提交修改会拒绝执行。",
+            "required": ["hash"],
+            "properties": {
+                "hash": {"type": "string", "desc": "提交 hash"},
+            },
+            "example": {"type": "revert_commit", "hash": "abc1234"},
+        },
+        {
+            "type": "soft_reset_commit",
+            "desc": "撤销当前分支最新一次提交但保留其改动到工作区（git reset --soft HEAD^）。仅允许撤销 HEAD 且该提交尚未推送到远端，否则会拒绝并提示改用 revert_commit。",
+            "required": ["hash"],
+            "properties": {
+                "hash": {"type": "string", "desc": "提交 hash，必须是当前 HEAD"},
+            },
+            "example": {"type": "soft_reset_commit", "hash": "abc1234"},
+        },
+        {
+            "type": "delete_branch",
+            "desc": "删除本地分支（git branch -d，安全模式：若分支有未合并到其他分支的提交会拒绝删除，不支持强制删除）。不能删除当前所在分支。",
+            "required": ["branch"],
+            "properties": {
+                "branch": {"type": "string", "desc": "要删除的本地分支名"},
+            },
+            "example": {"type": "delete_branch", "branch": "feature/old"},
         },
     ]
 
@@ -8851,31 +8963,33 @@ def _ai_build_system_context_text(cfg=None, use_native_tools=True):
     except Exception:
         extra = ""
 
-    tool_call_section = (
-        "# 工具调用\n"
-        "- 仅使用系统提供的工具，不要臆造工具名或参数\n"
-        "- 每轮最多同时调用 3 个工具\n"
-        "- 工具调用后等待结果返回再继续下一步\n"
+    _tool_call_common_bullets = (
         "- 文件路径不明确时先用 find_files 模糊搜索，支持部分文件名匹配\n"
         "- 修改大文件时优先用 edit_file（局部替换），比 save_file 更高效可靠\n"
         "- 只需确认文件是否存在或获取元信息时用 file_stat，不要用 get_file\n"
         "- 所有路径使用正斜杠 /，不要用反斜杠 \\\n"
         "- 需要读取文档文件时用 read_pdf/read_docx/read_xlsx\n"
         "- 排查端口冲突或查看运行进程时用 list_processes\n"
-        "- 排查环境问题时用 env_info 查看 Python 版本和依赖\n\n"
+        "- 排查环境问题时用 env_info 查看 Python 版本和依赖\n"
+        "- 合并/变基后处理冲突前，先用 conflicts 查看冲突文件和冲突块，不要凭猜测编辑\n"
+        "- 排查某段代码是谁在何时修改的，用 blame，不要凭猜测归因\n"
+        "- 只想暂存修改但不需要顺便拉取/切分支时用 stash_push；已有 stash_pop/stash_drop/stash_list 管理暂存栈\n"
+        "- 撤销提交：未推送的最新一次提交用 soft_reset_commit（保留改动到工作区）；已推送或非最新提交用 revert_commit（生成反向提交，不改写历史）\n"
+        "- 查看某次提交的完整改动文件列表用 diff_commit；只看单个文件的具体 diff 用 commit_file_diff\n\n"
+    )
+    tool_call_section = (
+        "# 工具调用\n"
+        "- 仅使用系统提供的工具，不要臆造工具名或参数\n"
+        "- 每轮最多同时调用 3 个工具\n"
+        "- 工具调用后等待结果返回再继续下一步\n"
+        + _tool_call_common_bullets
         if use_native_tools else
         "# 工具调用\n"
         "- 工具定义见 TOOL_REGISTRY_JSON\n"
         "- 只使用已定义的工具，确保 required 参数完整\n"
         "- 每轮最多 3 个工具调用，末尾独占一行\n"
         "- 工具调用后等待回执再进行下一步\n"
-        "- 文件路径不明确时先用 find_files 模糊搜索，支持部分文件名匹配\n"
-        "- 修改大文件时优先用 edit_file（局部替换），比 save_file 更高效可靠\n"
-        "- 只需确认文件是否存在或获取元信息时用 file_stat，不要用 get_file\n"
-        "- 所有路径使用正斜杠 /，不要用反斜杠 \\\n"
-        "- 需要读取文档文件时用 read_pdf/read_docx/read_xlsx\n"
-        "- 排查端口冲突或查看运行进程时用 list_processes\n"
-        "- 排查环境问题时用 env_info 查看 Python 版本和依赖\n\n"
+        + _tool_call_common_bullets
     )
 
     strong = (
@@ -9188,7 +9302,77 @@ _HIVO_READONLY_TOOL_TYPES = frozenset({
     "verify_python", "list_processes", "env_info",
     "web_search", "web_fetch",
     "browser_text", "browser_screenshot",
+    "blame", "tags", "conflicts", "diff_commit",
 })
+
+
+def _hivo_parse_blame_porcelain(out: str) -> list:
+    """解析 `git blame --line-porcelain` 的输出为结构化的逐行记录列表。"""
+    lines = []
+    cur = {
+        "hash": "",
+        "author": "",
+        "author_mail": "",
+        "author_time": "",
+        "author_time_unix": None,
+        "author_tz": "",
+        "author_date": "",
+        "author_datetime": "",
+        "summary": "",
+    }
+    ln = 0
+    for raw in (out or "").splitlines():
+        if not raw:
+            continue
+        if raw[0] != '\t':
+            parts = raw.split(' ')
+            if len(parts) >= 1 and re.fullmatch(r"[0-9a-f]{8,40}", parts[0].strip() or ""):
+                cur["hash"] = parts[0].strip()
+            elif raw.startswith("author "):
+                cur["author"] = raw[7:].strip()
+            elif raw.startswith("author-mail "):
+                cur["author_mail"] = raw[12:].strip()
+            elif raw.startswith("author-time "):
+                try:
+                    ts = int(raw[12:].strip())
+                    cur["author_time_unix"] = ts
+                    cur["author_time"] = datetime.utcfromtimestamp(ts).isoformat() + "Z"
+                except Exception:
+                    cur["author_time"] = ""
+                    cur["author_time_unix"] = None
+            elif raw.startswith("author-tz "):
+                cur["author_tz"] = raw[10:].strip()
+                try:
+                    ts = cur.get("author_time_unix")
+                    tzs = cur.get("author_tz") or ""
+                    if isinstance(ts, int) and tzs and len(tzs) >= 5 and (tzs[0] in "+-"):
+                        sign = 1 if tzs[0] == '+' else -1
+                        hh = int(tzs[1:3])
+                        mm = int(tzs[3:5])
+                        offset = timedelta(hours=hh, minutes=mm) * sign
+                        tzinfo = timezone(offset)
+                        dt = datetime.fromtimestamp(ts, tz=tzinfo)
+                        cur["author_date"] = dt.strftime("%Y-%m-%d")
+                        cur["author_datetime"] = dt.strftime("%Y-%m-%d %H:%M:%S ") + tzs
+                except Exception:
+                    pass
+            elif raw.startswith("summary "):
+                cur["summary"] = raw[8:].strip()
+            continue
+        ln += 1
+        lines.append({
+            "no": ln,
+            "hash": (cur.get("hash") or "")[:7],
+            "author": cur.get("author") or "",
+            "author_mail": cur.get("author_mail") or "",
+            "author_time": cur.get("author_time") or "",
+            "author_time_unix": cur.get("author_time_unix"),
+            "author_tz": cur.get("author_tz") or "",
+            "author_date": cur.get("author_date") or "",
+            "author_datetime": cur.get("author_datetime") or "",
+            "summary": cur.get("summary") or "",
+        })
+    return lines
 
 
 def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_deadline: float = 0.0):
@@ -10024,6 +10208,168 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
             return True, "", {"hash": h0, "pushed": pushed, "branches": branches, "error": err}
         except Exception as e:
             return False, str(e), {}
+
+    if t == "blame":
+        raw_path = str(tool.get("path") or "").strip()
+        if not raw_path:
+            return False, "缺少 path", {}
+        full = _safe_repo_abspath(raw_path)
+        if not full or not os.path.exists(full):
+            return False, "文件不存在", {}
+        rel = os.path.relpath(full, os.path.abspath(REPO_PATH)).replace("\\", "/")
+        out, err, code = run_git(["blame", "--line-porcelain", "--", rel], timeout=120)
+        if code != 0:
+            return False, (err or out or "blame 失败"), {}
+        lines = _hivo_parse_blame_porcelain(out or "")
+        return True, "", {"result": {"path": rel, "lines": lines}}
+
+    if t == "tags":
+        try:
+            fmt = "%(refname:short)|%(objectname)|%(taggername)|%(taggerdate:short)|%(subject)"
+            out, err, code = run_git(["for-each-ref", "--format=" + fmt, "refs/tags"], timeout=60)
+            if code != 0:
+                return False, (err or "获取 tag 失败"), {}
+            tags = []
+            for line in (out or "").splitlines():
+                parts = line.split("|", 4)
+                if len(parts) >= 5:
+                    tags.append({"name": parts[0], "commit": parts[1], "tagger": parts[2], "date": parts[3], "message": parts[4]})
+            return True, "", {"result": {"tags": tags}}
+        except Exception as e:
+            return False, str(e), {}
+
+    if t == "conflicts":
+        if not REPO_PATH:
+            return False, "未打开仓库", {}
+        try:
+            conflict_files, _ = get_unmerged_files()
+            files_info = []
+            for f in conflict_files:
+                info = {"path": f, "hunks": []}
+                try:
+                    full = os.path.join(REPO_PATH, f)
+                    if os.path.exists(full):
+                        with open(full, "r", encoding="utf-8", errors="replace") as fp:
+                            content = fp.read()
+                        info["hunks"] = _extract_conflict_hunks(content)
+                except Exception as e3:
+                    info["error"] = str(e3)
+                files_info.append(info)
+            return True, "", {"result": {"files": files_info}}
+        except Exception as e:
+            return False, str(e), {}
+
+    if t == "diff_commit":
+        h0 = str(tool.get("hash") or "").strip()
+        if not h0:
+            return False, "缺少 hash", {}
+        try:
+            out, err, code = run_git(["diff", "--name-status", h0], timeout=120)
+            if code != 0:
+                return False, (err or "获取差异失败"), {}
+            files, added, removed, modified = [], 0, 0, 0
+            for line in (out or "").strip().split("\n"):
+                line = line.strip()
+                if not line:
+                    continue
+                parts = line.split("\t", 2)
+                if len(parts) >= 2:
+                    status, path = parts[0], parts[-1]
+                    files.append({"status": status, "path": path})
+                    if status == "A":
+                        added += 1
+                    elif status == "D":
+                        removed += 1
+                    elif status == "M":
+                        modified += 1
+            return True, "", {"result": {"files": files, "added": added, "removed": removed, "modified": modified, "total": len(files)}}
+        except Exception as e:
+            return False, str(e), {}
+
+    if t == "stash_push":
+        status_out, status_err, status_code = run_git(["status", "--porcelain=v1"], timeout=30)
+        if status_code != 0:
+            return False, (status_err or "无法检测工作区状态"), {}
+        if not (status_out or "").strip():
+            return True, "", {"result": {"stashed": False, "message": "无本地修改，无需暂存"}}
+        out, err, code = run_git(["stash", "push", "-u", "-m", "Auto stash"], timeout=60)
+        if code != 0:
+            return False, (err or out or "git stash 失败"), {}
+        invalidate_changed_files_cache()
+        notify_files_updated()
+        return True, "", {"result": {"stashed": True, "output": (out or "").strip()}}
+
+    if t == "restore_file":
+        h0 = str(tool.get("hash") or "").strip()
+        fp0 = str(tool.get("path") or "").strip()
+        ok, msg = restore_file_from_commit(h0, fp0)
+        if ok:
+            invalidate_changed_files_cache()
+            notify_files_updated()
+        return bool(ok), msg or "", {"hash": h0, "path": fp0}
+
+    if t == "restore_workspace":
+        h0 = str(tool.get("hash") or "").strip()
+        if not h0:
+            return False, "缺少 hash", {}
+        ok, msg = restore_workspace_to_commit(h0, force=False)
+        if ok:
+            invalidate_changed_files_cache()
+            notify_files_updated()
+        return bool(ok), msg or "", {"hash": h0}
+
+    if t == "revert_commit":
+        h0 = str(tool.get("hash") or "").strip()
+        if not h0:
+            return False, "缺少 hash", {}
+        ok, msg, full_hash = revert_commit(h0)
+        if ok:
+            invalidate_changed_files_cache()
+            notify_files_updated()
+        return bool(ok), msg or "", {"hash": full_hash[:7] if full_hash else h0, "full_hash": full_hash}
+
+    if t == "soft_reset_commit":
+        h0 = str(tool.get("hash") or "").strip()
+        if not h0:
+            return False, "缺少 hash", {}
+        head_out, head_err, head_code = run_git(["rev-parse", "HEAD"])
+        if head_code != 0:
+            return False, (head_err or "无法获取 HEAD"), {}
+        head_full = (head_out or "").strip()
+        if h0 != head_full and h0 != head_full[:7]:
+            return False, "仅允许撤销当前分支最新一次提交（HEAD）", {}
+        pushed, _, perr = is_commit_pushed(head_full)
+        if perr:
+            return False, perr, {}
+        if pushed:
+            return False, "该提交已推送到远端，无法使用软回退撤销；请使用 revert_commit", {}
+        _, err, code = run_git(["reset", "--soft", f"{head_full}^"], timeout=120)
+        if code != 0:
+            return False, (err or "软回退失败"), {}
+        run_git(["reset"], timeout=120)
+        new_head_out, _, new_head_code = run_git(["rev-parse", "HEAD"])
+        new_head_full = (new_head_out or "").strip() if new_head_code == 0 else ""
+        invalidate_changed_files_cache()
+        notify_files_updated()
+        return True, "", {"hash": new_head_full[:7] if new_head_full else "", "full_hash": new_head_full}
+
+    if t == "delete_branch":
+        branch = str(tool.get("branch") or "").strip()
+        if not branch:
+            return False, "未指定分支", {}
+        if branch.startswith("remotes/"):
+            return False, "不支持删除远端分支引用（remotes/*）", {}
+        cur_out, cur_err, cur_code = run_git(["branch", "--show-current"], timeout=30)
+        if cur_code != 0:
+            return False, (cur_err or "获取当前分支失败"), {}
+        if branch == (cur_out or "").strip():
+            return False, "不能删除当前所在分支", {}
+        out, err, code = run_git(["branch", "-d", branch], timeout=60)
+        if code != 0:
+            return False, (err or out or "删除分支失败（可能存在未合并的提交）"), {}
+        invalidate_changed_files_cache()
+        notify_files_updated()
+        return True, "", {"branch": branch, "output": (out or "").strip()}
 
     if t == "stage_file":
         rp = str(tool.get("path") or "").strip()
@@ -14342,6 +14688,14 @@ class Handler(BaseHTTPRequestHandler):
                             _hivo_agent_mark_done(run_id)
                         except Exception as e:
                             logger.debug(f"Exception ignored: {e}")
+                        # 回收本次 run 隐式创建（未显式指定 session_id）的 Playwright 浏览器会话。
+                        # run_id 每次都是新生成的 uuid，本次 run 结束后不可能再被复用，
+                        # 模型若忘记调用 browser_close，不清理就是纯粹的内存/进程资源泄漏。
+                        try:
+                            if run_id in _pw_runtime.get("sessions", {}):
+                                _pw_close_session(run_id)
+                        except Exception as e:
+                            logger.debug(f"Exception ignored: {e}")
 
                 try:
                     th = threading.Thread(target=_bg, daemon=True)
@@ -14601,74 +14955,7 @@ class Handler(BaseHTTPRequestHandler):
                 if code != 0:
                     self.send_json({"error": err or out or "blame 失败"}, 400)
                     return
-                lines = []
-                cur = {
-                    "hash": "",
-                    "author": "",
-                    "author_mail": "",
-                    "author_time": "",
-                    "author_time_unix": None,
-                    "author_tz": "",
-                    "author_date": "",
-                    "author_datetime": "",
-                    "summary": "",
-                }
-                ln = 0
-                for raw in (out or "").splitlines():
-                    if not raw:
-                        continue
-                    if raw[0] != '\t':
-                        # header line(s)
-                        parts = raw.split(' ')
-                        if len(parts) >= 1 and re.fullmatch(r"[0-9a-f]{8,40}", parts[0].strip() or ""):
-                            # commit sha header line; when a new group starts, cur applies to next content line
-                            cur["hash"] = parts[0].strip()
-                        elif raw.startswith("author "):
-                            cur["author"] = raw[7:].strip()
-                        elif raw.startswith("author-mail "):
-                            cur["author_mail"] = raw[12:].strip()
-                        elif raw.startswith("author-time "):
-                            try:
-                                ts = int(raw[12:].strip())
-                                cur["author_time_unix"] = ts
-                                cur["author_time"] = datetime.utcfromtimestamp(ts).isoformat() + "Z"
-                            except Exception:
-                                cur["author_time"] = ""
-                                cur["author_time_unix"] = None
-                        elif raw.startswith("author-tz "):
-                            # timezone like +0800
-                            cur["author_tz"] = raw[10:].strip()
-                            try:
-                                ts = cur.get("author_time_unix")
-                                tzs = cur.get("author_tz") or ""
-                                if isinstance(ts, int) and tzs and len(tzs) >= 5 and (tzs[0] in "+-"):
-                                    sign = 1 if tzs[0] == '+' else -1
-                                    hh = int(tzs[1:3])
-                                    mm = int(tzs[3:5])
-                                    offset = timedelta(hours=hh, minutes=mm) * sign
-                                    tzinfo = timezone(offset)
-                                    dt = datetime.fromtimestamp(ts, tz=tzinfo)
-                                    cur["author_date"] = dt.strftime("%Y-%m-%d")
-                                    cur["author_datetime"] = dt.strftime("%Y-%m-%d %H:%M:%S ") + tzs
-                            except Exception:
-                                pass
-                        elif raw.startswith("summary "):
-                            cur["summary"] = raw[8:].strip()
-                        continue
-                    # content line: emit a record tied to current header
-                    ln += 1
-                    lines.append({
-                        "no": ln,
-                        "hash": (cur.get("hash") or "")[:7],
-                        "author": cur.get("author") or "",
-                        "author_mail": cur.get("author_mail") or "",
-                        "author_time": cur.get("author_time") or "",
-                        "author_time_unix": cur.get("author_time_unix"),
-                        "author_tz": cur.get("author_tz") or "",
-                        "author_date": cur.get("author_date") or "",
-                        "author_datetime": cur.get("author_datetime") or "",
-                        "summary": cur.get("summary") or "",
-                    })
+                lines = _hivo_parse_blame_porcelain(out or "")
                 self.send_json({"ok": True, "lines": lines})
 
             elif p == "/api/stage_file":
@@ -15661,3 +15948,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
