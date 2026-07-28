@@ -2133,7 +2133,7 @@ flex-shrink:0;cursor:pointer;
     .ai-token-btn:hover{background:var(--bg4);border-color:var(--border);color:var(--accent);}
     .ai-token-btn svg{width:12px;height:12px;display:block;margin:0 auto;}
     /* Token 用量弹窗 */
-    .ai-token-popup{display:none;position:fixed;z-index:2200;width:auto;max-height:320px;overflow:hidden;
+    .ai-token-popup{display:none;position:fixed;z-index:2200;width:auto;max-height:calc(100vh - 16px);overflow:hidden;
       background:rgba(26,28,36,.96);border:1px solid rgba(61,66,98,.85);border-radius:12px;
       box-shadow:0 22px 60px rgba(0,0,0,0.55);padding:12px 14px;font-size:12px;color:var(--text);
       backdrop-filter:blur(10px);flex-direction:column;}
@@ -2154,6 +2154,14 @@ flex-shrink:0;cursor:pointer;
       color:var(--text);font-weight:500;}
     .ai-token-popup .ai-token-footnote{font-size:10px;color:var(--text3);flex-shrink:0;
       margin-top:6px;border-top:1px solid rgba(255,255,255,0.06);padding-top:6px;}
+    .ai-token-rag{border-top:1px solid var(--border);margin-top:6px;padding-top:6px;font-size:11px;color:var(--text2);
+      max-height:calc(100vh - 230px);overflow-y:auto;}
+    .ai-token-rag h4{margin:0 0 4px;font-size:10px;font-weight:600;color:var(--text3);letter-spacing:.04em;}
+    .ai-token-rag .rag-row{display:flex;justify-content:space-between;gap:10px;padding:2px 0;align-items:center;}
+    .ai-token-rag .rag-row b{color:var(--text);font-weight:600;font-variant-numeric:tabular-nums;}
+    .ai-token-rag .rag-bar{display:flex;height:6px;border-radius:999px;background:var(--bg4);overflow:hidden;margin:4px 0 2px;}
+    .ai-token-rag .rag-bar > span{display:block;height:100%;}
+    .ai-token-rag .rag-hint{color:var(--text3);font-size:10px;margin-top:3px;}
 
     /* 对话内搜索栏 */
     .ai-chat-searchbar{display:none;align-items:center;gap:6px;padding:6px 10px;
@@ -3646,6 +3654,53 @@ flex-shrink:0;cursor:pointer;
   // 但对所有 innerHTML 注入做统一 sanitize。
   // 规则：
   // - 优先使用 DOMPurify.sanitize；若库不可用则做最小脚本标签剥离。
+  // ── 统一 HTML 净化（XSS 根因修复） ───────────────────────────────────────────
+  // 所有 innerHTML 赋值与 insertAdjacentHTML 注入都经此净化：
+  // - 在线（DOMPurify 可用）走 DOMPurify（默认即剥离 script / on* 事件处理器 / javascript:）；
+  // - 离线（CDN 不可用）也有健壮的 DOM 级兜底，不再只是“删 <script> 标签”。
+  function __gmSanitizeHtmlFallback(html) {
+    try {
+      const tpl = document.createElement('template');
+      tpl.innerHTML = String(html == null ? '' : html);
+      const DangerousTags = /^(script|style|iframe|object|embed|link|meta|base|form|input|button|textarea)$/i;
+      const all = [];
+      (function collect(n) { all.push(n); for (const c of n.childNodes) collect(c); })(tpl.content);
+      for (const n of all) {
+        if (n.nodeType !== 1) continue;
+        const tag = n.tagName || '';
+        if (DangerousTags.test(tag)) { n.remove(); continue; }
+        for (const attr of Array.from(n.attributes)) {
+          const name = String(attr.name || '').toLowerCase();
+          const val = String(attr.value || '');
+          if (name.startsWith('on')) { n.removeAttribute(attr.name); continue; }
+          if ((name === 'href' || name === 'src' || name === 'xlink:href') &&
+              /^\s*(javascript:|data:(?!image\/))/i.test(val)) {
+            n.removeAttribute(attr.name);
+          }
+        }
+      }
+      return tpl.innerHTML;
+    } catch (e) {
+      try {
+        return String(html == null ? '' : html)
+          .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+          .replace(/\son\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+          .replace(/(href|src)\s*=\s*("javascript:[^"]*"|'javascript:[^']*')/gi, '$1="#"');
+      } catch (e2) { return ''; }
+    }
+  }
+
+  function gmSanitizeHtml(html) {
+    try {
+      if (window.DOMPurify && typeof window.DOMPurify.sanitize === 'function') {
+        return window.DOMPurify.sanitize(String(html == null ? '' : html), {
+          USE_PROFILES: { html: true, svg: true },
+        });
+      }
+    } catch (e) {}
+    return __gmSanitizeHtmlFallback(html);
+  }
+
   (function __gmPatchInnerHTMLSetter() {
     try {
       const proto = (window.Element && window.Element.prototype) ? window.Element.prototype : null;
@@ -3657,25 +3712,7 @@ flex-shrink:0;cursor:pointer;
       const origSet = desc.set;
       const origGet = desc.get;
 
-      const stripScriptsFallback = (html) => {
-        try {
-          const s = String(html == null ? '' : html);
-          return s.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
-        } catch (e) {
-          return '';
-        }
-      };
-
-      const sanitize = (html) => {
-        try {
-          if (window.DOMPurify && typeof window.DOMPurify.sanitize === 'function') {
-            return window.DOMPurify.sanitize(String(html == null ? '' : html), {
-              USE_PROFILES: { html: true, svg: true, svgFilters: true },
-            }, true);
-          }
-        } catch (e) {}
-        return stripScriptsFallback(html);
-      };
+      const sanitize = (html) => gmSanitizeHtml(html);
 
       Object.defineProperty(proto, 'innerHTML', {
         configurable: true,
@@ -14483,7 +14520,7 @@ flex-shrink:0;cursor:pointer;
               last.pending = false;
               last.stage = 'error';
               if (!String(last.content || '').trim()) {
-                last.content = '连接中断（未完成）。可点击 Continue 继续。';
+                last.content = '连接中断（未完成）。可点击"继续"按钮续写。';
               }
               __gmAiIsResponding = false;
               try { __gmAiSetSendButtonState(false); } catch (eB3) {}
@@ -15238,8 +15275,8 @@ flex-shrink:0;cursor:pointer;
         btn = document.createElement('button');
         btn.className = 'ai-continue-btn';
         btn.setAttribute('data-action', 'aiContinue');
-        btn.setAttribute('title', 'Continue');
-        btn.setAttribute('aria-label', 'Continue');
+        btn.setAttribute('title', '继续');
+        btn.setAttribute('aria-label', '继续');
         // Icon: arrow-right inside a circle (resume/continue semantics, not retry or play)
         btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 12h8"/><path d="M13 9l3 3-3 3"/></svg>';
         const sendBtn = composer.querySelector('.ai-send-btn');
@@ -15285,7 +15322,7 @@ flex-shrink:0;cursor:pointer;
         try { btn.disabled = false; } catch(_) {}
         __gmAiIsCancelling = false;
         btn.classList.add('is-stop');
-        btn.title = '暂停';
+        btn.title = '停止';
         btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
       } else {
         btn.classList.remove('is-stop');
@@ -15495,7 +15532,7 @@ flex-shrink:0;cursor:pointer;
               if (String(m.run_id||'').trim()) { rid = String(m.run_id).trim(); break; }
               if (m.pending && m.id) {
                 try { __gmAiPendingCancelMsgIds.add(String(m.id)); queuedForMsg = true; } catch(_) {}
-                try { m.stage = 'cancelling'; m.content = '已请求取消（后台将尽快中止）'; } catch(_) {}
+                try { m.stage = 'cancelling'; } catch(_) {}
                 break;
               }
             }
@@ -15512,7 +15549,7 @@ flex-shrink:0;cursor:pointer;
             const msgs = Array.isArray(__gmAiChatMessages) ? __gmAiChatMessages : [];
             for (let i = msgs.length - 1; i >= 0; i--) {
               const m = msgs[i];
-              if (m && String(m.role||'')==='assistant' && m.pending) { m.stage='cancelling'; m.content='已请求取消（后台将尽快中止）'; break; }
+              if (m && String(m.role||'')==='assistant' && m.pending) { m.stage='cancelling'; break; }
             }
           } catch(_){ }
         } else {
@@ -15825,7 +15862,7 @@ flex-shrink:0;cursor:pointer;
                   }
                 }
                 const hasImg = Boolean(imgSrc);
-                const clickable = `data-action=\"aiChatOpenPreview\" data-msg-idx=\"${idx}\" data-att-idx=\"${aiIdx}\" onclick=\"__gmAiOnPreviewClick(event,this)\" role=\"button\" tabindex=\"0\" style=\"cursor:pointer;pointer-events:auto;position:relative;z-index:2;\"`;
+                const clickable = `data-action=\"aiChatOpenPreview\" data-msg-idx=\"${idx}\" data-att-idx=\"${aiIdx}\" role=\"button\" tabindex=\"0\" style=\"cursor:pointer;pointer-events:auto;position:relative;z-index:2;\"`;
                 try { if (__gmAiDebug) { __gmDbg('render att tile', { msgIdx: idx, attIdx: aiIdx, kind: k, hasImg, imgSrc: imgSrc ? (imgSrc.slice(0,60)+'...') : '', from: attachments.length ? 'attachments' : '_attMeta' }); } } catch(eDbgRA1) {}
                 const inner = hasImg
                   ? `<img src=\"${esc(imgSrc)}\" alt=\"\" style=\"width:100%;height:100%;object-fit:cover;display:block;border-radius:4px;\" />`
@@ -16528,25 +16565,19 @@ flex-shrink:0;cursor:pointer;
       const escHtml = (s) => String(s || '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
       const col = (d) => d ? `<div class="ai-token-col"><span class="ai-token-col-label">${escHtml(d.label)}</span><span>~${d.tok} tokens</span></div>` : '<div class="ai-token-col"></div>';
       const detailHtml = pairs.map(p => `<div class="ai-token-row">${col(p.a)}${col(p.b)}</div>`).join('');
-      popup.innerHTML = `<div class="ai-token-title"><span>Token 用量</span><span style="font-size:10px;color:var(--text3);">${totalTokens} / ${AI_MAX_TOKENS}</span></div><div class="ai-token-bar-bg"><div class="ai-token-bar-fill ${barCls}" style="width:${pct}%"></div></div><div class="ai-token-list">${detailHtml}</div><div class="ai-token-footnote">以上为字符级估算值，仅供参考。</div>`;
+      const ragHtml = `<div class="ai-token-rag" id="aiTokenRag"><h4>向量 / RAG</h4><div class="rag-row"><span>加载中…</span></div></div>`;
+      popup.innerHTML = `<div class="ai-token-title"><span>Token 用量</span><span style="font-size:10px;color:var(--text3);">${totalTokens} / ${AI_MAX_TOKENS}</span></div><div class="ai-token-bar-bg"><div class="ai-token-bar-fill ${barCls}" style="width:${pct}%"></div></div><div class="ai-token-list">${detailHtml}</div>${ragHtml}<div class="ai-token-footnote">以上为字符级估算值，仅供参考。</div>`;
       const composer = document.querySelector('.ai-composer-wrap');
-      const cr = composer ? composer.getBoundingClientRect() : null;
-      const br = btn.getBoundingClientRect();
       popup.classList.add('show');
-      if (cr && cr.width) {
-        popup.style.width = Math.round(cr.width) + 'px';
+      if (composer && composer.getBoundingClientRect().width) {
+        popup.style.width = Math.round(composer.getBoundingClientRect().width) + 'px';
         popup.style.boxSizing = 'border-box';
       } else {
         popup.style.width = '';
       }
-      const popupW = popup.offsetWidth || (cr && cr.width) || 280;
-      let left = cr ? cr.left : (br.right - popupW);
-      left = Math.max(8, Math.min(window.innerWidth - popupW - 8, left));
-      const popupH = popup.offsetHeight || 160;
-      let top = br.top - popupH - 8;
-      top = Math.max(8, top);
-      popup.style.left = Math.round(left) + 'px';
-      popup.style.top = Math.round(top) + 'px';
+      __gmAiPositionTokenPopup(popup, btn, composer);
+      // 异步拉取 RAG 状态后内容会变高，重新夹紧到可视范围内
+      __gmAiFillRagSection(() => __gmAiPositionTokenPopup(popup, btn, composer));
       // 点击外部关闭
       const closeHandler = (ev) => {
         try {
@@ -16559,6 +16590,84 @@ flex-shrink:0;cursor:pointer;
     } catch (e) {
       console.error('[TokenUsage]', e);
     }
+  }
+
+  function __gmAiPositionTokenPopup(popup, btn, composer) {
+    try {
+      const vw = window.innerWidth, vh = window.innerHeight;
+      const pw = popup.offsetWidth || (composer && composer.getBoundingClientRect().width) || 280;
+      const ph = popup.offsetHeight || 160;
+      const br = btn.getBoundingClientRect();
+      // 水平：优先对齐输入框；否则贴着按钮右沿
+      let left = composer ? composer.getBoundingClientRect().left : (br.right - pw);
+      left = Math.max(8, Math.min(vw - pw - 8, left));
+      // 垂直：优先放在按钮上方；上方放不下则放下方；都放不下则居中并依赖内部滚动
+      let top = br.top - ph - 8;
+      if (top < 8) {
+        const below = br.bottom + 8;
+        top = (below + ph <= vh - 8) ? below : Math.max(8, Math.min(vh - ph - 8, (vh - ph) / 2));
+      }
+      popup.style.left = Math.round(left) + 'px';
+      popup.style.top = Math.round(top) + 'px';
+    } catch (_) {}
+  }
+
+  function __gmAiFillRagSection(onDone) {
+    try {
+      const el = document.getElementById('aiTokenRag');
+      if (!el) { if (onDone) onDone(); return; }
+      const sid = (typeof __gmAiActiveSessionId !== 'undefined') ? __gmAiActiveSessionId : '';
+      const escHtml = (s) => String(s || '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+      POST('/api/hivo_vector_status', { session_id: sid })
+        .then((j) => {
+          try {
+            if (!j || !j.ok) { el.innerHTML = '<h4>向量 / RAG</h4><div class="rag-row"><span>状态不可用</span></div>'; if (onDone) onDone(); return; }
+            const backendLabel = j.backend || 'local';
+            let modeLabel = '';
+            if (backendLabel === 'local') {
+              if (j.effective_mode === 'model') {
+                modeLabel = '真实模型(已加载)';
+              } else {
+                modeLabel = '哈希词袋';
+              }
+            } else {
+              modeLabel = backendLabel + ' 远程';
+            }
+            let html = '<h4>向量 / RAG</h4>';
+            html += `<div class="rag-row"><span>模式</span><b>${escHtml(backendLabel + ' · ' + modeLabel)}</b></div>`;
+            html += `<div class="rag-row"><span>已索引文件</span><b>${j.indexed_files != null ? j.indexed_files : '-'}</b></div>`;
+            html += `<div class="rag-row"><span>向量块数</span><b>${j.chunk_count != null ? j.chunk_count : '-'}</b></div>`;
+            const u = j.last_rag_usage;
+            // 旧版 usage 可能缺以下字段，做容错回退，避免误判
+            const _vr = (u && u.vector_ready !== undefined) ? !!u.vector_ready : !!(j.enabled && j.backend);
+            const _hr = (u && u.had_refs !== undefined) ? !!u.had_refs : false;
+            const _rr = (u && u.refs_resolved !== undefined) ? u.refs_resolved : 0;
+            if (u && (u.a_tokens || u.b_tokens)) {
+              const a = u.a_tokens || 0, b = u.b_tokens || 0, t = (u.total || (a + b)) || 1;
+              const aPct = Math.max(0, Math.min(100, Math.round(a / t * 100)));
+              const bPct = Math.max(0, Math.min(100, Math.round(b / t * 100)));
+              html += '<h4 style="margin-top:6px">本次回答上下文构成</h4>';
+              html += `<div class="rag-row"><span>信号A(@/结构)</span><b>${a} tok</b></div>`;
+              html += `<div class="rag-row"><span>信号B(向量语义)</span><b>${b} tok</b></div>`;
+              html += `<div class="rag-bar"><span style="width:${aPct}%;background:var(--accent)"></span><span style="width:${bPct}%;background:var(--warn)"></span></div>`;
+            } else if (!_vr) {
+              html += '<div class="rag-hint">向量索引未启用（默认关闭或初始化失败）；@引用由信号A直接注入，未走语义召回。</div>';
+            } else if (_hr && !_rr) {
+              html += '<div class="rag-hint">⚠ 本轮回合有 @ 引用，但均未解析成功（文件未找到/不可读），未触发向量召回。</div>';
+            } else if (!_hr) {
+              html += '<div class="rag-hint">本回合未触发召回，提问时自动语义召回。</div>';
+            } else {
+              html += '<div class="rag-hint">本次未触发 @引用 / 向量召回。</div>';
+            }
+            el.innerHTML = html;
+            if (onDone) onDone();
+          } catch (_) {
+            el.innerHTML = '<h4>向量 / RAG</h4><div class="rag-row"><span>解析失败</span></div>';
+            if (onDone) onDone();
+          }
+        })
+        .catch(() => { try { el.innerHTML = '<h4>向量 / RAG</h4><div class="rag-row"><span>请求失败</span></div>'; } catch (_) {} if (onDone) onDone(); });
+    } catch (_) {}
   }
 
   // ── 对话内搜索 ──────────────────────────────────────────────
@@ -17038,69 +17147,6 @@ flex-shrink:0;cursor:pointer;
     }
   }
 
-  function __gmAiOnPreviewClick(e, el){
-    try{
-      try{ if (e) { e.preventDefault(); e.stopPropagation(); } }catch(_){ }
-      const mi = parseInt(String(el && el.getAttribute ? el.getAttribute('data-msg-idx') : ''), 10);
-      const ai = parseInt(String(el && el.getAttribute ? el.getAttribute('data-att-idx') : ''), 10);
-      if (!Number.isFinite(mi) || !Number.isFinite(ai)) return false;
-      const msg = (__gmAiChatMessages && __gmAiChatMessages[mi]) || null;
-      if (!msg) return false;
-      const base0 = (Array.isArray(msg.attachments) && msg.attachments.length ? msg.attachments : (Array.isArray(msg._attMeta) ? msg._attMeta : []));
-      let a = base0[ai]; if (!a) return false;
-      try { if (window.__gmAiDebug && window.__gmDbg) { __gmDbg('click preview start (inline)', { msgIdx: mi, attIdx: ai, url: a && a.url, data_url: a && a.data_url, hasText: !!(a && typeof a.text==='string' && a.text), hasUndo: !!(msg && msg.undo_gid) }); } } catch(_){ }
-      const hasUrl = !!(a && (a.url || a.data_url) || (a && typeof a.text === 'string' && a.text));
-      if (!hasUrl) {
-        try {
-          const ug = String(msg.undo_gid || '').trim();
-          if (ug) {
-            const key = __gmAiAttCacheKey(__gmAiActiveSessionId);
-            if (key) {
-              const map = (()=>{ try { return JSON.parse(localStorage.getItem(key) || '{}') || {}; } catch(e){ return {}; } })();
-              const cached = Array.isArray(map[ug]) ? map[ug] : [];
-              if (cached[ai] && (cached[ai].url || cached[ai].data_url || (typeof cached[ai].text === 'string' && cached[ai].text))) {
-                a = cached[ai];
-              }
-            }
-          }
-          // prefer in-message _attMeta url if present
-          if ((!a.url && !a.data_url && !(typeof a.text === 'string' && a.text)) && Array.isArray(msg._attMeta) && msg._attMeta[ai] && msg._attMeta[ai].url) {
-            a = msg._attMeta[ai];
-          }
-          if ((!a.url && !a.data_url && !(typeof a.text === 'string' && a.text)) && Array.isArray(msg.attachments) && msg.attachments[ai]) {
-            a = msg.attachments[ai];
-          }
-          // attempt from full-by-content cache
-          if ((!a.url && !a.data_url && !(typeof a.text === 'string' && a.text))) {
-            try {
-              const keyF = __gmAiAttFullByContentKey(__gmAiActiveSessionId);
-              if (keyF) {
-                const mapF = (()=>{ try { return JSON.parse(localStorage.getItem(keyF) || '{}') || {}; } catch(e){ return {}; } })();
-                const ckF = 'user|' + __gmAiContentKeyNorm(msg.content || '');
-                const fullArr = Array.isArray(mapF[ckF]) ? mapF[ckF] : [];
-                if (fullArr[ai] && (fullArr[ai].url || fullArr[ai].data_url || (typeof fullArr[ai].text === 'string' && fullArr[ai].text))) a = fullArr[ai];
-              }
-            } catch (_eF) {}
-          }
-          // final attempt: content-key meta cache
-          if ((!a.url && !a.data_url && !(typeof a.text === 'string' && a.text))) {
-            try {
-              const key2 = __gmAiAttByContentKey(__gmAiActiveSessionId);
-              if (key2) {
-                const map2 = (()=>{ try { return JSON.parse(localStorage.getItem(key2) || '{}') || {}; } catch(e){ return {}; } })();
-                const ck = 'user|' + __gmAiContentKeyNorm(msg.content || '');
-                const arr2 = Array.isArray(map2[ck]) ? map2[ck] : [];
-                if (arr2[ai] && arr2[ai].url) a = arr2[ai];
-              }
-            } catch (_eCk) {}
-          }
-        } catch(_){ }
-      }
-      try { if (window.__gmAiDebug && window.__gmDbg) { __gmDbg('click preview resolved (inline)', { msgIdx: mi, attIdx: ai, url: a && a.url, data_url: a && a.data_url, hasText: !!(a && typeof a.text==='string' && a.text) }); } } catch(_){ }
-      __gmAiOpenUnifiedPreviewForMessage(mi, ai);
-      return false;
-    }catch(_){ return false; }
-  }
 
   function __gmAiParseStructuredSummary(text) {
     try {
@@ -23883,7 +23929,7 @@ flex-shrink:0;cursor:pointer;
         
         const end = Math.min(i + chunkSize, parts.length);
         if (end > i) {
-          try { el.insertAdjacentHTML('beforeend', parts.slice(i, end).join('')); } catch (e) {}
+          try { el.insertAdjacentHTML('beforeend', gmSanitizeHtml(parts.slice(i, end).join(''))); } catch (e) {}
         }
         i = end;
         if (i < parts.length) {
@@ -29911,7 +29957,9 @@ flex-shrink:0;cursor:pointer;
       if (!src) return '';
       const mdit = __gmGetMarkdownIt();
       if (!mdit) return esc(src);
-      return String(mdit.render(src) || '');
+      // 根因修复：markdown-it 开启 html:true，AI 输出中的原始 HTML 必须经净化后再注入，
+      // 避免 <img onerror>/<svg onload>/javascript: 等 XSS 向量（不依赖全局 innerHTML 拦截器）。
+      return gmSanitizeHtml(String(mdit.render(src) || ''));
     } catch (e) {
       return esc(md);
     }

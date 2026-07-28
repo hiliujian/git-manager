@@ -23,6 +23,12 @@ import ssl
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs, unquote
 from datetime import datetime, timedelta, timezone
+
+# 仓库向量索引（P0/P1 独立模块，纯标准库依赖；缺失时降级为不启用）
+try:
+    import repo_vector_index as _rvi
+except Exception:  # noqa: BLE001
+    _rvi = None
 try:
     from websockets.sync.server import serve as ws_serve, ServerConnection
     WEBSOCKET_AVAILABLE = True
@@ -136,6 +142,13 @@ logger.info("=" * 60)
 
 REPO_PATH = None
 WS_PORT = 7843  # WebSocket端口号
+
+# 仓库向量索引运行时状态（P1 接线；默认未启用，初始化成功后开启）
+_VECTOR_STORE = None
+_VECTOR_EMBED = None
+_VECTOR_EXECUTOR = None
+_VECTOR_ENABLED = False
+_VECTOR_LAST_REINDEX = None  # 上次触发整库索引/重建的时间戳（float seconds），供状态接口展示
 ws_clients = set()  # WebSocket客户端集合
 ws_clients_lock = threading.Lock()
 ws_client_queues = {}  # client -> Queue[str]
@@ -253,6 +266,10 @@ def open_repo(path: str):
     if not root:
         return False, "不是 git 仓库（未找到 .git 目录）"
     REPO_PATH = root
+    try:
+        hivo_init_vector_index()
+    except Exception as e:
+        logger.debug("向量索引初始化异常（忽略）: %s", e)
     try:
         _undo_load_state()
     except Exception as e:
@@ -1876,13 +1893,27 @@ def _hivo_format_tool_memory_block(tool_log: list, limit: int = 60):
         return ""
 
 
-def _hivo_parse_context_refs_structured(context_refs: list, per_file_chars: int = 6000, total_chars: int = 24000):
-    if not isinstance(context_refs, list) or not context_refs:
-        return "", []
+def _hivo_parse_context_refs_structured(context_refs: list, total_tokens: int = 6000, query: str = None, vector_store=None, embed_client=None):
+    if not isinstance(context_refs, list):
+        context_refs = []
     out = []
     used = 0
+    v_used = 0
+    had_refs = bool(context_refs)
+    # 查询兜底：若用户本轮只 @ 了文件、没打其他问题文字，用 @ 引用名作为向量查询，
+    # 保证"只 @ 文件不提问"也能触发信号 B 语义召回（而非因 query 为空被跳过）。
+    _query = query
+    if not _query and context_refs:
+        _query = " ".join(str(r) for r in context_refs[:8])
+    vector_ready = bool(vector_store is not None)
+    # 信号 B（向量语义召回）预留子预算，确保即便信号 A（显式 @ 引用）占满也能补充相关上下文
+    _vector_active = bool(vector_store is not None and _query)
+    _v_reserve = max(0, int(total_tokens * 0.4)) if _vector_active else 0
+    _a_budget = max(0, total_tokens - _v_reserve)
+    if not context_refs and not _vector_active:
+        return "", [], {"a_tokens": 0, "b_tokens": 0, "total": 0, "had_refs": had_refs, "refs_resolved": 0, "vector_ready": vector_ready}
     for ref0 in context_refs[:8]:
-        if used >= int(total_chars):
+        if used >= _a_budget:
             break
         raw = str(ref0 or "").strip().lstrip("@")
         if not raw:
@@ -1978,7 +2009,7 @@ def _hivo_parse_context_refs_structured(context_refs: list, per_file_chars: int 
             safe_dir = _safe_repo_abspath(rp_dir) if rp_dir else None
             if safe_dir and os.path.isdir(safe_dir):
                 tree, err = list_dir_tree(rp_dir, max_depth=3, max_entries=260)
-                room = int(total_chars) - used
+                room = max(0, _a_budget - used)
                 if room < 0:
                     room = 0
                 tree_txt = str(tree or "")
@@ -1987,7 +2018,7 @@ def _hivo_parse_context_refs_structured(context_refs: list, per_file_chars: int 
                     tree_txt = tree_txt[:room]
                     complete0 = False
                 if tree_txt:
-                    used += len(tree_txt)
+                    used += _ai_estimate_text_tokens(tree_txt)
                 item = {
                     "解析结果": "resolved" if tree else "unreadable",
                     "资源类型": "目录",
@@ -2058,7 +2089,7 @@ def _hivo_parse_context_refs_structured(context_refs: list, per_file_chars: int 
                 else:
                     status2 = "ambiguous" if candidates2 else "not_found"
 
-                room = int(total_chars) - used
+                room = max(0, _a_budget - used)
                 if room < 0:
                     room = 0
                 complete2 = True
@@ -2066,7 +2097,7 @@ def _hivo_parse_context_refs_structured(context_refs: list, per_file_chars: int 
                     body2 = body2[:room]
                     complete2 = False
                 if body2:
-                    used += len(body2)
+                    used += _ai_estimate_text_tokens(body2)
 
                 item = {
                     "解析结果": status2,
@@ -2164,15 +2195,15 @@ def _hivo_parse_context_refs_structured(context_refs: list, per_file_chars: int 
                     lines = []
 
                 body0 = "\n".join(lines).strip() if lines else f"commit {full_hash}".strip()
-                room = int(total_chars) - used
+                room = max(0, _a_budget - used)
                 if room < 0:
                     room = 0
                 complete0 = True
-                if body0 and len(body0) > room:
-                    body0 = body0[:room]
+                if body0 and _ai_estimate_text_tokens(body0) > room:
+                    body0 = _ai_truncate_text_to_tokens(body0, room, keep="head")
                     complete0 = False
                 if body0:
-                    used += len(body0)
+                    used += _ai_estimate_text_tokens(body0)
 
                 item = {
                     "解析结果": "resolved",
@@ -2232,7 +2263,7 @@ def _hivo_parse_context_refs_structured(context_refs: list, per_file_chars: int 
             if q0 and len(q0) >= 2:
                 hits, err = search_code(q0, case_sensitive=False, max_results=18)
                 if isinstance(hits, list) and hits:
-                    room = int(total_chars) - used
+                    room = max(0, _a_budget - used)
                     if room < 0:
                         room = 0
                     lines = []
@@ -2248,11 +2279,11 @@ def _hivo_parse_context_refs_structured(context_refs: list, per_file_chars: int 
                             lines.append(f"{p1}  {tx1}")
                     body0 = "\n".join(lines).strip()
                     complete0 = True
-                    if body0 and len(body0) > room:
-                        body0 = body0[:room]
+                    if body0 and _ai_estimate_text_tokens(body0) > room:
+                        body0 = _ai_truncate_text_to_tokens(body0, room, keep="head")
                         complete0 = False
                     if body0:
-                        used += len(body0)
+                        used += _ai_estimate_text_tokens(body0)
                     item = {
                         "解析结果": "resolved",
                         "资源类型": "关键词",
@@ -2297,19 +2328,45 @@ def _hivo_parse_context_refs_structured(context_refs: list, per_file_chars: int 
                     out.append(item)
                     continue
 
+        # 注入文件头部内容（与其他分支一致）：文件已解析且读到 content，但此前被丢弃。
+        # 受剩余预算约束，避免超大文件撑爆上下文；截断时提示模型用工具继续读取。
+        # 注意：预算计数交给循环后的语义分块器统一负责（它按 room_left=_a_budget-used 重新切块并 used+=），
+        # 此处只把 文件内容 截断到剩余预算内，不重复累加 used，避免与其他内容分支一致的重复计数。
+        file_body = ""
+        file_complete = True
+        if content:
+            room = max(0, _a_budget - used)
+            if room < 0:
+                room = 0
+            if room > 0:
+                if _ai_estimate_text_tokens(content) <= room:
+                    file_body = content
+                else:
+                    file_body = _ai_truncate_text_to_tokens(content, room, keep="head")
+                    file_complete = False
+
         item = {
             "解析结果": status,
             "资源类型": "文件",
             "用户输入名称": raw,
             "真实路径": resolved,
-            "文件内容": "",
-            "文件内容分段": [],
-            "分段信息": {"strategy": "chunk", "chunk_type": "", "target_lines": 260, "max_lines": 400, "total_parts": 0, "provided_parts": 0, "complete": False},
+            "文件内容": file_body,
+            "文件内容分段": ([{
+                "chunk_index": 1,
+                "chunk_total": 1,
+                "chunk_type": "unstructured",
+                "source": {"type": "file", "path": resolved, "ext": resolved.split(".")[-1].lower() if resolved and ("." in resolved) else ""},
+                "range": {"start_line": 1, "end_line": max(1, len(file_body.splitlines())) if file_body else 1},
+                "content": file_body,
+            }] if file_body else []),
+            "分段信息": {"strategy": "chunk", "chunk_type": "", "target_lines": 260, "max_lines": 400, "total_parts": 1 if file_body else 0, "provided_parts": 1 if file_body else 0, "complete": bool(file_complete)},
             "候选列表": candidates[:8],
             "解析方式": parse_way,
             "置信度": conf,
             "是否需要工具调用": True,
         }
+        if file_body and (not file_complete):
+            item["提示"] = "文件内容过长，受上下文长度限制已截断头部；如需完整内容，请使用 file_content/read_file_range 继续读取。"
 
         if status == "ambiguous":
             try:
@@ -2336,6 +2393,15 @@ def _hivo_parse_context_refs_structured(context_refs: list, per_file_chars: int 
             except Exception:
                 mime0 = None
 
+            is_pdf = (ext == "pdf") or (mime0 == "application/pdf")
+            is_docx = (ext == "docx") or (mime0 == "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+            is_xlsx = (ext == "xlsx") or (mime0 == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            is_doc = (ext == "doc") or (mime0 == "application/msword")
+            is_xls = (ext == "xls") or (mime0 == "application/vnd.ms-excel")
+            is_ppt = (ext == "ppt") or (mime0 == "application/vnd.ms-powerpoint")
+            is_pptx = (ext == "pptx") or (mime0 == "application/vnd.openxmlformats-officedocument.presentationml.presentation")
+            is_zip = (ext == "zip") or (mime0 == "application/zip")
+
             is_media = False
             try:
                 if mime0 and (mime0.startswith("image/") or mime0.startswith("audio/") or mime0.startswith("video/")):
@@ -2354,6 +2420,10 @@ def _hivo_parse_context_refs_structured(context_refs: list, per_file_chars: int 
                 logger.debug(f"Exception ignored: {e}")
 
             # PDF 结构化解析
+        else:
+            # resolved 为空时兜底绑定文件类型布尔，避免下方解析分支 UnboundLocalError
+            is_pdf = is_docx = is_xlsx = is_doc = is_xls = is_ppt = is_pptx = is_zip = False
+            is_media = False
         if is_pdf:
             page_count = 0
             pages = []
@@ -2512,7 +2582,7 @@ def _hivo_parse_context_refs_structured(context_refs: list, per_file_chars: int 
             }
             item["媒体元信息"] = media_meta
             item["提示"] = "媒体/二进制内容不进行文本分块传输；请使用 get_file 工具读取获取实际内容（文本或 data_url），并在需要理解时提供可解析文本（如 OCR/转写/关键帧描述等）。"
-        elif content and used < int(total_chars):
+        elif content and used < _a_budget:
                 # Chunking (prefer semantic boundaries; fallback to fixed lines)
                 try:
                     lines = str(content or "").splitlines(True)
@@ -2521,12 +2591,6 @@ def _hivo_parse_context_refs_structured(context_refs: list, per_file_chars: int 
 
                 target_lines = 260
                 max_lines = 400
-                try:
-                    if per_file_chars:
-                        # keep legacy knob but interpret as approx char budget -> line target
-                        pass
-                except Exception as e:
-                    logger.debug(f"Exception ignored: {e}")
 
                 def _is_boundary(li: str):
                     try:
@@ -2588,7 +2652,7 @@ def _hivo_parse_context_refs_structured(context_refs: list, per_file_chars: int 
                             i0 = j0
 
                 total_parts = len(chunks_full)
-                room = int(total_chars) - used
+                room = max(0, _a_budget - used)
                 if room < 0:
                     room = 0
 
@@ -2599,7 +2663,7 @@ def _hivo_parse_context_refs_structured(context_refs: list, per_file_chars: int 
                     if not txt:
                         continue
                     # do not cut a chunk in the middle; if doesn't fit, stop.
-                    if len(txt) > room_left:
+                    if _ai_estimate_text_tokens(txt) > room_left:
                         if (b - a) > 20:
                             # try further split by smaller blocks to fit
                             step = max(20, min(120, max_lines // 3))
@@ -2616,7 +2680,7 @@ def _hivo_parse_context_refs_structured(context_refs: list, per_file_chars: int 
                                         "range": {"start_line": int(i0 + 1), "end_line": int(j0)},
                                         "content": txt2,
                                     })
-                                    used += len(txt2)
+                                    used += _ai_estimate_text_tokens(txt2)
                                     room_left -= len(txt2)
                                     i0 = j0
                                     continue
@@ -2631,7 +2695,7 @@ def _hivo_parse_context_refs_structured(context_refs: list, per_file_chars: int 
                         "range": {"start_line": int(a + 1), "end_line": int(b)},
                         "content": txt,
                     })
-                    used += len(txt)
+                    used += _ai_estimate_text_tokens(txt)
                     room_left -= len(txt)
 
                 provided_parts = len(provided)
@@ -2652,13 +2716,73 @@ def _hivo_parse_context_refs_structured(context_refs: list, per_file_chars: int 
                     item["提示"] = "内容过长，已按语义优先分块注入；但受单次上下文长度限制，本次仅提供前若干 Chunk。后续如需完整内容，请继续分批读取（建议用 read_file_range/file_content）。"
 
         out.append(item)
-        if used >= int(total_chars):
+        if used >= _a_budget:
             break
 
+    # ---- 信号 B：向量语义召回（与信号 A ensemble，统一计入总预算） ----
+    if _vector_active and _v_reserve > 0:
+        try:
+            _emb = embed_client if embed_client is not None else _VECTOR_EMBED
+            if _emb is not None:
+                qvec = _emb.embed_one(str(_query))
+                hits = vector_store.query(qvec, top_k=8)
+                seen_paths = {o.get("真实路径") for o in out if o.get("真实路径")}
+                v_used = 0
+                for chunk, score in hits:
+                    if v_used >= _v_reserve:
+                        break
+                    fp = getattr(chunk, "file_path", None) or ""
+                    if not fp or fp in seen_paths:
+                        continue
+                    seen_paths.add(fp)
+                    content = getattr(chunk, "content", None) or ""
+                    if not content:
+                        continue
+                    room = max(0, _v_reserve - v_used)
+                    if len(content) > room:
+                        content = content[:room]
+                    v_used += _ai_estimate_text_tokens(content)
+                    ext = fp.split(".")[-1].lower() if ("." in fp) else ""
+                    item = {
+                        "解析结果": "resolved",
+                        "资源类型": "文件(向量语义召回)",
+                        "用户输入名称": "向量语义召回: " + os.path.basename(fp),
+                        "真实路径": fp,
+                        "文件内容": content,
+                        "文件内容分段": ([{
+                            "chunk_index": 1,
+                            "chunk_total": 1,
+                            "chunk_type": "code",
+                            "source": {"type": "file", "path": fp, "ext": ext},
+                            "range": {"start_line": int(getattr(chunk, "start_line", 0) or 0), "end_line": int(getattr(chunk, "end_line", 0) or 0)},
+                            "content": content,
+                        }] if content else []),
+                        "分段信息": {"strategy": "vector_semantic_recall", "chunk_type": "", "target_lines": 0, "max_lines": 0, "total_parts": 1 if content else 0, "provided_parts": 1 if content else 0, "complete": True},
+                        "候选列表": [],
+                        "解析方式": "向量语义召回",
+                        "置信度": round(float(score), 3),
+                        "是否需要工具调用": False,
+                        "提示": "由向量索引语义召回的相关代码段（置信度 %.3f）；如需完整文件请用 get_file / file_content 读取。" % float(score),
+                    }
+                    out.append(item)
+        except Exception as e:
+            # 不静默吞掉：向量召回若真出错，必须可见（而非在 UI 显示成"未触发"），
+            # 否则真实故障被粉饰。warning 级确保运维/开发能在日志中察觉。
+            logger.warning(f"向量语义召回异常(已忽略，但记入日志): {e}")
+
+    # refs_resolved 只统计信号 A（@引用/结构/目录）成功解析的项，
+    # 排除信号 B 的向量语义召回项——否则 @ 引用本身解析失败时会被向量命中顶成"已解析"，
+    # 误导前端判定（详见前端 _hr && !_rr 分支）。
+    refs_resolved = sum(
+        1 for o in out
+        if isinstance(o, dict) and o.get("解析结果") == "resolved"
+        and o.get("资源类型") != "文件(向量语义召回)"
+    )
     if not out:
-        return "", []
+        return "", [], {"a_tokens": used, "b_tokens": v_used, "total": used + v_used, "had_refs": had_refs, "refs_resolved": 0, "vector_ready": vector_ready}
     block = "【@引用解析结果（高优先级上下文，禁止忽略）】\n【CHUNKS BEGIN】\n" + json.dumps({"refs": out}, ensure_ascii=False, indent=2) + "\n[END OF CHUNKS]"
-    return block, out
+    usage = {"a_tokens": used, "b_tokens": v_used, "total": used + v_used, "had_refs": had_refs, "refs_resolved": refs_resolved, "vector_ready": vector_ready}
+    return block, out, usage
 
 
 def _hivo_repeat_signature(calls: list, mode: str = "tool_types"):
@@ -3294,7 +3418,14 @@ def _safe_repo_abspath(rel_path: str):
     """Resolve a repo-relative path to an absolute path, preventing path traversal."""
     if not REPO_PATH:
         return None
+    # realpath 解析用于路径穿越防护：Windows 上的符号链接 / NTFS junction 会让
+    # 基于字符串的 commonpath 比较失效（文件系统实际解析到仓库外）。
+    # 因此校验必须对“解析后的真实路径”做，而非未解析的字符串路径。
     repo_root = os.path.abspath(REPO_PATH)
+    try:
+        repo_root_real = os.path.realpath(repo_root)
+    except Exception:
+        repo_root_real = repo_root
     rel_path = (rel_path or "")
     try:
         rel_path = rel_path.replace("\x00", "")
@@ -3309,11 +3440,11 @@ def _safe_repo_abspath(rel_path: str):
         if os.path.isabs(rel_path) or re.match(r"^[A-Za-z]:[\\/]", rel_path or ""):
             abs_in = os.path.abspath(rel_path)
             try:
-                if os.path.commonpath([repo_root, abs_in]) != repo_root:
+                if os.path.commonpath([repo_root_real, os.path.realpath(abs_in)]) != repo_root_real:
                     return None
             except Exception:
                 return None
-            rel_path = os.path.relpath(abs_in, repo_root).replace("\\", "/")
+            rel_path = os.path.relpath(os.path.realpath(abs_in), repo_root_real).replace("\\", "/")
     except Exception as e:
         logger.debug(f"Exception ignored: {e}")
 
@@ -3337,14 +3468,17 @@ def _safe_repo_abspath(rel_path: str):
     rel_path = "/".join(parts)
     abs_path = os.path.abspath(os.path.join(repo_root, rel_path.replace("/", os.sep)))
     try:
-        if os.path.commonpath([repo_root, abs_path]) != repo_root:
+        if os.path.commonpath([repo_root_real, os.path.realpath(abs_path)]) != repo_root_real:
             return None
     except Exception:
         return None
     return abs_path
 
 
-def get_file_content(filepath: str, return_encoding=False):
+# Agent 读取文件时的最大字节数：防止超大文件整文件读入内存造成峰值；下游再按 token 预算截断。
+_FILE_AGENT_READ_CAP = 256 * 1024
+
+def get_file_content(filepath: str, return_encoding=False, max_bytes=None):
     """Read working tree file content as text.
     
     Args:
@@ -3364,18 +3498,19 @@ def get_file_content(filepath: str, return_encoding=False):
         try:
             mtime = int(os.path.getmtime(full))
             cache_key = (full, mtime)
-            with _file_content_cache_lock:
-                if cache_key in _file_content_cache:
-                    cached = _file_content_cache[cache_key]
-                    _file_content_cache.move_to_end(cache_key)  # LRU: touch
-                    return (cached[0], cached[1]) if return_encoding else cached[0]
+            if max_bytes is None:
+                with _file_content_cache_lock:
+                    if cache_key in _file_content_cache:
+                        cached = _file_content_cache[cache_key]
+                        _file_content_cache.move_to_end(cache_key)  # LRU: touch
+                        return (cached[0], cached[1]) if return_encoding else cached[0]
         except Exception:
             cache_key = None
 
         # Helper: store decoded result into in-memory cache then return
         def _store_and_return(content, enc):
             try:
-                if cache_key and content is not None:
+                if cache_key and content is not None and max_bytes is None:
                     with _file_content_cache_lock:
                         _file_content_cache[cache_key] = (content, enc)
                         if len(_file_content_cache) > _FILE_CONTENT_CACHE_MAX:
@@ -3385,8 +3520,15 @@ def get_file_content(filepath: str, return_encoding=False):
                 pass
             return (content, enc) if return_encoding else content
         
+        cap = None
+        try:
+            cap = int(max_bytes)
+            if cap <= 0:
+                cap = None
+        except Exception:
+            cap = None
         with open(full, "rb") as f:
-            data = f.read()
+            data = f.read(cap)
         
         # 如果数据为空,直接返回空字符串
         if not data:
@@ -3916,7 +4058,13 @@ def save_file_content(filepath: str, content: str, force_encoding: str = None):
                         os.remove(tmp_path)
                 except Exception as e:
                     logger.debug(f"Exception ignored: {e}")
-        
+
+        # 写入即失效：异步更新该文件在仓库向量索引中的分块（后台，不阻塞保存）
+        try:
+            _hivo_vector_index_file(rel_path)
+        except Exception:
+            logger.debug("向量索引更新失败（忽略）: %s", rel_path)
+
         if transcoded and (enc_used != target_enc):
             logger.info(f"✓ 文件保存成功: {filepath} (编码: {target_enc} -> {enc_used}, 换行符: {repr(target_eol)}, {len(txt)}字符)")
             return True, f"保存成功（已从 {target_enc} 转为 {enc_used}）"
@@ -7504,7 +7652,142 @@ def _ai_pick_profile(cfg: dict, profile_id: str | None):
     return None
 
 
-def _ai_estimate_text_tokens(text: str):
+# ════════════════════════════════════════════════════════
+#  仓库向量索引（P1 接线）
+# ════════════════════════════════════════════════════════
+
+def hivo_init_vector_index():
+    """初始化仓库向量索引（在 open_repo 设置 REPO_PATH 后调用）。
+    默认 backend=local（不联网、代码不外发）；仅当 AI 配置显式含 embedding 段才用远程。"""
+    global _VECTOR_STORE, _VECTOR_EMBED, _VECTOR_EXECUTOR, _VECTOR_ENABLED, _VECTOR_LAST_REINDEX
+    if _VECTOR_ENABLED or _rvi is None or not REPO_PATH:
+        return
+    try:
+        cfg = load_hivo_ai_config()
+        ecfg = cfg.get("embedding") if isinstance(cfg, dict) else None
+        ecfg = ecfg if isinstance(ecfg, dict) else {}
+        embed_cfg = _rvi.EmbedConfig(
+            backend=str(ecfg.get("backend") or "local"),
+            api_key=ecfg.get("api_key") or None,
+            base_url=ecfg.get("base_url") or None,
+            model=ecfg.get("model") or None,
+            dim=int(ecfg["dim"]) if ecfg.get("dim") else 0,
+            fallback_local=bool(ecfg.get("fallback_local", True)),
+            local_model=ecfg.get("local_model") or "BAAI/bge-small-zh-v1.5",
+            ratelimit=float(ecfg.get("ratelimit") or 0.0),
+            local_mode=str(ecfg.get("local_mode") or "auto"),
+        )
+        embed = _rvi.EmbeddingClient(embed_cfg)
+        db_path = os.path.join(REPO_PATH, ".hivo_vector_index.db")
+        # 维度/模型切换自动重建：构造 store 前检测，避免维度错配抛错导致索引整体降级
+        if embed_cfg.backend == "local":
+            model_tag = f"local:{embed_cfg.local_mode}"
+        else:
+            model_tag = embed_cfg.model or embed_cfg.backend
+        try:
+            if _rvi.rebuild_if_dim_mismatch(db_path, embed.dim, model_tag):
+                logger.info("向量库维度/模型变化，已自动整库重建（%s）", model_tag)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("向量库维度检测跳过：%s", e)
+        store = _rvi.SqliteNumpyVectorStore(db_path, dim=embed.dim, model=model_tag)
+        _VECTOR_EMBED = embed
+        _VECTOR_STORE = store
+        _VECTOR_EXECUTOR = ThreadPoolExecutor(max_workers=1)
+        _VECTOR_ENABLED = True
+        logger.info("向量索引已初始化（backend=%s, dim=%d）", embed_cfg.backend, embed.dim)
+        # 启动增量索引（后台线程，不阻塞打开仓库）
+        _VECTOR_EXECUTOR.submit(
+            _rvi.ensure_repo_indexed, store, embed, REPO_PATH,
+            estimate_tokens=_ai_estimate_text_tokens,
+        )
+        _VECTOR_LAST_REINDEX = time.time()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("向量索引初始化失败，已降级为不启用：%s", e)
+        _VECTOR_ENABLED = False
+
+
+def _hivo_vector_index_file(rel_path: str):
+    """保存/编辑成功后异步更新该文件在向量索引中的分块（写入即失效）。"""
+    if not _VECTOR_ENABLED:
+        return
+    try:
+        _VECTOR_EXECUTOR.submit(
+            _rvi.index_file_path, _VECTOR_STORE, _VECTOR_EMBED, REPO_PATH, rel_path,
+            estimate_tokens=_ai_estimate_text_tokens,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.debug("提交文件索引任务失败 %s: %s", rel_path, e)
+
+
+def _hivo_vector_remove_file(rel_path: str):
+    """删除文件后异步清理其在向量索引中的残留。"""
+    if not _VECTOR_ENABLED:
+        return
+    try:
+        _VECTOR_EXECUTOR.submit(
+            lambda: (_VECTOR_STORE.delete_file(rel_path), _VECTOR_STORE.file_hash_delete(rel_path))
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.debug("提交文件移除任务失败 %s: %s", rel_path, e)
+
+
+_TIKTOKEN_ENC_CACHE = {}
+_TIKTOKEN_AVAILABLE = None
+
+def _ai_get_tiktoken_encoding(model=None):
+    """返回 tiktoken 编码（真实 BPE 分词）。
+
+    离线或运行环境未安装 tiktoken 时返回 None，调用方回退到字符启发式。
+    这样既不引入硬依赖，又能在使用真实分词器的环境下获得精确 token 计数。
+    """
+    global _TIKTOKEN_AVAILABLE
+    if _TIKTOKEN_AVAILABLE is False:
+        return None
+    try:
+        import tiktoken
+    except Exception:
+        _TIKTOKEN_AVAILABLE = False
+        return None
+    _TIKTOKEN_AVAILABLE = True
+    enc_name = "cl100k_base"
+    if model:
+        m = str(model).lower()
+        # gpt-4o 及 o-series 使用 o200k_base；其余（含 claude/gemini/国产模型）用 cl100k 近似
+        if "gpt-4o" in m or m.startswith("o1") or m.startswith("o3") or "o200k" in m:
+            enc_name = "o200k_base"
+    if enc_name not in _TIKTOKEN_ENC_CACHE:
+        try:
+            _TIKTOKEN_ENC_CACHE[enc_name] = tiktoken.get_encoding(enc_name)
+        except Exception:
+            try:
+                _TIKTOKEN_ENC_CACHE[enc_name] = tiktoken.get_encoding("cl100k_base")
+            except Exception:
+                return None
+    return _TIKTOKEN_ENC_CACHE.get(enc_name)
+
+
+def _ai_char_token_weight(ch: str) -> float:
+    """单字符的 token 权重（CJK/英文/数字/标点的统一启发式）。
+    作为 _ai_estimate_text_tokens 与截断函数的唯一计数来源，避免规则重复。"""
+    o = ord(ch)
+    if (
+        (0x4E00 <= o <= 0x9FFF) or (0x3400 <= o <= 0x4DBF)
+        or (0x20000 <= o <= 0x2A6DF) or (0x2A700 <= o <= 0x2B73F)
+        or (0x2B740 <= o <= 0x2B81F) or (0x2B820 <= o <= 0x2CEAF)
+        or (0xF900 <= o <= 0xFAFF) or (0x2F800 <= o <= 0x2FA1F)
+        or (0x3040 <= o <= 0x30FF) or (0xAC00 <= o <= 0xD7AF)
+    ):
+        return 1.0            # CJK/假名/韩文 ~1 token/字
+    if ch.isdigit():
+        return 1.0 / 3.0      # 数字 ~3字符/token
+    if ch.isalpha() or ch == '_':
+        return 1.0 / 4.0      # 英文 ~4字符/token
+    if ch.isspace():
+        return 1.0 / 4.0
+    return 1.0 / 2.0          # 标点 ~2字符/token
+
+
+def _ai_estimate_text_tokens(text: str, model=None):
     if isinstance(text, list):
         try:
             s2 = ""
@@ -7519,42 +7802,22 @@ def _ai_estimate_text_tokens(text: str):
     s = str(text or "")
     if not s:
         return 0
+    enc = _ai_get_tiktoken_encoding(model)
+    if enc is not None:
+        try:
+            return len(enc.encode(s))
+        except Exception:
+            pass
     try:
-        cjk = 0      # 中日韩文字
-        digits = 0    # 数字
-        punct = 0     # 标点符号
-        whitespace = 0
-        other = 0
+        total = 0.0
         for ch in s:
-            o = ord(ch)
-            if (
-                (0x4E00 <= o <= 0x9FFF)
-                or (0x3400 <= o <= 0x4DBF)
-                or (0x20000 <= o <= 0x2A6DF)
-                or (0x2A700 <= o <= 0x2B73F)
-                or (0x2B740 <= o <= 0x2B81F)
-                or (0x2B820 <= o <= 0x2CEAF)
-                or (0xF900 <= o <= 0xFAFF)
-                or (0x2F800 <= o <= 0x2FA1F)
-                or (0x3040 <= o <= 0x30FF)   # 日文假名
-                or (0xAC00 <= o <= 0xD7AF)   # 韩文
-            ):
-                cjk += 1
-            elif ch.isdigit():
-                digits += 1
-            elif ch.isalpha() or ch == '_':
-                other += 1
-            elif ch.isspace():
-                whitespace += 1
-            else:
-                punct += 1
-        # CJK: ~1 token/字; 英文字母: ~4字符/token; 数字: ~3字符/token; 标点: ~2字符/token
-        return int(cjk + digits / 3.0 + other / 4.0 + punct / 2.0 + whitespace / 4.0)
+            total += _ai_char_token_weight(ch)
+        return int(total)
     except Exception:
         return max(1, int(len(s) / 4))
 
 
-def _ai_estimate_messages_tokens(messages: list):
+def _ai_estimate_messages_tokens(messages: list, model=None):
     try:
         total = 0
         arr = messages if isinstance(messages, list) else []
@@ -7565,7 +7828,7 @@ def _ai_estimate_messages_tokens(messages: list):
             total += _ai_estimate_text_tokens(m.get("role"))
             c = m.get("content")
             if isinstance(c, str):
-                total += _ai_estimate_text_tokens(c)
+                total += _ai_estimate_text_tokens(c, model=model)
             elif isinstance(c, list):
                 # OpenAI 多模态格式：数组 content
                 for p in c:
@@ -7598,7 +7861,46 @@ def _ai_estimate_messages_tokens(messages: list):
         return 0
 
 
-def _ai_truncate_text_to_tokens(text: str, keep_tokens: int):
+def _ai_take_chars_up_to_tokens(text: str, max_tokens: int, from_head: bool = True):
+    """按统一 token 权重从一端截取不超过 max_tokens 的子串（单次遍历，O(n)）。
+
+    与 _ai_estimate_text_tokens 共用 _ai_char_token_weight，保证“估算”与“截断”
+    口径完全一致，也不会对中文误用 4× 字符余量而撑爆预算。"""
+    if not text or max_tokens <= 0:
+        return ""
+    budget = float(max_tokens)
+    acc = 0.0
+    if from_head:
+        i = 0
+        for ch in text:
+            acc += _ai_char_token_weight(ch)
+            if acc > budget:
+                break
+            i += 1
+        return text[:i]
+    j = len(text)
+    for ch in reversed(text):
+        acc += _ai_char_token_weight(ch)
+        if acc > budget:
+            break
+        j -= 1
+    return text[j:]
+
+
+# 上下文输入 token 预算的兜底默认值：当配置未设置 ai_max_input_tokens(=0) 时启用。
+# 此前 0 会让 _ai_trim_messages_to_budget 直接返回全部消息、完全不做裁剪（等于裸奔）。
+# 这里取对主流 32K~128K 窗口模型安全的中等值；用户仍可在配置中显式覆盖该值。
+AI_DEFAULT_MAX_INPUT_TOKENS = 60000
+
+
+def _ai_truncate_text_to_tokens(text: str, keep_tokens: int, keep: str = "head", head_ratio: float = 0.85):
+    """将文本截断到约 keep_tokens token。
+
+    - keep="head"（默认）：保留头部（信息最密集，如报错首行/文件头/用户问题），
+      尾部留一小段，符合“开头最重要”的主流截断策略。
+    - keep="tail"：保留尾部（更近的上下文，用于旧历史摘要），头部留一小段。
+    与 _ai_estimate_text_tokens 共用同一套字符权重，保证估算与截断口径一致。
+    """
     try:
         s = str(text or "")
         t = int(keep_tokens or 0)
@@ -7606,13 +7908,26 @@ def _ai_truncate_text_to_tokens(text: str, keep_tokens: int):
             return ""
         if _ai_estimate_text_tokens(s) <= t:
             return s
-        try:
-            max_chars = max(0, int(t * 4))
-            if len(s) <= max_chars:
-                return s
-            return s[-max_chars:]
-        except Exception:
-            return s
+        if keep not in ("head", "tail"):
+            keep = "head"
+        # 为截断标记预留 token 额度，避免标记本身撑爆预算
+        t = max(1, t - 20)
+        # 主段始终占 head_ratio（较大），keep 仅决定主段位于头还是尾
+        primary_tokens = max(1, int(t * head_ratio))
+        secondary_tokens = max(0, t - primary_tokens)
+        marker = "\n…[内容过长已截断：保留首尾]…\n"
+        if keep == "head":
+            primary_chars = _ai_take_chars_up_to_tokens(s, primary_tokens, from_head=True)
+            secondary_chars = ""
+            if secondary_tokens > 0 and len(primary_chars) < len(s):
+                secondary_chars = _ai_take_chars_up_to_tokens(s[len(primary_chars):], secondary_tokens, from_head=False)
+            return (primary_chars + marker + secondary_chars) if secondary_chars else (primary_chars + marker)
+        else:
+            primary_chars = _ai_take_chars_up_to_tokens(s, primary_tokens, from_head=False)
+            secondary_chars = ""
+            if secondary_tokens > 0 and len(primary_chars) < len(s):
+                secondary_chars = _ai_take_chars_up_to_tokens(s[:len(s) - len(primary_chars)], secondary_tokens, from_head=True)
+            return (secondary_chars + marker + primary_chars) if secondary_chars else (marker + primary_chars)
     except Exception:
         return str(text or "")
 
@@ -7656,14 +7971,15 @@ def _hivo_ai_msg_has_valid_content(m):
         return False
 
 
-def _ai_trim_messages_to_budget(messages: list, max_total_tokens: int, reserve_output_tokens: int = 0):
+def _ai_trim_messages_to_budget(messages: list, max_total_tokens: int, reserve_output_tokens: int = 0, model=None, summarizer=None):
     try:
         if not isinstance(messages, list):
             return []
         max_total = int(max_total_tokens or 0)
-        reserve = max(0, int(reserve_output_tokens or 0))
         if max_total <= 0:
-            return [m for m in messages if isinstance(m, dict)]
+            # 未配置 ai_max_input_tokens 时不再“裸奔”，回退到安全默认值
+            max_total = AI_DEFAULT_MAX_INPUT_TOKENS
+        reserve = max(0, int(reserve_output_tokens or 0))
 
         arr = [m for m in messages if isinstance(m, dict)]
         if not arr:
@@ -7721,7 +8037,7 @@ def _ai_trim_messages_to_budget(messages: list, max_total_tokens: int, reserve_o
             base.append({"role": "system", "content": sys_text})
 
         def total_tokens(msgs):
-            return _ai_estimate_messages_tokens(msgs)
+            return _ai_estimate_messages_tokens(msgs, model=model)
 
         budget = max_total - reserve
         if total_tokens(base + non_sys) <= budget:
@@ -7775,55 +8091,65 @@ def _ai_trim_messages_to_budget(messages: list, max_total_tokens: int, reserve_o
 
         summary_txt = ""
         if has_older:
-            parts = []
-            keep_turns = 6
-            turn_count = 0
-            last_tc_map = {}
-            for m in older_msgs:
-                role = str(m.get("role") or "")
-                if role == "user":
-                    turn_count += 1
-                    if turn_count > keep_turns:
-                        break
-                if role == "assistant":
-                    tc = m.get("tool_calls")
-                    if isinstance(tc, list):
-                        for t in tc:
-                            if isinstance(t, dict):
-                                tid = str(t.get("id") or "")
-                                tname = str((t.get("function") or {}).get("name") or "")
-                                if tid and tname:
-                                    last_tc_map[tid] = tname
-                c = m.get("content")
-                if isinstance(c, str):
-                    txt = c
-                elif isinstance(c, list):
-                    txt_parts = []
-                    for p in c:
-                        if isinstance(p, dict) and str(p.get("type") or "") == "text":
-                            txt_parts.append(str(p.get("text") or ""))
-                    txt = " ".join(txt_parts)
-                else:
-                    txt = ""
-                if role == "user":
-                    parts.append("U:" + txt[:160])
-                elif role == "assistant":
-                    tc = m.get("tool_calls")
-                    has_tc = isinstance(tc, list) and len(tc) > 0
-                    if has_tc:
-                        tnames = [str((t.get("function") or {}).get("name") or "?") for t in tc if isinstance(t, dict)]
-                        parts.append("A:[tool:" + ",".join(tnames[:3]) + "] " + txt[:120])
+            # 优先抽象式（abstractive）摘要：对超预算的旧历史调用 summarizer 做 LLM 压缩，
+            # 语义保留远优于 extractive 拼接截断；仅在无 summarizer 或历史很短时回退。
+            if callable(summarizer) and _ai_estimate_messages_tokens(older_msgs, model=model) > 400:
+                try:
+                    s = summarizer(older_msgs)
+                    if isinstance(s, str) and len(s.strip()) > 20:
+                        summary_txt = s.strip()
+                except Exception:
+                    summary_txt = ""
+            if not summary_txt:
+                parts = []
+                keep_turns = 6
+                turn_count = 0
+                last_tc_map = {}
+                for m in older_msgs:
+                    role = str(m.get("role") or "")
+                    if role == "user":
+                        turn_count += 1
+                        if turn_count > keep_turns:
+                            break
+                    if role == "assistant":
+                        tc = m.get("tool_calls")
+                        if isinstance(tc, list):
+                            for t in tc:
+                                if isinstance(t, dict):
+                                    tid = str(t.get("id") or "")
+                                    tname = str((t.get("function") or {}).get("name") or "")
+                                    if tid and tname:
+                                        last_tc_map[tid] = tname
+                    c = m.get("content")
+                    if isinstance(c, str):
+                        txt = c
+                    elif isinstance(c, list):
+                        txt_parts = []
+                        for p in c:
+                            if isinstance(p, dict) and str(p.get("type") or "") == "text":
+                                txt_parts.append(str(p.get("text") or ""))
+                        txt = " ".join(txt_parts)
                     else:
-                        parts.append("A:" + txt[:220])
-                elif role == "tool":
-                    tcid = str(m.get("tool_call_id") or "")
-                    tname = last_tc_map.get(tcid) or "tool"
-                    parts.append("T(" + tname + "):" + txt[:80])
-                else:
-                    parts.append(txt[:120])
-            summary_blob = "\n".join(parts)
-            sum_allow = max(64, int(budget * 0.25))
-            summary_txt = _ai_truncate_text_to_tokens(summary_blob, sum_allow)
+                        txt = ""
+                    if role == "user":
+                        parts.append("U:" + txt[:160])
+                    elif role == "assistant":
+                        tc = m.get("tool_calls")
+                        has_tc = isinstance(tc, list) and len(tc) > 0
+                        if has_tc:
+                            tnames = [str((t.get("function") or {}).get("name") or "?") for t in tc if isinstance(t, dict)]
+                            parts.append("A:[tool:" + ",".join(tnames[:3]) + "] " + txt[:120])
+                        else:
+                            parts.append("A:" + txt[:220])
+                    elif role == "tool":
+                        tcid = str(m.get("tool_call_id") or "")
+                        tname = last_tc_map.get(tcid) or "tool"
+                        parts.append("T(" + tname + "):" + txt[:80])
+                    else:
+                        parts.append(txt[:120])
+                summary_blob = "\n".join(parts)
+                sum_allow = max(64, int(budget * 0.25))
+                summary_txt = _ai_truncate_text_to_tokens(summary_blob, sum_allow, keep="tail")
             summary_msg = {"role": "system", "content": "历史摘要：\n" + summary_txt}
             composed = base + [summary_msg] + recent
         else:
@@ -7840,7 +8166,7 @@ def _ai_trim_messages_to_budget(messages: list, max_total_tokens: int, reserve_o
 
         if has_older:
             sum_allow2 = max(32, int(budget * 0.2))
-            composed = base + [{"role": "system", "content": _ai_truncate_text_to_tokens("历史摘要：\n" + summary_txt, sum_allow2)}] + recent
+            composed = base + [{"role": "system", "content": _ai_truncate_text_to_tokens("历史摘要：\n" + summary_txt, sum_allow2, keep="tail")}] + recent
         else:
             composed = base + recent
 
@@ -7857,7 +8183,7 @@ def _ai_trim_messages_to_budget(messages: list, max_total_tokens: int, reserve_o
                 break
             recent = recent[next_start:]
             if has_older:
-                composed = base + [{"role": "system", "content": _ai_truncate_text_to_tokens("历史摘要：\n" + summary_txt, sum_allow2)}] + recent
+                composed = base + [{"role": "system", "content": _ai_truncate_text_to_tokens("历史摘要：\n" + summary_txt, sum_allow2, keep="tail")}] + recent
             else:
                 composed = base + recent
 
@@ -7905,8 +8231,8 @@ def _ai_trim_messages_to_budget(messages: list, max_total_tokens: int, reserve_o
                 c = m.get("content")
                 if not isinstance(c, str):
                     continue
-                # 粗略估算：长度 / 4 ≈ token 数
-                est_tokens = len(c) // 4
+                # 与统一估算口径一致（中文友好），避免粗放的 len//4
+                est_tokens = _ai_estimate_text_tokens(c)
                 if est_tokens <= tool_content_limit:
                     continue
                 # 检测是否是 base64 图片
@@ -8199,7 +8525,9 @@ class AnthropicProvider(BaseLLMProvider):
             "messages": user_messages,
         }
         if system_prompt:
-            body["system"] = system_prompt
+            # Prompt caching：将静态 system 前缀（能力 spec + 上下文引用）标记为可缓存断点，
+            # 同一会话/仓库的重复请求命中缓存，显著降低首 token 延迟与成本。
+            body["system"] = [{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}]
         if temperature is not None:
             body["temperature"] = float(temperature)
         if max_tokens and max_tokens > 0:
@@ -8591,7 +8919,7 @@ def _get_provider(profile: dict) -> BaseLLMProvider:
     return cls(profile)
 
 
-def ai_chat(messages: list, temperature: float | None = None, profile_id: str | None = None, timeout_s: int = 60, stream: bool = False, on_delta=None, tools: list | None = None):
+def ai_chat(messages: list, temperature: float | None = None, profile_id: str | None = None, timeout_s: int = 60, stream: bool = False, on_delta=None, cancel_check=None, tools: list | None = None):
     with ai_config_lock:
         cfg = load_hivo_ai_config()
     prof = _ai_pick_profile(cfg, profile_id)
@@ -8618,10 +8946,21 @@ def ai_chat(messages: list, temperature: float | None = None, profile_id: str | 
     if not isinstance(messages, list) or not messages:
         return False, "messages 为空", None
 
-    msgs2 = _ai_trim_messages_to_budget(messages, max_total_tokens=max_input_tokens, reserve_output_tokens=max_output_tokens)
+    # 抽象式压缩：当旧历史超预算时，用 LLM 做 abstractive 摘要（复用已有 _hivo_summarize_for_long_term）。
+    # 仅在能提供 profile_id（从而真正发起 LLM 摘要）时注入，否则 trim 内部回退 extractive，避免空转。
+    summarizer = None
+    if profile_id:
+        summarizer = lambda msgs: _hivo_summarize_for_long_term(msgs, max_chars=2000, profile_id=profile_id)
+    msgs2 = _ai_trim_messages_to_budget(
+        messages,
+        max_total_tokens=max_input_tokens,
+        reserve_output_tokens=max_output_tokens,
+        model=provider.model,
+        summarizer=summarizer,
+    )
     if msgs2 is None:
         try:
-            budget = max(128, int(max_input_tokens or 0) - int(max_output_tokens or 0))
+            budget = max(128, (max_input_tokens or AI_DEFAULT_MAX_INPUT_TOKENS) - int(max_output_tokens or 0))
         except Exception:
             budget = 512
         budget = max(128, budget)
@@ -8673,6 +9012,9 @@ def ai_chat(messages: list, temperature: float | None = None, profile_id: str | 
             if stream:
                 stream_state = provider.create_stream_state()
                 while True:
+                    # 用户中止：在每块增量之间检查取消标志，命中即切断流（对齐主流 Agent 的即时停生成）
+                    if cancel_check is not None and cancel_check():
+                        break
                     try:
                         line_b = resp_.readline()
                     except Exception:
@@ -9631,7 +9973,7 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
             # 直接读取绝对路径并进行编码探测/解码
             try:
                 with open(full, "rb") as ftxt:
-                    data = ftxt.read()
+                    data = ftxt.read(_FILE_AGENT_READ_CAP)
             except Exception:
                 data = b""
             if not data:
@@ -9679,7 +10021,7 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
         else:
             # 仓库内文件：按相对路径读取
             rp_norm = str(rp or "").replace("\\", "/")
-            content, encoding = get_file_content(rp_norm, return_encoding=True)
+            content, encoding = get_file_content(rp_norm, return_encoding=True, max_bytes=_FILE_AGENT_READ_CAP)
             if content is None:
                 return False, "无法读取文件内容", {"file": {"path": rp}}
             ftype_txt = None
@@ -9799,7 +10141,7 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
         rp = _hivo_resolve_path_if_needed(str(tool.get("path") or "").strip())
         start = int(tool.get("start") or 1)
         end = int(tool.get("end") or start)
-        content, encoding = get_file_content(rp, return_encoding=True)
+        content, encoding = get_file_content(rp, return_encoding=True, max_bytes=_FILE_AGENT_READ_CAP)
         if content is None:
             return False, "无法读取文件内容", {"path": rp}
         lines = str(content or "").splitlines()
@@ -9998,6 +10340,7 @@ def _hivo_exec_tool(tool: dict, undo_gid: str = "", run_id: str = "", agent_dead
                 return False, "目标是目录", {}
             if os.path.exists(full):
                 os.remove(full)
+            _hivo_vector_remove_file(rp)
             invalidate_changed_files_cache()
             notify_files_updated()
             return True, "", {"path": rp}
@@ -11270,6 +11613,7 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
             timeout_s=min(llm_timeout_s, rem),
             stream=ai_stream_enabled,
             on_delta=(lambda d: _hivo_ws_emit_delta(run_id, session_id, d.get("delta", ""), d.get("delta_type", "content"))) if ai_stream_enabled else None,
+            cancel_check=(lambda: _hivo_agent_is_cancelled(run_id)),
         )
         if not ok:
             err = msg or "对话失败"
@@ -11279,6 +11623,11 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
             else:
                 _hivo_ws_emit_final(run_id, session_id, err, ok=False, extra={"rounds": 1})
             return False, err, run_id
+        if _hivo_agent_is_cancelled(run_id):
+            final = "已取消执行。"
+            _hivo_ws_emit(run_id, session_id, "error", "用户取消")
+            _hivo_ws_emit_final(run_id, session_id, final, ok=False, extra={"rounds": 1, "can_continue": True, "continue_reason": "cancelled"})
+            return False, final, run_id
         content = str((result or {}).get("content") or "")
         if not content.strip():
             err = "模型未返回任何内容，请重试或更换模型。"
@@ -11336,6 +11685,7 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
             timeout_s=min(llm_timeout_s, rem),
             stream=ai_stream_enabled,
             on_delta=(lambda d: _hivo_ws_emit_delta(run_id, session_id, d.get("delta", ""), d.get("delta_type", "content"))) if ai_stream_enabled else None,
+            cancel_check=(lambda: _hivo_agent_is_cancelled(run_id)),
             tools=openai_tools,
         )
         if not ok:
@@ -11346,6 +11696,14 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
             else:
                 _hivo_ws_emit_final(run_id, session_id, err, ok=False, extra={"rounds": round_i + 1})
             return False, err, run_id
+
+        # 流式中断：ai_chat 内部已在 cancel 时切断流，此处把本轮标记为已取消
+        # （已流式输出的半段内容保留在客户端，与主流 Agent 行为一致）
+        if _hivo_agent_is_cancelled(run_id):
+            final = "已取消执行。"
+            _hivo_ws_emit(run_id, session_id, "error", "用户取消")
+            _hivo_ws_emit_final(run_id, session_id, final, ok=False, extra={"rounds": round_i + 1, "can_continue": True, "continue_reason": "cancelled"})
+            return False, final, run_id
 
         content = str((result or {}).get("content") or "")
         finish_reason = str((result or {}).get("finish_reason") or "")
@@ -11652,31 +12010,31 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
                 logger.debug(f"Exception ignored: {e}")
 
         receipt_lines = ["【工具回执(真实执行结果)】"]
-        total_payload_chars = 0
+        total_payload_tokens = 0
         # Per-tool payload caps (chars) to prevent any single tool flooding the receipt
         _TOOL_PAYLOAD_CAPS = {
-            "file_content": 20000,
-            "read_file_range": 20000,
-            "get_file": 12000,
-            "run_cmd": 15000,
-            "web_search": 16000,
-            "web_fetch": 12000,
-            "browser_text": 12000,
-            "browser_screenshot": 8000,
-            "browser_eval": 8000,
+            "file_content": 6000,
+            "read_file_range": 6000,
+            "get_file": 4000,
+            "run_cmd": 4000,
+            "web_search": 5000,
+            "web_fetch": 4000,
+            "browser_text": 4000,
+            "browser_screenshot": 2000,
+            "browser_eval": 2000,
         }
         try:
             limits = (cfg or {}).get("limits") if isinstance(cfg, dict) else {}
             if limits and isinstance(limits, dict):
                 server_input = int(limits.get("ai_max_input_tokens") or 0)
                 if server_input > 0:
-                    max_total_payload_chars = max(12000, min(80000, int(server_input * 0.25)))
+                    max_total_payload_tokens = max(2000, min(20000, int(server_input * 0.25)))
                 else:
-                    max_total_payload_chars = 24000
+                    max_total_payload_tokens = 6000
             else:
-                max_total_payload_chars = 24000
+                max_total_payload_tokens = 6000
         except Exception:
-            max_total_payload_chars = 24000
+            max_total_payload_tokens = 6000
         for r in receipts:
             nm = str(r.get("type") or "")
             ok1 = bool(r.get("ok"))
@@ -11754,17 +12112,17 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
                             payload = ""
 
                 if payload:
-                    # Apply per-tool-type payload cap if one exists
-                    tool_cap = _TOOL_PAYLOAD_CAPS.get(nm, 0)
-                    if tool_cap > 0 and len(payload) > tool_cap:
-                        payload = payload[:tool_cap] + f"\n...（已截断，原文{len(payload)}字）..."
-                    if total_payload_chars >= max_total_payload_chars:
+                    # Token-aware per-tool + global caps（与 token 估算口径统一，消除字符 vs token 错配）
+                    tool_cap = _TOOL_PAYLOAD_CAPS.get(nm, 0) or 0
+                    room = max_total_payload_tokens - total_payload_tokens
+                    if room <= 0:
                         continue
-                    room = max_total_payload_chars - total_payload_chars
-                    chunk = payload[:room]
-                    total_payload_chars += len(chunk)
+                    cap = room if tool_cap <= 0 else min(room, tool_cap)
+                    if _ai_estimate_text_tokens(payload) > cap:
+                        payload = _ai_truncate_text_to_tokens(payload, cap, keep="head")
+                    total_payload_tokens += _ai_estimate_text_tokens(payload)
                     receipt_lines.append("  ---")
-                    receipt_lines.append(chunk)
+                    receipt_lines.append(payload)
             except Exception as e:
                 logger.debug(f"Exception ignored: {e}")
         receipt_text = "\n".join(receipt_lines)
@@ -13399,6 +13757,8 @@ class Handler(BaseHTTPRequestHandler):
             logger.warning(f"未知的 GET 请求路径: {p}")
             self.send_json({"error":"Not found"}, 404)
 
+    MAX_POST_BODY_BYTES_DEFAULT = 8 * 1024 * 1024  # 普通接口请求体安全上限（防 slowloris / 内存暴涨）
+
     def do_POST(self):
         """处理 POST 请求"""
         global REPO_PATH
@@ -13411,6 +13771,8 @@ class Handler(BaseHTTPRequestHandler):
         p  = urlparse(self.path).path
         try:
             length = int(self.headers.get('Content-Length', '0'))
+            if length < 0:
+                length = 0
             try:
                 cfg0 = _hivo_load_cfg()
                 limits0 = cfg0.get("limits") if isinstance(cfg0, dict) else None
@@ -13419,9 +13781,10 @@ class Handler(BaseHTTPRequestHandler):
                 if p == "/api/ai_store_attachments":
                     max_body = int(limits0.get("max_upload_request_bytes") or (32 * 1024 * 1024))
                 else:
-                    max_body = int(limits0.get("max_post_body_bytes") or 0)
+                    # 未配置 max_post_body_bytes 时不再“裸奔”，回退到安全默认上限，防止超大 Content-Length 盲读内存
+                    max_body = int(limits0.get("max_post_body_bytes") or self.MAX_POST_BODY_BYTES_DEFAULT)
             except Exception:
-                max_body = 0
+                max_body = self.MAX_POST_BODY_BYTES_DEFAULT
             if max_body > 0 and length > max_body:
                 logger.warning(f"[{rid}] 请求体过大: {length} bytes > {max_body} bytes")
                 self.send_json({"ok": False, "error": f"附件或请求内容过大（>{max_body/1024/1024:.1f} MB），请减少附件数量或压缩图片"}, 413)
@@ -13457,6 +13820,68 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception:
                     origin_url = ""
                 self.send_json({"repo": REPO_PATH, "branch": branch, "origin_url": origin_url})
+
+            elif p == "/api/hivo_reindex":
+                # 手动整库重建向量索引（仓库大改或切换 embedding 模型后）。后台执行，不阻塞请求。
+                global _VECTOR_LAST_REINDEX
+                if not _VECTOR_ENABLED or _VECTOR_EXECUTOR is None:
+                    self.send_json({"ok": False, "error": "向量索引未启用"}, 400)
+                    return
+                try:
+                    _VECTOR_EXECUTOR.submit(
+                        _rvi.ensure_repo_indexed, _VECTOR_STORE, _VECTOR_EMBED, REPO_PATH,
+                        force=True, estimate_tokens=_ai_estimate_text_tokens,
+                    )
+                    _VECTOR_LAST_REINDEX = time.time()
+                    self.send_json({"ok": True, "message": "仓库向量索引重建已提交（后台）"})
+                except Exception as e:  # noqa: BLE001
+                    self.send_json({"ok": False, "error": str(e)}, 500)
+                return
+
+            elif p == "/api/hivo_vector_status":
+                # 向量索引运行状态 + 最近一次 @引用/向量召回的 token 用量（供 token 用量弹窗展示）
+                try:
+                    embed_cfg = _VECTOR_EMBED.cfg if _VECTOR_EMBED is not None else None
+                    backend = getattr(embed_cfg, "backend", None) if embed_cfg else None
+                    local_mode = getattr(embed_cfg, "local_mode", None) if embed_cfg else None
+                    model_name = getattr(embed_cfg, "local_model", None) if embed_cfg else None
+                    dim = _VECTOR_EMBED.dim if _VECTOR_EMBED is not None else None
+                    effective_mode = _VECTOR_EMBED.effective_mode if _VECTOR_EMBED is not None else None
+                    indexed_files = 0
+                    chunk_count = 0
+                    if _VECTOR_STORE is not None:
+                        try:
+                            indexed_files = len(_VECTOR_STORE.list_indexed_files() or [])
+                        except Exception:
+                            indexed_files = 0
+                        try:
+                            chunk_count = _VECTOR_STORE.count() or 0
+                        except Exception:
+                            chunk_count = 0
+                    last_rag_usage = None
+                    sid_s = str((data or {}).get("session_id") or "").strip()
+                    if sid_s:
+                        try:
+                            _st = _hivo_get_session_state(sid_s)
+                            last_rag_usage = _st.get("last_rag_usage")
+                        except Exception:
+                            last_rag_usage = None
+                    self.send_json({
+                        "ok": True,
+                        "enabled": bool(_VECTOR_ENABLED),
+                        "backend": backend,
+                        "local_mode": local_mode,
+                        "effective_mode": effective_mode,
+                        "model": model_name,
+                        "dim": dim,
+                        "indexed_files": indexed_files,
+                        "chunk_count": chunk_count,
+                        "last_reindex": _VECTOR_LAST_REINDEX,
+                        "last_rag_usage": last_rag_usage,
+                    })
+                except Exception as e:  # noqa: BLE001
+                    self.send_json({"ok": False, "error": str(e)}, 500)
+                return
 
             elif p == "/api/set_origin":
                 logger.info("处理 /api/set_origin 请求")
@@ -14569,12 +14994,24 @@ class Handler(BaseHTTPRequestHandler):
                     context_refs_enabled = True
 
                 if context_refs_enabled:
+                    refs_usage = {"a_tokens": 0, "b_tokens": 0, "total": 0, "had_refs": False, "refs_resolved": 0, "vector_ready": bool(_VECTOR_ENABLED)}
                     try:
-                        refs_block, refs_meta = _hivo_parse_context_refs_structured(ctx_refs if isinstance(ctx_refs, list) else [])
+                        refs_block, refs_meta, refs_usage = _hivo_parse_context_refs_structured(
+                            ctx_refs if isinstance(ctx_refs, list) else [],
+                            query=user_text,
+                            vector_store=_VECTOR_STORE if _VECTOR_ENABLED else None,
+                            embed_client=_VECTOR_EMBED if _VECTOR_ENABLED else None,
+                        )
                     except Exception:
-                        refs_block, refs_meta = "", []
+                        refs_block, refs_meta, refs_usage = "", [], {"a_tokens": 0, "b_tokens": 0, "total": 0, "had_refs": False, "refs_resolved": 0, "vector_ready": bool(_VECTOR_ENABLED)}
                     if refs_block:
                         dyn_ctx = (str(dyn_ctx or "") + "\n\n" + refs_block).strip()
+                    # 记录本次 @引用/向量召回的 token 用量，供 token 用量弹窗的 RAG 区块读取
+                    try:
+                        _st = _hivo_get_session_state(str(sid or "").strip())
+                        _st["last_rag_usage"] = refs_usage
+                    except Exception:
+                        logger.debug("记录 last_rag_usage 失败(已忽略)")
                     try:
                         if refs_meta:
                             st = _hivo_get_session_state(str(sid or "").strip())
