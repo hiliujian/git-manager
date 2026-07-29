@@ -2245,7 +2245,7 @@ def _hivo_parse_context_refs_structured(context_refs: list, total_tokens: int = 
         complete = False
         media_meta = {}
         if resolved:
-            c0 = get_file_content(resolved)
+            c0 = get_file_content(resolved, max_bytes=128 * 1024)
             if c0 is not None:
                 content = str(c0 or "")
             if content:
@@ -2680,8 +2680,9 @@ def _hivo_parse_context_refs_structured(context_refs: list, total_tokens: int = 
                                         "range": {"start_line": int(i0 + 1), "end_line": int(j0)},
                                         "content": txt2,
                                     })
-                                    used += _ai_estimate_text_tokens(txt2)
-                                    room_left -= len(txt2)
+                                    _tk2 = _ai_estimate_text_tokens(txt2)
+                                    used += _tk2
+                                    room_left -= _tk2
                                     i0 = j0
                                     continue
                                 break
@@ -2695,8 +2696,9 @@ def _hivo_parse_context_refs_structured(context_refs: list, total_tokens: int = 
                         "range": {"start_line": int(a + 1), "end_line": int(b)},
                         "content": txt,
                     })
-                    used += _ai_estimate_text_tokens(txt)
-                    room_left -= len(txt)
+                    _tk = _ai_estimate_text_tokens(txt)
+                    used += _tk
+                    room_left -= _tk
 
                 provided_parts = len(provided)
                 complete = bool(provided_parts >= total_parts and total_parts > 0)
@@ -3824,6 +3826,10 @@ def read_file_range(rel_path: str, start: int = 1, end: int = 200):
         return None, str(ex)
 
 
+_SEARCH_CODE_CACHE = {}
+_SEARCH_CODE_CACHE_LOCK = threading.Lock()
+_SEARCH_CODE_CACHE_TTL = 15.0
+
 def search_code(query: str, case_sensitive: bool = False, max_results: int = 50, max_file_size: int = 512 * 1024):
     if not REPO_PATH:
         return None, "未打开仓库"
@@ -3840,6 +3846,11 @@ def search_code(query: str, case_sensitive: bool = False, max_results: int = 50,
         cap = 200
 
     repo_root = os.path.abspath(REPO_PATH)
+    _cache_key = (repo_root, q, bool(case_sensitive))
+    with _SEARCH_CODE_CACHE_LOCK:
+        _cent = _SEARCH_CODE_CACHE.get(_cache_key)
+        if _cent and (time.time() - _cent[1]) < _SEARCH_CODE_CACHE_TTL:
+            return _cent[0], ""
     flags = 0 if case_sensitive else re.IGNORECASE
     try:
         pat = re.compile(q, flags)
@@ -3880,6 +3891,13 @@ def search_code(query: str, case_sensitive: bool = False, max_results: int = 50,
             except Exception:
                 continue
 
+    with _SEARCH_CODE_CACHE_LOCK:
+        _SEARCH_CODE_CACHE[_cache_key] = (out, time.time())
+        if len(_SEARCH_CODE_CACHE) > 200:
+            try:
+                _SEARCH_CODE_CACHE.pop(next(iter(_SEARCH_CODE_CACHE)))
+            except Exception:
+                pass
     return out, ""
 
 
@@ -6316,37 +6334,46 @@ def get_workspace_context(max_entries: int = 80):
     )
 
 
+_REPO_FILE_INDEX = {}
+_REPO_FILE_INDEX_LOCK = threading.Lock()
+_REPO_FILE_INDEX_TTL = 30.0
+
+def _hivo_get_repo_file_index(repo_root):
+    """懒构建仓库文件名索引（name_lower -> [rel_path,...]），TTL 内复用，消除每个 @引用 全仓库 os.walk。"""
+    with _REPO_FILE_INDEX_LOCK:
+        ent = _REPO_FILE_INDEX.get(repo_root)
+        if ent and (time.time() - ent[1]) < _REPO_FILE_INDEX_TTL:
+            return ent[0]
+    idx = {}
+    try:
+        for root, dirs, files in os.walk(repo_root):
+            dirs[:] = [d for d in dirs if d not in _HIVO_WALK_EXCLUDE_DIRS and not d.startswith(".")]
+            for fn in files:
+                if fn.startswith("."):
+                    continue
+                idx.setdefault(fn.lower(), []).append(os.path.relpath(os.path.join(root, fn), repo_root).replace("\\", "/"))
+    except Exception:
+        pass
+    with _REPO_FILE_INDEX_LOCK:
+        _REPO_FILE_INDEX[repo_root] = (idx, time.time())
+    return idx
+
 def find_files_by_name(name: str, max_results: int = 20):
     q = str(name or "").strip()
     if not REPO_PATH:
         return []
     ql = q.lower()
     repo_root = os.path.abspath(REPO_PATH)
+    if not q:
+        return []
+    idx = _hivo_get_repo_file_index(repo_root)
     out = []
-    try:
-        for root, dirs, files in os.walk(repo_root):
-            dirs[:] = [d for d in dirs if d not in _HIVO_WALK_EXCLUDE_DIRS and not d.startswith(".")]
-            try:
-                dirs.sort()
-            except Exception as e:
-                logger.debug(f"Exception ignored: {e}")
-            try:
-                files.sort()
-            except Exception as e:
-                logger.debug(f"Exception ignored: {e}")
-            for fn in files:
-                if fn.startswith("."):
-                    continue
-                fcl = fn.lower()
-                if (not q) or (fcl == ql) or (ql in fcl):
-                    abs_path = os.path.join(root, fn)
-                    rel = os.path.relpath(abs_path, repo_root).replace("\\", "/")
-                    out.append(rel)
-                    if len(out) >= int(max_results):
-                        return out
-    except Exception:
-        return out
-    return out
+    for fnl, paths in idx.items():
+        if fnl == ql or ql in fnl:
+            out.extend(paths)
+            if len(out) >= int(max_results):
+                break
+    return out[:int(max_results)]
 
 
 def save_hivo_ai_config(cfg: dict):
@@ -9049,7 +9076,16 @@ def ai_chat(messages: list, temperature: float | None = None, profile_id: str | 
                 result = provider.get_stream_result(stream_state)
                 return True, "", result
             else:
-                raw = resp_.read().decode("utf-8", errors="replace")
+                raw_parts = []
+                while True:
+                    # 非流式模式下同样支持即时中断：每块读取之间检查取消标志
+                    if cancel_check is not None and cancel_check():
+                        return True, "", None
+                    chunk_b = resp_.read(4096)
+                    if not chunk_b:
+                        break
+                    raw_parts.append(chunk_b)
+                raw = b"".join(raw_parts).decode("utf-8", errors="replace")
                 try:
                     parsed = provider.parse_response(raw)
                 except Exception as e:
@@ -11227,7 +11263,8 @@ def hivo_agent_run(run_id: str, profile_id: str, session_id: str, user_text: str
     try:
         cap_spec = get_capabilities_spec()
         agent_tools = (cap_spec.get("agent_tools") or []) if isinstance(cap_spec, dict) else []
-    except Exception:
+    except Exception as e:
+        logger.error("获取能力清单失败，Agent 将以无工具模式运行: %s", e)
         agent_tools = []
 
     try:
@@ -13571,7 +13608,19 @@ class Handler(BaseHTTPRequestHandler):
             if not self._require_repo():
                 return
             name = qget("name") or qget("q") or ""
-            items = find_files_by_name(name, max_results=200)
+            if name:
+                items = find_files_by_name(name, max_results=200)
+            else:
+                # 空名称：返回仓库全部文件（用于 @ 提及菜单默认展示），复用缓存的文件名索引，避免全仓库扫描
+                try:
+                    _idx = _hivo_get_repo_file_index(os.path.abspath(REPO_PATH))
+                    _all = []
+                    for _paths in _idx.values():
+                        if isinstance(_paths, list):
+                            _all.extend(_paths)
+                    items = sorted(_all)[:200]
+                except Exception:
+                    items = []
             self.send_json({"ok": True, "files": items})
 
         elif p == "/api/list_dir_tree":
@@ -15002,7 +15051,8 @@ class Handler(BaseHTTPRequestHandler):
                             vector_store=_VECTOR_STORE if _VECTOR_ENABLED else None,
                             embed_client=_VECTOR_EMBED if _VECTOR_ENABLED else None,
                         )
-                    except Exception:
+                    except Exception as e:
+                        logger.warning("RAG 上下文解析失败(已降级为空上下文): %s", e)
                         refs_block, refs_meta, refs_usage = "", [], {"a_tokens": 0, "b_tokens": 0, "total": 0, "had_refs": False, "refs_resolved": 0, "vector_ready": bool(_VECTOR_ENABLED)}
                     if refs_block:
                         dyn_ctx = (str(dyn_ctx or "") + "\n\n" + refs_block).strip()

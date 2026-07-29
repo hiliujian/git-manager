@@ -14543,6 +14543,8 @@ flex-shrink:0;cursor:pointer;
     }
   }
 
+  const __gmAiTerminalStages = ['cancelled','canceled','aborted','stopped','terminated','done','error'];
+  const __gmAiRunningStages = ['queued','queue','starting','started','executing','running','processing','thinking','streaming','sending','cancelling'];
   function handleWebSocketMessage(data) {
 
     switch (data.type) {
@@ -14582,8 +14584,7 @@ flex-shrink:0;cursor:pointer;
               const stage = String(data.stage || '');
               // If user cancelled this run, ignore non-terminal status to avoid jumping back to running state
               if (__isCancelledRun) {
-                const term = ['cancelled','canceled','aborted','stopped','terminated','done','error'];
-                const running = ['queued','queue','starting','started','executing','running','processing','thinking','streaming','sending','cancelling'];
+                const term = __gmAiTerminalStages, running = __gmAiRunningStages;
                 const isTerminal = term.includes(stage) || (stage && !running.includes(stage));
                 if (!isTerminal) { applied = true; break; }
               }
@@ -14597,12 +14598,17 @@ flex-shrink:0;cursor:pointer;
               if (!m.stream_started) {
                 if (msg) m.content = __gmAiNormalizePendingStatusText(msg);
               }
-              __gmAiRenderChat();
-              try { __gmAiRefreshSendCounter(); } catch (eC2) {}
+              if (window.__gmAiDeltaRenderRid) { try { cancelAnimationFrame(window.__gmAiDeltaRenderRid); } catch(_) {} }
+              window.__gmAiDeltaRenderRid = requestAnimationFrame(() => {
+                try {
+                  window.__gmAiDeltaRenderRid = 0;
+                  __gmAiRenderChat();
+                  try { __gmAiRefreshSendCounter(); } catch (eC2) {}
+                } catch(e) {}
+              });
               // If backend reports a terminal state, finalize UI even if no final event will be sent
               try {
-                const term = ['cancelled','canceled','aborted','stopped','terminated','done','error'];
-                const running = ['queued','queue','starting','started','executing','running','processing','thinking','streaming','sending','cancelling'];
+                const term = __gmAiTerminalStages, running = __gmAiRunningStages;
                 const isTerminal = term.includes(stage) || (stage && !running.includes(stage));
                 if (isTerminal) {
                   m.pending = false;
@@ -14640,8 +14646,7 @@ flex-shrink:0;cursor:pointer;
             // still treat terminal statuses as finalization for active run to clear UI state.
             try {
               const stage = String(data.stage || '');
-              const term = ['cancelled','canceled','aborted','stopped','terminated','done','error'];
-              const running = ['queued','queue','starting','started','executing','running','processing','thinking','streaming','sending','cancelling'];
+              const term = __gmAiTerminalStages, running = __gmAiRunningStages;
               const isTerminal = term.includes(stage) || (stage && !running.includes(stage));
               const activeRid = String(window.__gmAiActiveRunId || '').trim();
               if (isTerminal && activeRid && activeRid === runId) {
@@ -15755,7 +15760,7 @@ flex-shrink:0;cursor:pointer;
         const bubAct = document.querySelectorAll('.ai-bubble.ai-tools-open');
         bubAct.forEach(bu => { try { bu.classList.remove('ai-tools-open'); } catch(_){} });
       } catch(_){ }
-      try { __gmAiHydrateAttachmentsFromCache(); } catch (eHyd0) {}
+      try { if (!window.__gmAiHydrateLast || (Date.now() - window.__gmAiHydrateLast) > 600) { __gmAiHydrateAttachmentsFromCache(); window.__gmAiHydrateLast = Date.now(); } } catch (eHyd0) {}
       const list = document.getElementById('aiChatInner') || document.getElementById('aiChatList');
       if (!list) return;
       if (!Array.isArray(__gmAiChatMessages) || __gmAiChatMessages.length === 0) {
@@ -15924,9 +15929,29 @@ flex-shrink:0;cursor:pointer;
                  </div>
                </div>`
             : '';
-          node.innerHTML = `<div class="ai-meta">${esc(isUser ? '你' : 'AI')}</div><div class="ai-bubble${userLoading ? ' user-loading' : ''}${isPending ? ' pending' : ''}${isError ? ' ai-error' : ''}"><div class="ai-msg-actions">${toolBtn}<button title="删除" data-action="aiDeleteMsg" data-idx="${idx}">×</button></div>${attachmentsHtml}${thinkingHtml}<div class="ai-md">${isPending ? esc(content) : aiRenderMarkdown(content)}</div></div>`;
+          // 流式增量渲染：pending 且无命令卡片/错误时，分离更新 thinking 区与 content 区，仅追加新增文本，避免每帧整段 innerHTML 重建
+          if (isPending && node.__gmRendered && !cmdRes && !isError) {
+            const md = node.querySelector('.ai-md');
+            const thinkEl = node.querySelector('.ai-thinking-content');
+            const thinkingSame = !thinkingContent || (thinkEl && thinkEl.__lastLen === thinkingContent.length);
+            if (md && !md.querySelector('*') && thinkingSame) {
+              if (thinkingContent && thinkEl) { thinkEl.textContent = thinkingContent; thinkEl.__lastLen = thinkingContent.length; }
+              if (md.__lastLen != null && content.length >= md.__lastLen) {
+                try { md.appendChild(document.createTextNode(content.slice(md.__lastLen))); } catch (_) {}
+              } else {
+                md.textContent = content;
+              }
+              md.__lastLen = content.length;
+              const bub = node.querySelector('.ai-bubble');
+              if (bub) bub.classList.add('pending');
+              continue;
+            }
           }
-          try { __gmAiEnhanceCodeBlocks(node); } catch (eEnh) {}
+          node.innerHTML = `<div class="ai-meta">${esc(isUser ? '你' : 'AI')}</div><div class="ai-bubble${userLoading ? ' user-loading' : ''}${isPending ? ' pending' : ''}${isError ? ' ai-error' : ''}"><div class="ai-msg-actions">${toolBtn}<button title="删除" data-action="aiDeleteMsg" data-idx="${idx}">×</button></div>${attachmentsHtml}${thinkingHtml}<div class="ai-md">${isPending ? esc(content) : aiRenderMarkdown(content)}</div></div>`;
+          node.__gmRendered = true;
+          if (isPending) { const md0 = node.querySelector('.ai-md'); if (md0) md0.__lastLen = content.length; const think0 = node.querySelector('.ai-thinking-content'); if (think0) think0.__lastLen = (thinkingContent || '').length; }
+          }
+          try { if (!isPending) __gmAiEnhanceCodeBlocks(node); } catch (eEnh) {}
           try { if (!isPending) __gmAiEnhanceLinkChips(node); } catch (eChip) {}
           
         }
@@ -16385,69 +16410,6 @@ flex-shrink:0;cursor:pointer;
     } catch (e) {}
   }
 
-  function __gmAiExtractJsonObjectAroundType(text, type) {
-    try {
-      const s = String(text || '');
-      if (!s) return null;
-      const idxType = s.indexOf(type);
-      if (idxType < 0) return null;
-      let start = s.lastIndexOf('{', idxType);
-      if (start < 0) return null;
-      let depth = 0;
-      let inStr = false;
-      let esc0 = false;
-      for (let i = start; i < s.length; i++) {
-        const ch = s[i];
-        if (inStr) {
-          if (esc0) { esc0 = false; continue; }
-          if (ch === '\\') { esc0 = true; continue; }
-          if (ch === '"') { inStr = false; continue; }
-          continue;
-        }
-        if (ch === '"') { inStr = true; continue; }
-        if (ch === '{') depth++;
-        else if (ch === '}') {
-          depth--;
-          if (depth === 0) {
-            const raw = s.slice(start, i + 1);
-            try {
-              const obj = JSON.parse(raw);
-              if (obj && obj.type === type) {
-                return { obj, raw, start, end: i + 1 };
-              }
-            } catch (e2) {}
-            return null;
-          }
-        }
-      }
-    } catch (e) {
-      return null;
-    }
-    return null;
-  }
-
-  function __gmAiSanitizeAssistantContent(text) {
-    try {
-      let s = String(text || '');
-      if (!s) return s;
-      // strip leaked chat-template tokens (llama / hf style)
-      s = s.replace(/<\|start_header_id\|>\s*assistant\s*<\|end_header_id\|>\s*/gi, '');
-      s = s.replace(/<\|start_header_id\|>[^<]*<\|end_header_id\|>\s*/gi, '');
-      s = s.replace(/<\|eot_id\|>\s*/gi, '');
-      s = s.replace(/^\s*assistant\s*:\s*/i, '');
-
-      try {
-        const looksHtml = /<\s*(div|span|style|script|iframe|img|svg|link|meta|table|tr|td|th|ul|ol|li|h\d|p|br)\b/i.test(s);
-        if (looksHtml) {
-          s = s.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        }
-      } catch (eH) {}
-
-      return s.trim();
-    } catch (e) {
-      return String(text || '');
-    }
-  }
 
   function __gmAiRepoScopeKey() {
     try {
@@ -16545,6 +16507,7 @@ flex-shrink:0;cursor:pointer;
     }
   }
 
+  const __gmAiEscHtml = (s) => String(s || '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
   function __gmAiShowTokenUsage() {
     try {
       const popup = document.getElementById('aiTokenPopup');
@@ -16562,7 +16525,7 @@ flex-shrink:0;cursor:pointer;
       for (let i = 0; i < recent.length; i += 2) {
         pairs.push({ a: recent[i], b: recent[i + 1] || null });
       }
-      const escHtml = (s) => String(s || '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+      const escHtml = __gmAiEscHtml;
       const col = (d) => d ? `<div class="ai-token-col"><span class="ai-token-col-label">${escHtml(d.label)}</span><span>~${d.tok} tokens</span></div>` : '<div class="ai-token-col"></div>';
       const detailHtml = pairs.map(p => `<div class="ai-token-row">${col(p.a)}${col(p.b)}</div>`).join('');
       const ragHtml = `<div class="ai-token-rag" id="aiTokenRag"><h4>向量 / RAG</h4><div class="rag-row"><span>加载中…</span></div></div>`;
@@ -16617,7 +16580,7 @@ flex-shrink:0;cursor:pointer;
       const el = document.getElementById('aiTokenRag');
       if (!el) { if (onDone) onDone(); return; }
       const sid = (typeof __gmAiActiveSessionId !== 'undefined') ? __gmAiActiveSessionId : '';
-      const escHtml = (s) => String(s || '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+      const escHtml = __gmAiEscHtml;
       POST('/api/hivo_vector_status', { session_id: sid })
         .then((j) => {
           try {
@@ -16631,7 +16594,7 @@ flex-shrink:0;cursor:pointer;
                 modeLabel = '哈希词袋';
               }
             } else {
-              modeLabel = backendLabel + ' 远程';
+              modeLabel = '远程';
             }
             let html = '<h4>向量 / RAG</h4>';
             html += `<div class="rag-row"><span>模式</span><b>${escHtml(backendLabel + ' · ' + modeLabel)}</b></div>`;
@@ -16647,11 +16610,11 @@ flex-shrink:0;cursor:pointer;
               const aPct = Math.max(0, Math.min(100, Math.round(a / t * 100)));
               const bPct = Math.max(0, Math.min(100, Math.round(b / t * 100)));
               html += '<h4 style="margin-top:6px">本次回答上下文构成</h4>';
-              html += `<div class="rag-row"><span>信号A(@/结构)</span><b>${a} tok</b></div>`;
-              html += `<div class="rag-row"><span>信号B(向量语义)</span><b>${b} tok</b></div>`;
+              html += `<div class="rag-row"><span>引用解析</span><b>${a} tok</b></div>`;
+              html += `<div class="rag-row"><span>语义检索</span><b>${b} tok</b></div>`;
               html += `<div class="rag-bar"><span style="width:${aPct}%;background:var(--accent)"></span><span style="width:${bPct}%;background:var(--warn)"></span></div>`;
             } else if (!_vr) {
-              html += '<div class="rag-hint">向量索引未启用（默认关闭或初始化失败）；@引用由信号A直接注入，未走语义召回。</div>';
+              html += '<div class="rag-hint">向量索引未启用：仅引用解析，语义检索未启用。</div>';
             } else if (_hr && !_rr) {
               html += '<div class="rag-hint">⚠ 本轮回合有 @ 引用，但均未解析成功（文件未找到/不可读），未触发向量召回。</div>';
             } else if (!_hr) {
@@ -17103,181 +17066,6 @@ flex-shrink:0;cursor:pointer;
       toast('✗ 解决失败: ' + e.message, 'err');
     }
   }
-
-  function __gmAiScoreLine(line) {
-    try {
-      const s = String(line || '').trim();
-      if (!s) return 0;
-      let score = 1;
-      if (/(需求|目标|期望|必须|不要|请你|帮我|修复|bug|优化|实现|方案|约定|规范|规则|保持|不能|需要)/.test(s)) score += 4;
-      if (/(已完成|完成|已修复|修复了|结论|原因|根因|下一步|TODO|待办|计划|状态)/.test(s)) score += 3;
-      if (/\b(api|endpoint|range|markdown|token|context|summary|system|prompt)\b/i.test(s)) score += 2;
-      if (/```/.test(s)) score -= 1;
-      if (s.length > 180) score += 1;
-      return score;
-    } catch (e) {
-      return 0;
-    }
-  }
-
-  function __gmAiExtractKeyLines(text, maxLines = 16) {
-    try {
-      const raw = String(text || '').replace(/\r\n/g, '\n');
-      const lines = raw.split('\n').map(x => String(x || '').trim()).filter(Boolean);
-      const scored = [];
-      for (const ln of lines) {
-        const sc = __gmAiScoreLine(ln);
-        if (sc <= 0) continue;
-        scored.push({ sc, ln });
-      }
-      scored.sort((a, b) => (b.sc - a.sc));
-      const out = [];
-      const seen = new Set();
-      for (const it of scored) {
-        const t = it.ln;
-        if (!t) continue;
-        if (seen.has(t)) continue;
-        seen.add(t);
-        out.push(t);
-        if (out.length >= maxLines) break;
-      }
-      return out;
-    } catch (e) {
-      return [];
-    }
-  }
-
-
-  function __gmAiParseStructuredSummary(text) {
-    try {
-      const s = String(text || '');
-      const out = { goal: [], constraints: [], status: [], next: [] };
-      const lines = s.replace(/\r\n/g, '\n').split('\n');
-      let sec = '';
-      for (const raw of lines) {
-        const ln = String(raw || '').trim();
-        if (!ln) continue;
-        if (/^【目标】/.test(ln)) { sec = 'goal'; continue; }
-        if (/^【约束】/.test(ln)) { sec = 'constraints'; continue; }
-        if (/^【当前状态】/.test(ln)) { sec = 'status'; continue; }
-        if (/^【下一步】/.test(ln)) { sec = 'next'; continue; }
-        const m = ln.match(/^[-*]\s+(.*)$/);
-        const item = (m ? String(m[1] || '').trim() : ln);
-        if (!item) continue;
-        if (sec && out[sec]) out[sec].push(item);
-      }
-      return out;
-    } catch (e) {
-      return { goal: [], constraints: [], status: [], next: [] };
-    }
-  }
-
-  function __gmAiStructuredSummaryToText(obj) {
-    try {
-      const goal = Array.isArray(obj && obj.goal) ? obj.goal : [];
-      const constraints = Array.isArray(obj && obj.constraints) ? obj.constraints : [];
-      const status = Array.isArray(obj && obj.status) ? obj.status : [];
-      const next = Array.isArray(obj && obj.next) ? obj.next : [];
-      const lines = [];
-      lines.push('【目标】');
-      for (const x of goal) lines.push(`- ${x}`);
-      lines.push('');
-      lines.push('【约束】');
-      for (const x of constraints) lines.push(`- ${x}`);
-      lines.push('');
-      lines.push('【当前状态】');
-      for (const x of status) lines.push(`- ${x}`);
-      lines.push('');
-      lines.push('【下一步】');
-      for (const x of next) lines.push(`- ${x}`);
-      return lines.join('\n').trim();
-    } catch (e) {
-      return '';
-    }
-  }
-
-  function __gmAiDedupeList(items, limit = 60) {
-    try {
-      const out = [];
-      const seen = new Set();
-      for (const x0 of (items || [])) {
-        const x = String(x0 || '').trim();
-        if (!x) continue;
-        const k = x.toLowerCase();
-        if (seen.has(k)) continue;
-        seen.add(k);
-        out.push(x);
-        if (out.length >= limit) break;
-      }
-      return out;
-    } catch (e) {
-      return [];
-    }
-  }
-
-  function __gmAiMergeStructuredSummaries(aText, bText) {
-    try {
-      const a = __gmAiParseStructuredSummary(aText);
-      const b = __gmAiParseStructuredSummary(bText);
-      const merged = {
-        goal: __gmAiDedupeList([].concat(a.goal || [], b.goal || []), 30),
-        constraints: __gmAiDedupeList([].concat(a.constraints || [], b.constraints || []), 40),
-        status: __gmAiDedupeList([].concat(a.status || [], b.status || []), 40),
-        next: __gmAiDedupeList([].concat(a.next || [], b.next || []), 30),
-      };
-      return __gmAiStructuredSummaryToText(merged);
-    } catch (e) {
-      return String(bText || aText || '');
-    }
-  }
-
-  function __gmAiClassifyKeyLine(line) {
-    try {
-      const s = String(line || '').trim();
-      if (!s) return '';
-      if (/(下一步|待办|todo|接下来|后续|计划|建议)/i.test(s)) return 'next';
-      if (/(必须|不要|禁止|仅|优先|不得|规范|约定|规则|约束)/.test(s)) return 'constraints';
-      if (/(已完成|完成|已修复|修复了|当前|现状|状态|进展|结果|验证)/.test(s)) return 'status';
-      if (/(目标|需求|希望|期望|要做|实现|支持)/.test(s)) return 'goal';
-      return '';
-    } catch (e) {
-      return '';
-    }
-  }
-
-  function __gmAiSummarizeOldMessages(msgs) {
-    try {
-      const goal = [];
-      const constraints = [];
-      const status = [];
-      const next = [];
-      for (const m of (msgs || [])) {
-        if (!m) continue;
-        const content = String(m.content || '');
-        if (!content.trim()) continue;
-        const keyLines = __gmAiExtractKeyLines(content, 12);
-        for (const ln of keyLines) {
-          const sec = __gmAiClassifyKeyLine(ln);
-          if (sec === 'goal') goal.push(ln);
-          else if (sec === 'constraints') constraints.push(ln);
-          else if (sec === 'status') status.push(ln);
-          else if (sec === 'next') next.push(ln);
-          else status.push(ln);
-        }
-      }
-      const obj = {
-        goal: __gmAiDedupeList(goal, 18),
-        constraints: __gmAiDedupeList(constraints, 26),
-        status: __gmAiDedupeList(status, 26),
-        next: __gmAiDedupeList(next, 18),
-      };
-      return __gmAiStructuredSummaryToText(obj);
-    } catch (e) {
-      return '';
-    }
-  }
-
-
 
   function __gmAiEnsureMentionMenu() {
     if (__gmAiMentionMenuEl) return __gmAiMentionMenuEl;
@@ -18566,7 +18354,12 @@ flex-shrink:0;cursor:pointer;
           if (child.classList && child.classList.contains('ai-chip')) {
             out += String(child.dataset.chipRaw || child.getAttribute('title') || '');
           } else if (child.tagName === 'BR') {
-            out += '\n';
+            // A <br> at the very start or end of a block is a contenteditable
+            // caret placeholder (Chrome/Firefox insert one so the caret can sit
+            // on an otherwise-empty line), not a real line break — don't
+            // serialize it as '\n'. Middle <br>s (real line breaks) are kept.
+            const isPlaceholder = (i === 0 || i === kids.length - 1);
+            if (!isPlaceholder) out += '\n';
           } else if (child.tagName === 'DIV' || child.tagName === 'P') {
             if (out && !out.endsWith('\n')) out += '\n';
             walk(child);
@@ -19832,6 +19625,14 @@ flex-shrink:0;cursor:pointer;
       const v = String(ta.value || '');
       const next = v && !/\s$/.test(v) ? (v + ' @') : (v + '@');
       ta.value = next;
+      // The browser inserts a trailing <br> caret-placeholder after a text node
+      // once we focus/place the caret; remove it so the box doesn't show a
+      // phantom blank line and the caret doesn't land on a second line.
+      const kids = ta.childNodes;
+      const last = kids[kids.length - 1];
+      if (last && last.nodeType === Node.ELEMENT_NODE && last.tagName === 'BR') {
+        ta.removeChild(last);
+      }
       try { ta.setSelectionRange(ta.value.length, ta.value.length); } catch (e2) {}
       __gmAiUpdateMentionMenu();
     } catch (e) {}
@@ -30458,7 +30259,15 @@ flex-shrink:0;cursor:pointer;
   makeResizer('r1','.sidebar','right', false);
   makeResizer('r2','#rightPanel','left', false);
   makeSplitResizer();
-  updatePanelToggleButtons();
+  // 初始化面板收起按钮图标：必须等文档完全解析后再执行。
+  // 否则在 readyState==='loading'（body 解析途中）用 innerHTML 注入 SVG 时，
+  // 浏览器不会正确建立 SVG 命名空间，导致图标不渲染（按钮空白），需点击一次才出现。
+  // 与主题切换按钮（initTheme）的根因与修复方式一致。
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', updatePanelToggleButtons, { once: true });
+  } else {
+    updatePanelToggleButtons();
+  }
   initChangeNavigationWheelScroll();
   __gmBindDiffViewDelegation();
   __gmBindStaticUiDelegation();
@@ -30635,8 +30444,14 @@ flex-shrink:0;cursor:pointer;
     } catch (e) {}
   }
 
-  // 初始化主题
-  initTheme();
+  // 初始化主题：必须等文档完全解析后再执行。
+  // 否则在 readyState==='loading'（body 解析途中）用 innerHTML 注入 SVG 时，
+  // 浏览器不会正确建立 SVG 命名空间，导致图标不渲染（按钮空白），需点击一次才出现。
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initTheme, { once: true });
+  } else {
+    initTheme();
+  }
 
   // ── 文件拖拽导入功能 ──────────────────────────────────────────────────────────
   function initFileDragDrop() {
