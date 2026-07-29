@@ -24,11 +24,7 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs, unquote
 from datetime import datetime, timedelta, timezone
 
-# 仓库向量索引（P0/P1 独立模块，纯标准库依赖；缺失时降级为不启用）
-try:
-    import repo_vector_index as _rvi
-except Exception:  # noqa: BLE001
-    _rvi = None
+# 仓库向量索引（已内置为纯标准库实现，见文件末尾 _VectorStore / _VecEmbeddingClient 等，无需外部模块）
 try:
     from websockets.sync.server import serve as ws_serve, ServerConnection
     WEBSOCKET_AVAILABLE = True
@@ -2658,7 +2654,7 @@ def _hivo_parse_context_refs_structured(context_refs: list, total_tokens: int = 
 
                 provided = []
                 room_left = room
-                for ci, (a, b, ck) in enumerate(chunks_full, start=1):
+                for (a, b, ck) in chunks_full:
                     txt = "".join(lines[a:b])
                     if not txt:
                         continue
@@ -2671,7 +2667,7 @@ def _hivo_parse_context_refs_structured(context_refs: list, total_tokens: int = 
                             while i0 < b:
                                 j0 = min(b, i0 + step)
                                 txt2 = "".join(lines[i0:j0])
-                                if txt2 and len(txt2) <= room_left:
+                                if txt2 and _ai_estimate_text_tokens(txt2) <= room_left:
                                     provided.append({
                                         "chunk_index": len(provided) + 1,
                                         "chunk_total": 0,
@@ -2741,8 +2737,8 @@ def _hivo_parse_context_refs_structured(context_refs: list, total_tokens: int = 
                     if not content:
                         continue
                     room = max(0, _v_reserve - v_used)
-                    if len(content) > room:
-                        content = content[:room]
+                    if _ai_estimate_text_tokens(content) > room:
+                        content = _ai_truncate_text_to_tokens(content, room, keep="head")
                     v_used += _ai_estimate_text_tokens(content)
                     ext = fp.split(".")[-1].lower() if ("." in fp) else ""
                     item = {
@@ -3129,7 +3125,7 @@ def start_websocket_server():
         ws_port = 7843
         max_attempts = 10
         
-        for attempt in range(max_attempts):
+        for _ in range(max_attempts):
             try:
                 with ws_serve(handle_websocket, "127.0.0.1", ws_port) as server:
                     logger.info(f"WebSocket服务器启动成功: ws://localhost:{ws_port}")
@@ -3869,7 +3865,12 @@ def search_code(query: str, case_sensitive: bool = False, max_results: int = 50,
                     continue
             except Exception:
                 continue
-            rel = os.path.relpath(abs_path, repo_root).replace("\\", "/")
+            try:
+                rel = os.path.relpath(abs_path, repo_root).replace("\\", "/")
+            except ValueError:
+                # 跨挂载点/设备路径(如 \\.\nul)无法求相对路径，跳过，避免异常冒泡
+                # 被上层静默吞掉导致 RAG 整体降级为空上下文。
+                continue
             try:
                 with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
                     ln = 0
@@ -4399,7 +4400,7 @@ def parse_diff(text):
                 tag, i1, i2, j1, j2 = opcodes[op_i]
                 # Merge adjacent delete+insert into replace (common for single-line modifications)
                 if tag == "delete" and (op_i + 1) < len(opcodes):
-                    t2, ii1, ii2, jj1, jj2 = opcodes[op_i + 1]
+                    t2, ii1, _, jj1, jj2 = opcodes[op_i + 1]
                     if t2 == "insert" and ii1 == i2 and jj1 == j1:
                         tag = "replace"
                         j2 = jj2
@@ -5005,7 +5006,7 @@ def rename_file(old_path: str, new_path: str):
         os.makedirs(parent, exist_ok=True)
 
     # Prefer git mv for tracked files
-    out_t, err_t, code_t = run_git(["ls-files", "--error-unmatch", "--", old_rel], timeout=30)
+    _, _, code_t = run_git(["ls-files", "--error-unmatch", "--", old_rel], timeout=30)
     if code_t == 0:
         out, err, code = run_git(["mv", "--", old_rel, new_rel], timeout=120)
         if code != 0:
@@ -7683,17 +7684,32 @@ def _ai_pick_profile(cfg: dict, profile_id: str | None):
 #  仓库向量索引（P1 接线）
 # ════════════════════════════════════════════════════════
 
+def _hivo_vector_db_path(repo_path: str) -> str:
+    """向量索引库统一收纳到全局 AI 数据目录 hivo_ai_data/vector_index/（按仓库隔离），
+    不再散落在各仓库根目录；旧位置(.hivo_vector_index.db)在初始化时自动迁移至此。"""
+    base = _hivo_ai_data_dir() / "vector_index"
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+    except Exception:  # noqa: BLE001
+        pass
+    # 规范化仓库路径，确保不同分隔符/大小写表示映射到同一索引库
+    norm = os.path.normpath(repo_path).replace("\\", "/")
+    safe = re.sub(r'[^\w\-.]', '_', os.path.basename(norm))[:40] or "repo"
+    key = hashlib.sha1(norm.encode("utf-8")).hexdigest()[:12]
+    return str(base / f"{safe}_{key}.db")
+
+
 def hivo_init_vector_index():
     """初始化仓库向量索引（在 open_repo 设置 REPO_PATH 后调用）。
     默认 backend=local（不联网、代码不外发）；仅当 AI 配置显式含 embedding 段才用远程。"""
     global _VECTOR_STORE, _VECTOR_EMBED, _VECTOR_EXECUTOR, _VECTOR_ENABLED, _VECTOR_LAST_REINDEX
-    if _VECTOR_ENABLED or _rvi is None or not REPO_PATH:
+    if _VECTOR_ENABLED or not REPO_PATH:
         return
     try:
         cfg = load_hivo_ai_config()
         ecfg = cfg.get("embedding") if isinstance(cfg, dict) else None
         ecfg = ecfg if isinstance(ecfg, dict) else {}
-        embed_cfg = _rvi.EmbedConfig(
+        embed_cfg = _VecEmbedConfig(
             backend=str(ecfg.get("backend") or "local"),
             api_key=ecfg.get("api_key") or None,
             base_url=ecfg.get("base_url") or None,
@@ -7704,19 +7720,29 @@ def hivo_init_vector_index():
             ratelimit=float(ecfg.get("ratelimit") or 0.0),
             local_mode=str(ecfg.get("local_mode") or "auto"),
         )
-        embed = _rvi.EmbeddingClient(embed_cfg)
-        db_path = os.path.join(REPO_PATH, ".hivo_vector_index.db")
+        embed = _VecEmbeddingClient(embed_cfg)
+        db_path = _hivo_vector_db_path(REPO_PATH)
+        # 兼容迁移：旧版将向量索引库散落在仓库根目录(.hivo_vector_index.db)，
+        # 现统一收纳到全局 AI 数据目录 hivo_ai_data/vector_index/（按仓库隔离）。
+        # 若旧位置存在且新位置不存在，自动迁移，避免重复建索引、丢失已有数据。
+        _old_db = os.path.join(REPO_PATH, ".hivo_vector_index.db")
+        if os.path.exists(_old_db) and not os.path.exists(db_path):
+            try:
+                shutil.move(_old_db, db_path)
+                logger.info("向量索引库已从仓库根目录迁移至 %s", db_path)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("向量索引库迁移失败（不影响启动）：%s", e)
         # 维度/模型切换自动重建：构造 store 前检测，避免维度错配抛错导致索引整体降级
         if embed_cfg.backend == "local":
             model_tag = f"local:{embed_cfg.local_mode}"
         else:
             model_tag = embed_cfg.model or embed_cfg.backend
         try:
-            if _rvi.rebuild_if_dim_mismatch(db_path, embed.dim, model_tag):
+            if _vec_rebuild_if_dim_mismatch(db_path, embed.dim, model_tag):
                 logger.info("向量库维度/模型变化，已自动整库重建（%s）", model_tag)
         except Exception as e:  # noqa: BLE001
             logger.warning("向量库维度检测跳过：%s", e)
-        store = _rvi.SqliteNumpyVectorStore(db_path, dim=embed.dim, model=model_tag)
+        store = _VectorStore(db_path, dim=embed.dim, model=model_tag)
         _VECTOR_EMBED = embed
         _VECTOR_STORE = store
         _VECTOR_EXECUTOR = ThreadPoolExecutor(max_workers=1)
@@ -7724,8 +7750,7 @@ def hivo_init_vector_index():
         logger.info("向量索引已初始化（backend=%s, dim=%d）", embed_cfg.backend, embed.dim)
         # 启动增量索引（后台线程，不阻塞打开仓库）
         _VECTOR_EXECUTOR.submit(
-            _rvi.ensure_repo_indexed, store, embed, REPO_PATH,
-            estimate_tokens=_ai_estimate_text_tokens,
+            _vec_ensure_repo_indexed, store, embed, REPO_PATH
         )
         _VECTOR_LAST_REINDEX = time.time()
     except Exception as e:  # noqa: BLE001
@@ -7739,8 +7764,7 @@ def _hivo_vector_index_file(rel_path: str):
         return
     try:
         _VECTOR_EXECUTOR.submit(
-            _rvi.index_file_path, _VECTOR_STORE, _VECTOR_EMBED, REPO_PATH, rel_path,
-            estimate_tokens=_ai_estimate_text_tokens,
+            _vec_index_file_path, _VECTOR_STORE, _VECTOR_EMBED, REPO_PATH, rel_path
         )
     except Exception as e:  # noqa: BLE001
         logger.debug("提交文件索引任务失败 %s: %s", rel_path, e)
@@ -12791,7 +12815,7 @@ def get_sync_status(do_fetch: bool = False):
         if not ok:
             return False, {}, (msg or "fetch 失败")
 
-    bout, berr, bcode = run_git(["branch", "--show-current"], timeout=30)
+    bout, _, bcode = run_git(["branch", "--show-current"], timeout=30)
     branch = (bout or "").strip() if bcode == 0 else ""
     if not branch:
         # Detached HEAD or unborn branch: treat as a valid state.
@@ -12806,7 +12830,7 @@ def get_sync_status(do_fetch: bool = False):
         }, None
 
     upstream = ""
-    uout, uerr, ucode = run_git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], timeout=30)
+    uout, _, ucode = run_git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], timeout=30)
     if ucode == 0:
         upstream = (uout or "").strip()
     else:
@@ -13878,7 +13902,7 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 try:
                     _VECTOR_EXECUTOR.submit(
-                        _rvi.ensure_repo_indexed, _VECTOR_STORE, _VECTOR_EMBED, REPO_PATH,
+                        _vec_ensure_repo_indexed, _VECTOR_STORE, _VECTOR_EMBED, REPO_PATH,
                         force=True, estimate_tokens=_ai_estimate_text_tokens,
                     )
                     _VECTOR_LAST_REINDEX = time.time()
@@ -14599,7 +14623,7 @@ class Handler(BaseHTTPRequestHandler):
                     return
 
                 # Ensure upstream exists and fetch latest.
-                out_u, err_u, code_u = run_git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], timeout=30)
+                _, err_u, code_u = run_git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], timeout=30)
                 if code_u != 0:
                     self.send_json({"ok": False, "msg": (err_u or "当前分支未设置上游，无法单文件更新")}, 400)
                     return
@@ -15043,7 +15067,8 @@ class Handler(BaseHTTPRequestHandler):
                     context_refs_enabled = True
 
                 if context_refs_enabled:
-                    refs_usage = {"a_tokens": 0, "b_tokens": 0, "total": 0, "had_refs": False, "refs_resolved": 0, "vector_ready": bool(_VECTOR_ENABLED)}
+                    _empty_rag = {"a_tokens": 0, "b_tokens": 0, "total": 0, "had_refs": False, "refs_resolved": 0, "vector_ready": bool(_VECTOR_ENABLED)}
+                    refs_usage = _empty_rag
                     try:
                         refs_block, refs_meta, refs_usage = _hivo_parse_context_refs_structured(
                             ctx_refs if isinstance(ctx_refs, list) else [],
@@ -15053,7 +15078,7 @@ class Handler(BaseHTTPRequestHandler):
                         )
                     except Exception as e:
                         logger.warning("RAG 上下文解析失败(已降级为空上下文): %s", e)
-                        refs_block, refs_meta, refs_usage = "", [], {"a_tokens": 0, "b_tokens": 0, "total": 0, "had_refs": False, "refs_resolved": 0, "vector_ready": bool(_VECTOR_ENABLED)}
+                        refs_block, refs_meta, refs_usage = "", [], _empty_rag
                     if refs_block:
                         dyn_ctx = (str(dyn_ctx or "") + "\n\n" + refs_block).strip()
                     # 记录本次 @引用/向量召回的 token 用量，供 token 用量弹窗的 RAG 区块读取
@@ -15852,7 +15877,7 @@ class Handler(BaseHTTPRequestHandler):
 
                     # 工作区干净：统一走 switch_branch（远端分支会自动创建本地并建立跟踪关系）
                     logger.info(f"工作区干净，切换到分支: {target_branch}")
-                    ok, cur, err_msg, out_msg, safe_err = switch_branch(target_branch)
+                    ok, cur, err_msg, out_msg, _ = switch_branch(target_branch)
                     if ok:
                         logger.info(f"成功切换到分支: {cur}")
                         self.send_json({
@@ -15979,7 +16004,7 @@ class Handler(BaseHTTPRequestHandler):
                     return
 
                 # 2. git checkout
-                ok, cur, err_msg, out_msg, safe_err = switch_branch(target_branch)
+                ok, cur, err_msg, out_msg, _ = switch_branch(target_branch)
 
                 if not ok:
                     logger.error(f"切换分支失败: {err_msg}")
@@ -16038,7 +16063,7 @@ class Handler(BaseHTTPRequestHandler):
                     return
 
                 # 3. switch (remote refs will create/switch to local tracking branch)
-                ok, cur, err_msg, out_msg, safe_err = switch_branch(target_branch)
+                ok, cur, err_msg, out_msg, _ = switch_branch(target_branch)
 
                 if not ok:
                     logger.error(f"切换分支失败: {err_msg}")
@@ -16387,7 +16412,7 @@ def main():
             logger.info("WebSocket服务器线程已启动")
         
         # 尝试启动HTTP服务器，如果端口被占用则尝试下一个端口
-        for attempt in range(max_attempts):
+        for _ in range(max_attempts):
             try:
                 srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
                 logger.info("=" * 60)
@@ -16432,6 +16457,295 @@ def main():
             logger.debug(f"Exception ignored: {e}")
         logger.info("Git Manager 后端已停止")
         print("已停止")
+
+# ===== 内置向量索引（替代可选外部模块 repo_vector_index，消除外挂文件） =====
+# 纯标准库实现：哈希词袋 embedding + sqlite 持久化 + 余弦相似度。
+# 对应 RAG 面板 backend=local / 模式「哈希词袋」，默认不联网、代码不外发。
+import sqlite3 as _VEC_SQLITE
+import hashlib as _VEC_HASH
+import re as _VEC_RE
+import struct as _VEC_STRUCT
+import math as _VEC_MATH
+import threading as _VEC_THREADING
+from types import SimpleNamespace as _VEC_NS
+
+_VECTOR_DIM = 256
+_VECTOR_TEXT_EXT = {
+    '.py', '.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.java', '.go', '.rs',
+    '.c', '.cpp', '.h', '.hpp', '.cc', '.cs', '.rb', '.php', '.swift', '.kt',
+    '.scala', '.sh', '.bash', '.md', '.txt', '.rst', '.json', '.yaml', '.yml',
+    '.toml', '.ini', '.cfg', '.html', '.htm', '.xml', '.css', '.scss', '.less',
+    '.sql', '.vue', '.lua', '.r', '.pl', '.pm', '.dart', '.gradle', '.mk',
+}
+_VECTOR_SKIP_DIRS = {
+    '.git', 'node_modules', '__pycache__', '.venv', 'venv', '.idea', '.vscode',
+    'dist', 'build', '.next', 'target', '.tox', '.eggs',
+}
+_VECTOR_MAX_FILE_BYTES = 2 * 1024 * 1024
+
+
+def _vec_tokenize(text):
+    """中英文混合分词：英文/数字按词，中文按字。"""
+    text = (text or '').lower()
+    return _VEC_RE.findall(r'[a-z0-9_]+|[一-鿿]', text)
+
+
+def _vec_embed(text, dim=_VECTOR_DIM):
+    """哈希词袋向量：词 -> hash 映射到维度之一累加，L2 归一化。"""
+    vec = [0.0] * dim
+    for tok in _vec_tokenize(text):
+        h = int(_VEC_HASH.md5(tok.encode('utf-8')).hexdigest(), 16)
+        vec[h % dim] += 1.0
+    norm = _VEC_MATH.sqrt(sum(v * v for v in vec))
+    if norm > 0:
+        vec = [v / norm for v in vec]
+    return vec
+
+
+def _vec_pack(vec):
+    return _VEC_STRUCT.pack('f' * len(vec), *vec)
+
+
+def _vec_unpack(blob):
+    n = len(blob) // 4
+    return list(_VEC_STRUCT.unpack('f' * n, blob))
+
+
+def _vec_cosine(a, b):
+    s = 0.0
+    for x, y in zip(a, b):
+        s += x * y
+    return s
+
+
+def _vec_file_hash(rel, chunks):
+    m = _VEC_HASH.md5()
+    m.update((rel or '').encode('utf-8'))
+    for content, _ in chunks:
+        m.update((content or '').encode('utf-8'))
+    return m.hexdigest()
+
+
+def _vec_chunk_text(text, max_chars=1200):
+    """按行累积分块，单块约 max_chars 字符。"""
+    lines = (text or '').split('\n')
+    chunks = []
+    cur = []
+    cur_len = 0
+    for ln in lines:
+        cur.append(ln)
+        cur_len += len(ln) + 1
+        if cur_len >= max_chars:
+            chunks.append('\n'.join(cur))
+            cur = []
+            cur_len = 0
+    if cur:
+        chunks.append('\n'.join(cur))
+    return [c for c in chunks if c.strip()]
+
+
+class _VecEmbedConfig:
+    def __init__(self, backend='local', api_key=None, base_url=None, model=None,
+                 dim=0, fallback_local=True, local_model='BAAI/bge-small-zh-v1.5',
+                 ratelimit=0.0, local_mode='auto'):
+        self.backend = backend
+        self.api_key = api_key
+        self.base_url = base_url
+        self.model = model
+        self.dim = _VECTOR_DIM if backend == 'local' else (dim or _VECTOR_DIM)
+        self.fallback_local = fallback_local
+        self.local_model = local_model
+        self.ratelimit = ratelimit
+        self.local_mode = local_mode
+
+
+class _VecEmbeddingClient:
+    def __init__(self, cfg):
+        self.cfg = cfg
+        self.dim = cfg.dim
+        self.effective_mode = ('local:' + str(cfg.local_mode)) if cfg.backend == 'local' else str(cfg.backend)
+        if cfg.backend != 'local':
+            logger.warning("向量 embedding 后端 %r 非 local，已按 fallback_local 降级为本地哈希词袋（不联网）", cfg.backend)
+
+    def embed_one(self, text):
+        return _vec_embed(text, self.dim)
+
+
+class _VectorStore:
+    def __init__(self, db_path, dim, model):
+        self.db_path = db_path
+        self.dim = dim
+        self.model = model
+        self._lock = _VEC_THREADING.Lock()
+        self._conn = _VEC_SQLITE.connect(db_path, check_same_thread=False)
+        try:
+            self._conn.execute("PRAGMA journal_mode=WAL")
+        except Exception:
+            pass
+        self._init_db()
+
+    def _init_db(self):
+        with self._lock:
+            c = self._conn
+            c.execute("CREATE TABLE IF NOT EXISTS vec_meta (k TEXT PRIMARY KEY, v TEXT)")
+            c.execute("""CREATE TABLE IF NOT EXISTS vec_chunks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo_file TEXT,
+                chunk_index INTEGER,
+                content TEXT,
+                vec BLOB,
+                fhash TEXT
+            )""")
+            c.execute("CREATE TABLE IF NOT EXISTS vec_files (file TEXT PRIMARY KEY, fhash TEXT)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_vec_file ON vec_chunks(repo_file)")
+            c.execute("INSERT OR REPLACE INTO vec_meta (k, v) VALUES ('model', ?)", (str(self.model),))
+            c.commit()
+
+    def add_file(self, rel_path, chunks):
+        rel = rel_path.replace('\\', '/')
+        h = _vec_file_hash(rel, chunks)
+        with self._lock:
+            cur = self._conn
+            cur.execute("DELETE FROM vec_chunks WHERE repo_file=?", (rel,))
+            cur.execute("DELETE FROM vec_files WHERE file=?", (rel,))
+            for i, (content, vec) in enumerate(chunks):
+                cur.execute(
+                    "INSERT INTO vec_chunks (repo_file, chunk_index, content, vec, fhash) VALUES (?,?,?,?,?)",
+                    (rel, i, content, _vec_pack(vec), h),
+                )
+            cur.execute("INSERT OR REPLACE INTO vec_files (file, fhash) VALUES (?,?)", (rel, h))
+            cur.commit()
+
+    def query(self, qvec, top_k=8):
+        with self._lock:
+            rows = self._conn.execute("SELECT repo_file, content, vec FROM vec_chunks").fetchall()
+            scored = []
+            for repo_file, content, blob in rows:
+                vec = _vec_unpack(blob)
+                score = _vec_cosine(qvec, vec)
+                scored.append((repo_file, content, score))
+        scored.sort(key=lambda x: x[2], reverse=True)
+        out = []
+        for repo_file, content, score in scored[:max(0, int(top_k))]:
+            ch = _VEC_NS(file_path=repo_file, content=content, score=score)
+            out.append((ch, score))
+        return out
+
+    def count(self):
+        try:
+            with self._lock:
+                return self._conn.execute("SELECT COUNT(*) FROM vec_chunks").fetchone()[0]
+        except Exception:
+            return 0
+
+    def list_indexed_files(self):
+        try:
+            with self._lock:
+                rows = self._conn.execute("SELECT DISTINCT repo_file FROM vec_chunks").fetchall()
+            return [r[0] for r in rows]
+        except Exception:
+            return []
+
+    def delete_file(self, rel_path):
+        rel = rel_path.replace('\\', '/')
+        with self._lock:
+            self._conn.execute("DELETE FROM vec_chunks WHERE repo_file=?", (rel,))
+            self._conn.commit()
+
+    def file_hash(self, rel_path):
+        rel = rel_path.replace('\\', '/')
+        try:
+            with self._lock:
+                row = self._conn.execute("SELECT fhash FROM vec_files WHERE file=?", (rel,)).fetchone()
+            return row[0] if row else None
+        except Exception:
+            return None
+
+    def file_hash_delete(self, rel_path):
+        rel = rel_path.replace('\\', '/')
+        with self._lock:
+            self._conn.execute("DELETE FROM vec_chunks WHERE repo_file=?", (rel,))
+            self._conn.execute("DELETE FROM vec_files WHERE file=?", (rel,))
+            self._conn.commit()
+
+
+def _vec_rebuild_if_dim_mismatch(db_path, dim, model_tag):
+    """维度/模型变化则整库重建，返回是否重建。"""
+    try:
+        conn = _VEC_SQLITE.connect(db_path, check_same_thread=False)
+        row = conn.execute("SELECT v FROM vec_meta WHERE k='model'").fetchone()
+        conn.close()
+        if row is None:
+            return False
+        if row[0] != str(model_tag):
+            conn = _VEC_SQLITE.connect(db_path, check_same_thread=False)
+            conn.execute("DROP TABLE IF EXISTS vec_chunks")
+            conn.execute("DROP TABLE IF EXISTS vec_files")
+            conn.execute("DROP TABLE IF EXISTS vec_meta")
+            conn.commit()
+            conn.close()
+            return True
+        return False
+    except Exception as e:
+        logger.debug("向量维度检测跳过：%s", e)
+        return False
+
+
+def _vec_index_single_file(store, embed, full, rel):
+    try:
+        if not os.path.isfile(full):
+            return False
+        with open(full, 'rb') as f:
+            content = f.read()
+        if len(content) > _VECTOR_MAX_FILE_BYTES:
+            return False
+        text = content.decode('utf-8', errors='ignore')
+        if not text.strip():
+            return False
+        chunks = _vec_chunk_text(text)
+        if not chunks:
+            return False
+        vecs = [(c, embed.embed_one(c)) for c in chunks]
+        new_hash = _vec_file_hash(rel, vecs)
+        if store.file_hash(rel) == new_hash:
+            return False
+        store.add_file(rel, vecs)
+        return True
+    except Exception as e:
+        logger.debug("向量索引单文件失败 %s: %s", rel, e)
+        return False
+
+
+def _vec_ensure_repo_indexed(store, embed, repo_path, force=False):
+    repo_path = (repo_path or '').replace('\\', '/')
+    if not repo_path or not os.path.isdir(repo_path):
+        return 0
+    count = 0
+    for root, dirs, fnames in os.walk(repo_path):
+        dirs[:] = [d for d in dirs if d not in _VECTOR_SKIP_DIRS]
+        for fn in fnames:
+            ext = os.path.splitext(fn)[1].lower()
+            if ext not in _VECTOR_TEXT_EXT:
+                continue
+            full = os.path.join(root, fn)
+            rel = os.path.relpath(full, repo_path).replace('\\', '/')
+            try:
+                if force:
+                    store.delete_file(rel)
+                if _vec_index_single_file(store, embed, full, rel):
+                    count += 1
+            except Exception as e:
+                logger.debug("向量索引跳过 %s: %s", rel, e)
+    logger.info("向量索引构建完成：本次入库/更新 %d 个文件（force=%s）", count, force)
+    return count
+
+
+def _vec_index_file_path(store, embed, repo_path, rel_path):
+    repo_path = (repo_path or '').replace('\\', '/')
+    rel = rel_path.replace('\\', '/')
+    full = os.path.join(repo_path, rel) if repo_path else rel
+    _vec_index_single_file(store, embed, full, rel)
+
 
 if __name__ == "__main__":
     main()
